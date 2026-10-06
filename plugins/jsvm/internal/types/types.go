@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pocketbase/tygoja"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/plugins/jsvm"
 	"github.com/tokibase/tokibase/tools/list"
-	"github.com/pocketbase/tygoja"
 )
 
 const heading = `
@@ -1289,19 +1289,20 @@ func main() {
 
 	gen := tygoja.New(tygoja.Config{
 		Packages: map[string][]string{
-			"github.com/pocketbase/ozzo-validation/v4":          {"Error"},
-			"github.com/pocketbase/dbx":                         {"*"},
+			"github.com/pocketbase/ozzo-validation/v4":      {"Error"},
+			"github.com/pocketbase/dbx":                     {"*"},
 			"github.com/tokibase/tokibase/tools/security":   {"*"},
 			"github.com/tokibase/tokibase/tools/filesystem": {"*"},
 			"github.com/tokibase/tokibase/tools/template":   {"*"},
 			"github.com/tokibase/tokibase/mails":            {"*"},
 			"github.com/tokibase/tokibase/apis":             {"*"},
 			"github.com/tokibase/tokibase/core":             {"*"},
+			"github.com/tokibase/tokibase/kernel":           {"*"},
 			"github.com/tokibase/tokibase/forms":            {"*"},
 			"github.com/tokibase/tokibase":                  {"*"},
-			"path/filepath":                                     {"*"},
-			"os":                                                {"*"},
-			"os/exec":                                           {"Command"},
+			"path/filepath":                                 {"*"},
+			"os":                                            {"*"},
+			"os/exec":                                       {"Command"},
 		},
 		FieldNameFormatter: func(s string) string {
 			return mapper.FieldName(nil, reflect.StructField{Name: s})
