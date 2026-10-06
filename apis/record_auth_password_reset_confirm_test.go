@@ -328,7 +328,7 @@ func TestRecordConfirmPasswordReset(t *testing.T) {
 				app.OnRecordConfirmPasswordResetRequest().BindFunc(func(e *core.RecordConfirmPasswordResetRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {

@@ -6,19 +6,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
 func TestEditorFieldBaseMethods(t *testing.T) {
-	testFieldBaseMethods(t, core.FieldTypeEditor)
+	testFieldBaseMethods(t, kernel.FieldTypeEditor)
 }
 
 func TestEditorFieldColumnType(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.EditorField{}
+	f := &kernel.EditorField{}
 
 	expected := "TEXT DEFAULT '' NOT NULL"
 
@@ -31,8 +31,8 @@ func TestEditorFieldPrepareValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.EditorField{}
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	f := &kernel.EditorField{}
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 
 	scenarios := []struct {
 		raw      any
@@ -68,19 +68,19 @@ func TestEditorFieldValidateValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name        string
-		field       *core.EditorField
-		record      func() *core.Record
+		field       *kernel.EditorField
+		record      func() *kernel.Record
 		expectError bool
 	}{
 		{
 			"invalid raw value",
-			&core.EditorField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EditorField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 123)
 				return record
 			},
@@ -88,9 +88,9 @@ func TestEditorFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (not required)",
-			&core.EditorField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EditorField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "")
 				return record
 			},
@@ -98,9 +98,9 @@ func TestEditorFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (required)",
-			&core.EditorField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EditorField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "")
 				return record
 			},
@@ -108,9 +108,9 @@ func TestEditorFieldValidateValue(t *testing.T) {
 		},
 		{
 			"non-zero field value (required)",
-			&core.EditorField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EditorField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "abc")
 				return record
 			},
@@ -118,9 +118,9 @@ func TestEditorFieldValidateValue(t *testing.T) {
 		},
 		{
 			"> default MaxSize",
-			&core.EditorField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EditorField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", strings.Repeat("a", 1+(5<<20)))
 				return record
 			},
@@ -128,9 +128,9 @@ func TestEditorFieldValidateValue(t *testing.T) {
 		},
 		{
 			"> MaxSize",
-			&core.EditorField{Name: "test", Required: true, MaxSize: 5},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EditorField{Name: "test", Required: true, MaxSize: 5},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "abcdef")
 				return record
 			},
@@ -138,9 +138,9 @@ func TestEditorFieldValidateValue(t *testing.T) {
 		},
 		{
 			"<= MaxSize",
-			&core.EditorField{Name: "test", Required: true, MaxSize: 5},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EditorField{Name: "test", Required: true, MaxSize: 5},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "abcde")
 				return record
 			},
@@ -161,24 +161,24 @@ func TestEditorFieldValidateValue(t *testing.T) {
 }
 
 func TestEditorFieldValidateSettings(t *testing.T) {
-	testDefaultFieldIdValidation(t, core.FieldTypeEditor)
-	testDefaultFieldNameValidation(t, core.FieldTypeEditor)
-	testDefaultFieldHelpValidation[core.EditorField](t)
+	testDefaultFieldIdValidation(t, kernel.FieldTypeEditor)
+	testDefaultFieldNameValidation(t, kernel.FieldTypeEditor)
+	testDefaultFieldHelpValidation[kernel.EditorField](t)
 
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name         string
-		field        func() *core.EditorField
+		field        func() *kernel.EditorField
 		expectErrors []string
 	}{
 		{
 			"< 0 MaxSize",
-			func() *core.EditorField {
-				return &core.EditorField{
+			func() *kernel.EditorField {
+				return &kernel.EditorField{
 					Id:      "test",
 					Name:    "test",
 					MaxSize: -1,
@@ -188,8 +188,8 @@ func TestEditorFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"= 0 MaxSize",
-			func() *core.EditorField {
-				return &core.EditorField{
+			func() *kernel.EditorField {
+				return &kernel.EditorField{
 					Id:   "test",
 					Name: "test",
 				}
@@ -198,8 +198,8 @@ func TestEditorFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"> 0 MaxSize",
-			func() *core.EditorField {
-				return &core.EditorField{
+			func() *kernel.EditorField {
+				return &kernel.EditorField{
 					Id:      "test",
 					Name:    "test",
 					MaxSize: 1,
@@ -209,8 +209,8 @@ func TestEditorFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"MaxSize > safe json int",
-			func() *core.EditorField {
-				return &core.EditorField{
+			func() *kernel.EditorField {
+				return &kernel.EditorField{
 					Id:      "test",
 					Name:    "test",
 					MaxSize: 1 << 53,
@@ -234,11 +234,11 @@ func TestEditorFieldCalculateMaxBodySize(t *testing.T) {
 	defer testApp.Cleanup()
 
 	scenarios := []struct {
-		field    *core.EditorField
+		field    *kernel.EditorField
 		expected int64
 	}{
-		{&core.EditorField{}, core.DefaultEditorFieldMaxSize},
-		{&core.EditorField{MaxSize: 10}, 10},
+		{&kernel.EditorField{}, kernel.DefaultEditorFieldMaxSize},
+		{&kernel.EditorField{MaxSize: 10}, 10},
 	}
 
 	for i, s := range scenarios {

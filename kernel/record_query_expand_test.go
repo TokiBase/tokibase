@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/pocketbase/dbx"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/list"
 )
@@ -26,7 +26,7 @@ func TestExpandRecords(t *testing.T) {
 		collectionIdOrName        string
 		recordIds                 []string
 		expands                   []string
-		fetchFunc                 core.ExpandFetchFunc
+		fetchFunc                 kernel.ExpandFetchFunc
 		expectNonemptyExpandProps int
 		expectExpandFailures      int
 	}{
@@ -35,7 +35,7 @@ func TestExpandRecords(t *testing.T) {
 			"",
 			[]string{},
 			[]string{"self_rel_one", "self_rel_many.self_rel_one"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			0,
@@ -46,7 +46,7 @@ func TestExpandRecords(t *testing.T) {
 			"demo4",
 			[]string{"i9naidtvr6qsgb4", "qzaqccwrmva4o1n"},
 			[]string{},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			0,
@@ -57,7 +57,7 @@ func TestExpandRecords(t *testing.T) {
 			"demo4",
 			[]string{"i9naidtvr6qsgb4", "qzaqccwrmva4o1n"},
 			[]string{"self_rel_one", "self_rel_many.self_rel_one"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return nil, errors.New("test error")
 			},
 			0,
@@ -68,7 +68,7 @@ func TestExpandRecords(t *testing.T) {
 			"demo4",
 			[]string{"i9naidtvr6qsgb4", "qzaqccwrmva4o1n"},
 			[]string{"missing"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			0,
@@ -79,7 +79,7 @@ func TestExpandRecords(t *testing.T) {
 			"demo4",
 			[]string{"i9naidtvr6qsgb4", "qzaqccwrmva4o1n"},
 			[]string{"title"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			0,
@@ -90,7 +90,7 @@ func TestExpandRecords(t *testing.T) {
 			"demo4",
 			[]string{"i9naidtvr6qsgb4", "qzaqccwrmva4o1n"},
 			[]string{"rel_one_no_cascade.title"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			0,
@@ -119,7 +119,7 @@ func TestExpandRecords(t *testing.T) {
 				"self_rel_many", "self_rel_many.",
 				"  self_rel_many  ", "",
 			},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			9,
@@ -134,7 +134,7 @@ func TestExpandRecords(t *testing.T) {
 				"oap640cot4yru2s", // no rels
 			},
 			[]string{"rel"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			2,
@@ -158,7 +158,7 @@ func TestExpandRecords(t *testing.T) {
 			"demo4",
 			[]string{"qzaqccwrmva4o1n"},
 			[]string{"self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			6,
@@ -169,7 +169,7 @@ func TestExpandRecords(t *testing.T) {
 			"demo3",
 			[]string{"lcl9d87w22ml6jy"},
 			[]string{"demo4(rel_one_no_cascade_required)"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			1,
@@ -180,7 +180,7 @@ func TestExpandRecords(t *testing.T) {
 			"demo3",
 			[]string{"lcl9d87w22ml6jy"},
 			[]string{"demo4_via_rel_one_no_cascade_required"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			1,
@@ -193,7 +193,7 @@ func TestExpandRecords(t *testing.T) {
 			[]string{
 				"demo4_via_rel_one_no_cascade_required.self_rel_many.self_rel_many.self_rel_one",
 			},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			5,
@@ -206,7 +206,7 @@ func TestExpandRecords(t *testing.T) {
 			[]string{
 				"demo4_via_rel_many_no_cascade_required.self_rel_many.rel_many_no_cascade_required.demo4_via_rel_many_no_cascade_required",
 			},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			7,
@@ -222,7 +222,7 @@ func TestExpandRecords(t *testing.T) {
 				"self_rel_many.self_rel_one.rel_many_cascade",
 				"self_rel_many.self_rel_one.rel_many_no_cascade_required",
 			},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			5,
@@ -242,8 +242,8 @@ func TestExpandRecords(t *testing.T) {
 
 			encoded, _ := json.Marshal(records, json.Deterministic(true))
 			encodedStr := string(encoded)
-			totalExpandProps := strings.Count(encodedStr, `"`+core.FieldNameExpand+`":`)
-			totalEmptyExpands := strings.Count(encodedStr, `"`+core.FieldNameExpand+`":{}`)
+			totalExpandProps := strings.Count(encodedStr, `"`+kernel.FieldNameExpand+`":`)
+			totalEmptyExpands := strings.Count(encodedStr, `"`+kernel.FieldNameExpand+`":{}`)
 			totalNonemptyExpands := totalExpandProps - totalEmptyExpands
 
 			if s.expectNonemptyExpandProps != totalNonemptyExpands {
@@ -264,7 +264,7 @@ func TestExpandRecord(t *testing.T) {
 		collectionIdOrName        string
 		recordId                  string
 		expands                   []string
-		fetchFunc                 core.ExpandFetchFunc
+		fetchFunc                 kernel.ExpandFetchFunc
 		expectNonemptyExpandProps int
 		expectExpandFailures      int
 	}{
@@ -273,7 +273,7 @@ func TestExpandRecord(t *testing.T) {
 			"demo4",
 			"i9naidtvr6qsgb4",
 			[]string{},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			0,
@@ -284,7 +284,7 @@ func TestExpandRecord(t *testing.T) {
 			"demo4",
 			"i9naidtvr6qsgb4",
 			[]string{"self_rel_one", "self_rel_many.self_rel_one"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return nil, errors.New("test error")
 			},
 			0,
@@ -295,7 +295,7 @@ func TestExpandRecord(t *testing.T) {
 			"demo4",
 			"i9naidtvr6qsgb4",
 			[]string{"missing"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			0,
@@ -306,7 +306,7 @@ func TestExpandRecord(t *testing.T) {
 			"demo4",
 			"i9naidtvr6qsgb4",
 			[]string{"title"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			0,
@@ -317,7 +317,7 @@ func TestExpandRecord(t *testing.T) {
 			"demo4",
 			"qzaqccwrmva4o1n",
 			[]string{"rel_one_no_cascade.title"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			0,
@@ -333,7 +333,7 @@ func TestExpandRecord(t *testing.T) {
 				"self_rel_many", "self_rel_many.",
 				"  self_rel_many  ", "",
 			},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			8,
@@ -344,7 +344,7 @@ func TestExpandRecord(t *testing.T) {
 			"users",
 			"oap640cot4yru2s",
 			[]string{"rel"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			0,
@@ -355,7 +355,7 @@ func TestExpandRecord(t *testing.T) {
 			"demo4",
 			"qzaqccwrmva4o1n",
 			[]string{"self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many.self_rel_many"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			6,
@@ -366,7 +366,7 @@ func TestExpandRecord(t *testing.T) {
 			"demo3",
 			"lcl9d87w22ml6jy",
 			[]string{"demo4(rel_one_no_cascade_required)"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			1,
@@ -377,7 +377,7 @@ func TestExpandRecord(t *testing.T) {
 			"demo3",
 			"lcl9d87w22ml6jy",
 			[]string{"demo4_via_rel_one_no_cascade_required"},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			1,
@@ -390,7 +390,7 @@ func TestExpandRecord(t *testing.T) {
 			[]string{
 				"demo4(rel_one_no_cascade_required).self_rel_many.self_rel_many.self_rel_one",
 			},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			5,
@@ -403,7 +403,7 @@ func TestExpandRecord(t *testing.T) {
 			[]string{
 				"demo4_via_rel_many_no_cascade_required.self_rel_many.rel_many_no_cascade_required.demo4_via_rel_many_no_cascade_required",
 			},
-			func(c *core.Collection, ids []string) ([]*core.Record, error) {
+			func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 				return app.FindRecordsByIds(c.Id, ids, nil)
 			},
 			7,
@@ -422,8 +422,8 @@ func TestExpandRecord(t *testing.T) {
 
 			encoded, _ := json.Marshal(record, json.Deterministic(true))
 			encodedStr := string(encoded)
-			totalExpandProps := strings.Count(encodedStr, `"`+core.FieldNameExpand+`":`)
-			totalEmptyExpands := strings.Count(encodedStr, `"`+core.FieldNameExpand+`":{}`)
+			totalExpandProps := strings.Count(encodedStr, `"`+kernel.FieldNameExpand+`":`)
+			totalEmptyExpands := strings.Count(encodedStr, `"`+kernel.FieldNameExpand+`":{}`)
 			totalNonemptyExpands := totalExpandProps - totalEmptyExpands
 
 			if s.expectNonemptyExpandProps != totalNonemptyExpands {
@@ -446,14 +446,14 @@ func TestBackRelationExpandSingeVsArrayResult(t *testing.T) {
 
 	// non-unique indirect expand
 	{
-		errs := app.ExpandRecord(record, []string{"demo4_via_rel_one_cascade"}, func(c *core.Collection, ids []string) ([]*core.Record, error) {
+		errs := app.ExpandRecord(record, []string{"demo4_via_rel_one_cascade"}, func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 			return app.FindRecordsByIds(c.Id, ids, nil)
 		})
 		if len(errs) > 0 {
 			t.Fatal(errs)
 		}
 
-		result, ok := record.Expand()["demo4_via_rel_one_cascade"].([]*core.Record)
+		result, ok := record.Expand()["demo4_via_rel_one_cascade"].([]*kernel.Record)
 		if !ok {
 			t.Fatalf("Expected the expanded result to be a slice, got %v", result)
 		}
@@ -475,14 +475,14 @@ func TestBackRelationExpandSingeVsArrayResult(t *testing.T) {
 		}
 		// ---
 
-		errs := app.ExpandRecord(record, []string{"demo4_via_rel_one_cascade"}, func(c *core.Collection, ids []string) ([]*core.Record, error) {
+		errs := app.ExpandRecord(record, []string{"demo4_via_rel_one_cascade"}, func(c *kernel.Collection, ids []string) ([]*kernel.Record, error) {
 			return app.FindRecordsByIds(c.Id, ids, nil)
 		})
 		if len(errs) > 0 {
 			t.Fatal(errs)
 		}
 
-		result, ok := record.Expand()["demo4_via_rel_one_cascade"].(*core.Record)
+		result, ok := record.Expand()["demo4_via_rel_one_cascade"].(*kernel.Record)
 		if !ok {
 			t.Fatalf("Expected the expanded result to be a single model, got %v", result)
 		}

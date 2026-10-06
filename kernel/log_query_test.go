@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/pocketbase/dbx"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/types"
 )
@@ -101,7 +101,7 @@ func TestDeleteOldLogs(t *testing.T) {
 
 			// check total remaining logs
 			var total int
-			countErr := app.AuxModelQuery(&core.Log{}).Select("count(*)").Row(&total)
+			countErr := app.AuxModelQuery(&kernel.Log{}).Select("count(*)").Row(&total)
 			if countErr != nil {
 				t.Errorf("Count error %v", countErr)
 			}

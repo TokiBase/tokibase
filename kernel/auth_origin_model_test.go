@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/types"
 )
@@ -16,20 +16,20 @@ func TestNewAuthOrigin(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	origin := core.NewAuthOrigin(app)
+	origin := kernel.NewAuthOrigin(app)
 
-	if origin.Collection().Name != core.CollectionNameAuthOrigins {
-		t.Fatalf("Expected record with %q collection, got %q", core.CollectionNameAuthOrigins, origin.Collection().Name)
+	if origin.Collection().Name != kernel.CollectionNameAuthOrigins {
+		t.Fatalf("Expected record with %q collection, got %q", kernel.CollectionNameAuthOrigins, origin.Collection().Name)
 	}
 }
 
 func TestAuthOriginProxyRecord(t *testing.T) {
 	t.Parallel()
 
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 	record.Id = "test_id"
 
-	origin := core.AuthOrigin{}
+	origin := kernel.AuthOrigin{}
 	origin.SetProxyRecord(record)
 
 	if origin.ProxyRecord() == nil || origin.ProxyRecord().Id != record.Id {
@@ -43,7 +43,7 @@ func TestAuthOriginRecordRef(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	origin := core.NewAuthOrigin(app)
+	origin := kernel.NewAuthOrigin(app)
 
 	testValues := []string{"test_1", "test2", ""}
 	for i, testValue := range testValues {
@@ -67,7 +67,7 @@ func TestAuthOriginCollectionRef(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	origin := core.NewAuthOrigin(app)
+	origin := kernel.NewAuthOrigin(app)
 
 	testValues := []string{"test_1", "test2", ""}
 	for i, testValue := range testValues {
@@ -91,7 +91,7 @@ func TestAuthOriginFingerprint(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	origin := core.NewAuthOrigin(app)
+	origin := kernel.NewAuthOrigin(app)
 
 	testValues := []string{"test_1", "test2", ""}
 	for i, testValue := range testValues {
@@ -115,7 +115,7 @@ func TestAuthOriginCreated(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	origin := core.NewAuthOrigin(app)
+	origin := kernel.NewAuthOrigin(app)
 
 	if v := origin.Created().String(); v != "" {
 		t.Fatalf("Expected empty created, got %q", v)
@@ -135,7 +135,7 @@ func TestAuthOriginUpdated(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	origin := core.NewAuthOrigin(app)
+	origin := kernel.NewAuthOrigin(app)
 
 	if v := origin.Updated().String(); v != "" {
 		t.Fatalf("Expected empty updated, got %q", v)
@@ -155,7 +155,7 @@ func TestAuthOriginPreValidate(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	originsCol, err := app.FindCollectionByNameOrId(core.CollectionNameAuthOrigins)
+	originsCol, err := app.FindCollectionByNameOrId(kernel.CollectionNameAuthOrigins)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestAuthOriginPreValidate(t *testing.T) {
 	}
 
 	t.Run("no proxy record", func(t *testing.T) {
-		origin := &core.AuthOrigin{}
+		origin := &kernel.AuthOrigin{}
 
 		if err := app.Validate(origin); err == nil {
 			t.Fatal("Expected collection validation error")
@@ -174,8 +174,8 @@ func TestAuthOriginPreValidate(t *testing.T) {
 	})
 
 	t.Run("non-AuthOrigin collection", func(t *testing.T) {
-		origin := &core.AuthOrigin{}
-		origin.SetProxyRecord(core.NewRecord(core.NewBaseCollection("invalid")))
+		origin := &kernel.AuthOrigin{}
+		origin.SetProxyRecord(kernel.NewRecord(kernel.NewBaseCollection("invalid")))
 		origin.SetRecordRef(user.Id)
 		origin.SetCollectionRef(user.Collection().Id)
 		origin.SetFingerprint("abc")
@@ -186,8 +186,8 @@ func TestAuthOriginPreValidate(t *testing.T) {
 	})
 
 	t.Run("AuthOrigin collection", func(t *testing.T) {
-		origin := &core.AuthOrigin{}
-		origin.SetProxyRecord(core.NewRecord(originsCol))
+		origin := &kernel.AuthOrigin{}
+		origin.SetProxyRecord(kernel.NewRecord(originsCol))
 		origin.SetRecordRef(user.Id)
 		origin.SetCollectionRef(user.Collection().Id)
 		origin.SetFingerprint("abc")
@@ -216,20 +216,20 @@ func TestAuthOriginValidateHook(t *testing.T) {
 
 	scenarios := []struct {
 		name         string
-		origin       func() *core.AuthOrigin
+		origin       func() *kernel.AuthOrigin
 		expectErrors []string
 	}{
 		{
 			"empty",
-			func() *core.AuthOrigin {
-				return core.NewAuthOrigin(app)
+			func() *kernel.AuthOrigin {
+				return kernel.NewAuthOrigin(app)
 			},
 			[]string{"collectionRef", "recordRef", "fingerprint"},
 		},
 		{
 			"non-auth collection",
-			func() *core.AuthOrigin {
-				origin := core.NewAuthOrigin(app)
+			func() *kernel.AuthOrigin {
+				origin := kernel.NewAuthOrigin(app)
 				origin.SetCollectionRef(demo1.Collection().Id)
 				origin.SetRecordRef(demo1.Id)
 				origin.SetFingerprint("abc")
@@ -239,8 +239,8 @@ func TestAuthOriginValidateHook(t *testing.T) {
 		},
 		{
 			"missing record id",
-			func() *core.AuthOrigin {
-				origin := core.NewAuthOrigin(app)
+			func() *kernel.AuthOrigin {
+				origin := kernel.NewAuthOrigin(app)
 				origin.SetCollectionRef(user.Collection().Id)
 				origin.SetRecordRef("missing")
 				origin.SetFingerprint("abc")
@@ -250,8 +250,8 @@ func TestAuthOriginValidateHook(t *testing.T) {
 		},
 		{
 			"valid ref",
-			func() *core.AuthOrigin {
-				origin := core.NewAuthOrigin(app)
+			func() *kernel.AuthOrigin {
+				origin := kernel.NewAuthOrigin(app)
 				origin.SetCollectionRef(user.Collection().Id)
 				origin.SetRecordRef(user.Id)
 				origin.SetFingerprint("abc")
@@ -281,7 +281,7 @@ func TestAuthOriginPasswordChangeDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	superuser2, err := testApp.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test2@example.com")
+	superuser2, err := testApp.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test2@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestAuthOriginPasswordChangeDeletion(t *testing.T) {
 	}
 
 	scenarios := []struct {
-		record     *core.Record
+		record     *kernel.Record
 		deletedIds []string
 	}{
 		{user1, nil},
@@ -306,7 +306,7 @@ func TestAuthOriginPasswordChangeDeletion(t *testing.T) {
 			defer app.Cleanup()
 
 			deletedIds := []string{}
-			app.OnRecordDelete().BindFunc(func(e *core.RecordEvent) error {
+			app.OnRecordDelete().BindFunc(func(e *kernel.RecordEvent) error {
 				deletedIds = append(deletedIds, e.Record.Id)
 				return e.Next()
 			})

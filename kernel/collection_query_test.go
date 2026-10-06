@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/pocketbase/dbx"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/list"
 )
@@ -42,11 +42,11 @@ func TestReloadCachedCollections(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cached := app.Store().Get(core.StoreKeyCachedCollections)
+	cached := app.Store().Get(kernel.StoreKeyCachedCollections)
 
-	cachedCollections, ok := cached.([]*core.Collection)
+	cachedCollections, ok := cached.([]*kernel.Collection)
 	if !ok {
-		t.Fatalf("Expected []*core.Collection, got %T", cached)
+		t.Fatalf("Expected []*kernel.Collection, got %T", cached)
 	}
 
 	collections, err := app.FindAllCollections()
@@ -86,8 +86,8 @@ func TestFindAllCollections(t *testing.T) {
 		{[]string{}, 16},
 		{[]string{""}, 16},
 		{[]string{"unknown"}, 0},
-		{[]string{"unknown", core.CollectionTypeAuth}, 4},
-		{[]string{core.CollectionTypeAuth, core.CollectionTypeView}, 7},
+		{[]string{"unknown", kernel.CollectionTypeAuth}, 4},
+		{[]string{kernel.CollectionTypeAuth, kernel.CollectionTypeView}, 7},
 	}
 
 	for i, s := range scenarios {

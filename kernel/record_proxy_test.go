@@ -3,13 +3,13 @@ package kernel_test
 import (
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 func TestBaseRecordProxy(t *testing.T) {
-	p := core.BaseRecordProxy{}
+	p := kernel.BaseRecordProxy{}
 
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 	record.Id = "test"
 
 	p.SetProxyRecord(record)

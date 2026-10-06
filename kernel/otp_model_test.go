@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/types"
 )
@@ -16,20 +16,20 @@ func TestNewOTP(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	otp := core.NewOTP(app)
+	otp := kernel.NewOTP(app)
 
-	if otp.Collection().Name != core.CollectionNameOTPs {
-		t.Fatalf("Expected record with %q collection, got %q", core.CollectionNameOTPs, otp.Collection().Name)
+	if otp.Collection().Name != kernel.CollectionNameOTPs {
+		t.Fatalf("Expected record with %q collection, got %q", kernel.CollectionNameOTPs, otp.Collection().Name)
 	}
 }
 
 func TestOTPProxyRecord(t *testing.T) {
 	t.Parallel()
 
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 	record.Id = "test_id"
 
-	otp := core.OTP{}
+	otp := kernel.OTP{}
 	otp.SetProxyRecord(record)
 
 	if otp.ProxyRecord() == nil || otp.ProxyRecord().Id != record.Id {
@@ -43,7 +43,7 @@ func TestOTPRecordRef(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	otp := core.NewOTP(app)
+	otp := kernel.NewOTP(app)
 
 	testValues := []string{"test_1", "test2", ""}
 	for i, testValue := range testValues {
@@ -67,7 +67,7 @@ func TestOTPCollectionRef(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	otp := core.NewOTP(app)
+	otp := kernel.NewOTP(app)
 
 	testValues := []string{"test_1", "test2", ""}
 	for i, testValue := range testValues {
@@ -91,7 +91,7 @@ func TestOTPSentTo(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	otp := core.NewOTP(app)
+	otp := kernel.NewOTP(app)
 
 	testValues := []string{"test_1", "test2", ""}
 	for i, testValue := range testValues {
@@ -115,7 +115,7 @@ func TestOTPCreated(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	otp := core.NewOTP(app)
+	otp := kernel.NewOTP(app)
 
 	if v := otp.Created().String(); v != "" {
 		t.Fatalf("Expected empty created, got %q", v)
@@ -135,7 +135,7 @@ func TestOTPUpdated(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	otp := core.NewOTP(app)
+	otp := kernel.NewOTP(app)
 
 	if v := otp.Updated().String(); v != "" {
 		t.Fatalf("Expected empty updated, got %q", v)
@@ -157,7 +157,7 @@ func TestOTPHasExpired(t *testing.T) {
 
 	now := types.NowDateTime()
 
-	otp := core.NewOTP(app)
+	otp := kernel.NewOTP(app)
 	otp.SetRaw("created", now.Add(-5*time.Minute))
 
 	scenarios := []struct {
@@ -187,7 +187,7 @@ func TestOTPPreValidate(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	otpsCol, err := app.FindCollectionByNameOrId(core.CollectionNameOTPs)
+	otpsCol, err := app.FindCollectionByNameOrId(kernel.CollectionNameOTPs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestOTPPreValidate(t *testing.T) {
 	}
 
 	t.Run("no proxy record", func(t *testing.T) {
-		otp := &core.OTP{}
+		otp := &kernel.OTP{}
 
 		if err := app.Validate(otp); err == nil {
 			t.Fatal("Expected collection validation error")
@@ -206,8 +206,8 @@ func TestOTPPreValidate(t *testing.T) {
 	})
 
 	t.Run("non-OTP collection", func(t *testing.T) {
-		otp := &core.OTP{}
-		otp.SetProxyRecord(core.NewRecord(core.NewBaseCollection("invalid")))
+		otp := &kernel.OTP{}
+		otp.SetProxyRecord(kernel.NewRecord(kernel.NewBaseCollection("invalid")))
 		otp.SetRecordRef(user.Id)
 		otp.SetCollectionRef(user.Collection().Id)
 		otp.SetPassword("test123")
@@ -218,8 +218,8 @@ func TestOTPPreValidate(t *testing.T) {
 	})
 
 	t.Run("OTP collection", func(t *testing.T) {
-		otp := &core.OTP{}
-		otp.SetProxyRecord(core.NewRecord(otpsCol))
+		otp := &kernel.OTP{}
+		otp.SetProxyRecord(kernel.NewRecord(otpsCol))
 		otp.SetRecordRef(user.Id)
 		otp.SetCollectionRef(user.Collection().Id)
 		otp.SetPassword("test123")
@@ -248,20 +248,20 @@ func TestOTPValidateHook(t *testing.T) {
 
 	scenarios := []struct {
 		name         string
-		otp          func() *core.OTP
+		otp          func() *kernel.OTP
 		expectErrors []string
 	}{
 		{
 			"empty",
-			func() *core.OTP {
-				return core.NewOTP(app)
+			func() *kernel.OTP {
+				return kernel.NewOTP(app)
 			},
 			[]string{"collectionRef", "recordRef", "password"},
 		},
 		{
 			"non-auth collection",
-			func() *core.OTP {
-				otp := core.NewOTP(app)
+			func() *kernel.OTP {
+				otp := kernel.NewOTP(app)
 				otp.SetCollectionRef(demo1.Collection().Id)
 				otp.SetRecordRef(demo1.Id)
 				otp.SetPassword("test123")
@@ -271,8 +271,8 @@ func TestOTPValidateHook(t *testing.T) {
 		},
 		{
 			"missing record id",
-			func() *core.OTP {
-				otp := core.NewOTP(app)
+			func() *kernel.OTP {
+				otp := kernel.NewOTP(app)
 				otp.SetCollectionRef(user.Collection().Id)
 				otp.SetRecordRef("missing")
 				otp.SetPassword("test123")
@@ -282,8 +282,8 @@ func TestOTPValidateHook(t *testing.T) {
 		},
 		{
 			"valid ref",
-			func() *core.OTP {
-				otp := core.NewOTP(app)
+			func() *kernel.OTP {
+				otp := kernel.NewOTP(app)
 				otp.SetCollectionRef(user.Collection().Id)
 				otp.SetRecordRef(user.Id)
 				otp.SetPassword("test123")
@@ -317,13 +317,13 @@ func TestOTPClearOnTokenKeyChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	otpsToCreate := map[*core.Record]int{
+	otpsToCreate := map[*kernel.Record]int{
 		user1: 3,
 		user2: 2,
 	}
 	for user, total := range otpsToCreate {
 		for range total {
-			otp := core.NewOTP(app)
+			otp := kernel.NewOTP(app)
 			otp.SetCollectionRef(user.Collection().Id)
 			otp.SetRecordRef(user.Id)
 			otp.SetPassword("123456")
@@ -345,7 +345,7 @@ func TestOTPClearOnTokenKeyChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expectedOTPs := map[*core.Record]int{
+	expectedOTPs := map[*kernel.Record]int{
 		user1: 3,
 		user2: 0,
 	}

@@ -6,20 +6,20 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/types"
 )
 
 func TestGeoPointFieldBaseMethods(t *testing.T) {
-	testFieldBaseMethods(t, core.FieldTypeGeoPoint)
+	testFieldBaseMethods(t, kernel.FieldTypeGeoPoint)
 }
 
 func TestGeoPointFieldColumnType(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.GeoPointField{}
+	f := &kernel.GeoPointField{}
 
 	expected := `JSON DEFAULT '{"lon":0,"lat":0}' NOT NULL`
 
@@ -32,8 +32,8 @@ func TestGeoPointFieldPrepareValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.GeoPointField{}
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	f := &kernel.GeoPointField{}
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 
 	scenarios := []struct {
 		raw      any
@@ -74,19 +74,19 @@ func TestGeoPointFieldValidateValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name        string
-		field       *core.GeoPointField
-		record      func() *core.Record
+		field       *kernel.GeoPointField
+		record      func() *kernel.Record
 		expectError bool
 	}{
 		{
 			"invalid raw value",
-			&core.GeoPointField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.GeoPointField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 123)
 				return record
 			},
@@ -94,9 +94,9 @@ func TestGeoPointFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (non-required)",
-			&core.GeoPointField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.GeoPointField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.GeoPoint{})
 				return record
 			},
@@ -104,9 +104,9 @@ func TestGeoPointFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (required)",
-			&core.GeoPointField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.GeoPointField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.GeoPoint{})
 				return record
 			},
@@ -114,9 +114,9 @@ func TestGeoPointFieldValidateValue(t *testing.T) {
 		},
 		{
 			"non-zero Lat field value (required)",
-			&core.GeoPointField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.GeoPointField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.GeoPoint{Lat: 1})
 				return record
 			},
@@ -124,9 +124,9 @@ func TestGeoPointFieldValidateValue(t *testing.T) {
 		},
 		{
 			"non-zero Lon field value (required)",
-			&core.GeoPointField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.GeoPointField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.GeoPoint{Lon: 1})
 				return record
 			},
@@ -134,9 +134,9 @@ func TestGeoPointFieldValidateValue(t *testing.T) {
 		},
 		{
 			"non-zero Lat-Lon field value (required)",
-			&core.GeoPointField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.GeoPointField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.GeoPoint{Lon: -1, Lat: -2})
 				return record
 			},
@@ -144,9 +144,9 @@ func TestGeoPointFieldValidateValue(t *testing.T) {
 		},
 		{
 			"lat < -90",
-			&core.GeoPointField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.GeoPointField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.GeoPoint{Lat: -90.1})
 				return record
 			},
@@ -154,9 +154,9 @@ func TestGeoPointFieldValidateValue(t *testing.T) {
 		},
 		{
 			"lat > 90",
-			&core.GeoPointField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.GeoPointField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.GeoPoint{Lat: 90.1})
 				return record
 			},
@@ -164,9 +164,9 @@ func TestGeoPointFieldValidateValue(t *testing.T) {
 		},
 		{
 			"lon < -180",
-			&core.GeoPointField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.GeoPointField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.GeoPoint{Lon: -180.1})
 				return record
 			},
@@ -174,9 +174,9 @@ func TestGeoPointFieldValidateValue(t *testing.T) {
 		},
 		{
 			"lon > 180",
-			&core.GeoPointField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.GeoPointField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.GeoPoint{Lon: 180.1})
 				return record
 			},
@@ -197,7 +197,7 @@ func TestGeoPointFieldValidateValue(t *testing.T) {
 }
 
 func TestGeoPointFieldValidateSettings(t *testing.T) {
-	testDefaultFieldIdValidation(t, core.FieldTypeGeoPoint)
-	testDefaultFieldNameValidation(t, core.FieldTypeGeoPoint)
-	testDefaultFieldHelpValidation[core.GeoPointField](t)
+	testDefaultFieldIdValidation(t, kernel.FieldTypeGeoPoint)
+	testDefaultFieldNameValidation(t, kernel.FieldTypeGeoPoint)
+	testDefaultFieldHelpValidation[kernel.GeoPointField](t)
 }

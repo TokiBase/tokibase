@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/list"
 	"github.com/tokibase/tokibase/tools/search"
@@ -25,7 +25,7 @@ func TestRecordFieldResolverAllowedFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := core.NewRecordFieldResolver(app, collection, nil, false)
+	r := kernel.NewRecordFieldResolver(app, collection, nil, false)
 
 	fields := r.AllowedFields()
 	if len(fields) != 8 {
@@ -63,7 +63,7 @@ func TestRecordFieldResolverAllowHiddenFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := core.NewRecordFieldResolver(app, collection, nil, false)
+	r := kernel.NewRecordFieldResolver(app, collection, nil, false)
 
 	allowHiddenFields := r.AllowHiddenFields()
 	if allowHiddenFields {
@@ -91,7 +91,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requestInfo := &core.RequestInfo{
+	requestInfo := &kernel.RequestInfo{
 		Context: "ctx",
 		Headers: map[string]string{
 			"a": "123",
@@ -678,7 +678,7 @@ func TestRecordFieldResolverUpdateQuery(t *testing.T) {
 
 			query := app.RecordQuery(collection)
 
-			r := core.NewRecordFieldResolver(app, collection, requestInfo, s.allowHiddenFields)
+			r := kernel.NewRecordFieldResolver(app, collection, requestInfo, s.allowHiddenFields)
 
 			expr, err := search.FilterData(s.rule).BuildExpr(r)
 			hasErr := err != nil
@@ -726,11 +726,11 @@ func TestRecordFieldResolverResolveCollectionFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requestInfo := &core.RequestInfo{
+	requestInfo := &kernel.RequestInfo{
 		Auth: authRecord,
 	}
 
-	r := core.NewRecordFieldResolver(app, collection, requestInfo, true)
+	r := kernel.NewRecordFieldResolver(app, collection, requestInfo, true)
 
 	scenarios := []struct {
 		fieldName   string
@@ -835,7 +835,7 @@ func TestRecordFieldResolverResolveStaticRequestInfoFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requestInfo := &core.RequestInfo{
+	requestInfo := &kernel.RequestInfo{
 		Context: "ctx",
 		Method:  "get",
 		Query: map[string]string{
@@ -857,7 +857,7 @@ func TestRecordFieldResolverResolveStaticRequestInfoFields(t *testing.T) {
 		Auth: authRecord,
 	}
 
-	r := core.NewRecordFieldResolver(app, collection, requestInfo, true)
+	r := kernel.NewRecordFieldResolver(app, collection, requestInfo, true)
 
 	scenarios := []struct {
 		fieldName        string
@@ -951,7 +951,7 @@ func TestRecordFieldResolverResolveStaticRequestInfoFields(t *testing.T) {
 	if authRecord.EmailVisibility() {
 		t.Fatal("Expected the original authRecord emailVisibility to remain unchanged")
 	}
-	if v, ok := authRecord.PublicExport()[core.FieldNameEmail]; ok {
+	if v, ok := authRecord.PublicExport()[kernel.FieldNameEmail]; ok {
 		t.Fatalf("Expected the original authRecord email to not be exported, got %q", v)
 	}
 }

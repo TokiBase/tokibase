@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/spf13/cast"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/security"
 )
@@ -14,10 +14,10 @@ import (
 func TestNewStaticAuthToken(t *testing.T) {
 	t.Parallel()
 
-	testRecordToken(t, core.TokenTypeAuth, func(record *core.Record) (string, error) {
+	testRecordToken(t, kernel.TokenTypeAuth, func(record *kernel.Record) (string, error) {
 		return record.NewStaticAuthToken(0)
 	}, map[string]any{
-		core.TokenClaimRefreshable: false,
+		kernel.TokenClaimRefreshable: false,
 	})
 }
 
@@ -76,17 +76,17 @@ func TestNewStaticAuthTokenWithCustomDuration(t *testing.T) {
 func TestNewAuthToken(t *testing.T) {
 	t.Parallel()
 
-	testRecordToken(t, core.TokenTypeAuth, func(record *core.Record) (string, error) {
+	testRecordToken(t, kernel.TokenTypeAuth, func(record *kernel.Record) (string, error) {
 		return record.NewAuthToken()
 	}, map[string]any{
-		core.TokenClaimRefreshable: true,
+		kernel.TokenClaimRefreshable: true,
 	})
 }
 
 func TestNewVerificationToken(t *testing.T) {
 	t.Parallel()
 
-	testRecordToken(t, core.TokenTypeVerification, func(record *core.Record) (string, error) {
+	testRecordToken(t, kernel.TokenTypeVerification, func(record *kernel.Record) (string, error) {
 		return record.NewVerificationToken()
 	}, nil)
 }
@@ -94,7 +94,7 @@ func TestNewVerificationToken(t *testing.T) {
 func TestNewPasswordResetToken(t *testing.T) {
 	t.Parallel()
 
-	testRecordToken(t, core.TokenTypePasswordReset, func(record *core.Record) (string, error) {
+	testRecordToken(t, kernel.TokenTypePasswordReset, func(record *kernel.Record) (string, error) {
 		return record.NewPasswordResetToken()
 	}, nil)
 }
@@ -102,7 +102,7 @@ func TestNewPasswordResetToken(t *testing.T) {
 func TestNewEmailChangeToken(t *testing.T) {
 	t.Parallel()
 
-	testRecordToken(t, core.TokenTypeEmailChange, func(record *core.Record) (string, error) {
+	testRecordToken(t, kernel.TokenTypeEmailChange, func(record *kernel.Record) (string, error) {
 		return record.NewEmailChangeToken("new@example.com")
 	}, nil)
 }
@@ -110,7 +110,7 @@ func TestNewEmailChangeToken(t *testing.T) {
 func TestNewFileToken(t *testing.T) {
 	t.Parallel()
 
-	testRecordToken(t, core.TokenTypeFile, func(record *core.Record) (string, error) {
+	testRecordToken(t, kernel.TokenTypeFile, func(record *kernel.Record) (string, error) {
 		return record.NewFileToken()
 	}, nil)
 }
@@ -118,7 +118,7 @@ func TestNewFileToken(t *testing.T) {
 func testRecordToken(
 	t *testing.T,
 	tokenType string,
-	tokenFunc func(record *core.Record) (string, error),
+	tokenFunc func(record *kernel.Record) (string, error),
 	expectedClaims map[string]any,
 ) {
 	app, _ := tests.NewTestApp()
@@ -165,8 +165,8 @@ func testRecordToken(
 	t.Run("empty signing key", func(t *testing.T) {
 		user.SetTokenKey("")
 		collection := user.Collection()
-		*collection = core.Collection{}
-		collection.Type = core.CollectionTypeAuth
+		*collection = kernel.Collection{}
+		collection.Type = kernel.CollectionTypeAuth
 
 		_, err := tokenFunc(user)
 		if err == nil {

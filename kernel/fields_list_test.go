@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 func TestNewFieldsList(t *testing.T) {
-	fields := core.NewFieldsList(
-		&core.TextField{Id: "id1", Name: "test1"},
-		&core.TextField{Name: "test2"},
-		&core.TextField{Id: "id1", Name: "test1_new"}, // should replace the original id1 field
+	fields := kernel.NewFieldsList(
+		&kernel.TextField{Id: "id1", Name: "test1"},
+		&kernel.TextField{Name: "test2"},
+		&kernel.TextField{Id: "id1", Name: "test1_new"}, // should replace the original id1 field
 	)
 
 	if len(fields) != 2 {
@@ -38,9 +38,9 @@ func TestNewFieldsList(t *testing.T) {
 }
 
 func TestFieldsListClone(t *testing.T) {
-	f1 := &core.TextField{Name: "test1"}
-	f2 := &core.EmailField{Name: "test2"}
-	s1 := core.NewFieldsList(f1, f2)
+	f1 := &kernel.TextField{Name: "test1"}
+	f2 := &kernel.EmailField{Name: "test2"}
+	s1 := kernel.NewFieldsList(f1, f2)
 
 	s2, err := s1.Clone()
 	if err != nil {
@@ -63,9 +63,9 @@ func TestFieldsListClone(t *testing.T) {
 }
 
 func TestFieldsListFieldNames(t *testing.T) {
-	f1 := &core.TextField{Name: "test1"}
-	f2 := &core.EmailField{Name: "test2"}
-	testFieldsList := core.NewFieldsList(f1, f2)
+	f1 := &kernel.TextField{Name: "test1"}
+	f2 := &kernel.EmailField{Name: "test2"}
+	testFieldsList := kernel.NewFieldsList(f1, f2)
 
 	result := testFieldsList.FieldNames()
 
@@ -83,9 +83,9 @@ func TestFieldsListFieldNames(t *testing.T) {
 }
 
 func TestFieldsListAsMap(t *testing.T) {
-	f1 := &core.TextField{Name: "test1"}
-	f2 := &core.EmailField{Name: "test2"}
-	testFieldsList := core.NewFieldsList(f1, f2)
+	f1 := &kernel.TextField{Name: "test1"}
+	f2 := &kernel.EmailField{Name: "test2"}
+	testFieldsList := kernel.NewFieldsList(f1, f2)
 
 	result := testFieldsList.AsMap()
 
@@ -103,9 +103,9 @@ func TestFieldsListAsMap(t *testing.T) {
 }
 
 func TestFieldsListGetById(t *testing.T) {
-	f1 := &core.TextField{Id: "id1", Name: "test1"}
-	f2 := &core.EmailField{Id: "id2", Name: "test2"}
-	testFieldsList := core.NewFieldsList(f1, f2)
+	f1 := &kernel.TextField{Id: "id1", Name: "test1"}
+	f2 := &kernel.EmailField{Id: "id2", Name: "test2"}
+	testFieldsList := kernel.NewFieldsList(f1, f2)
 
 	// missing field id
 	result1 := testFieldsList.GetById("test1")
@@ -121,9 +121,9 @@ func TestFieldsListGetById(t *testing.T) {
 }
 
 func TestFieldsListGetByName(t *testing.T) {
-	f1 := &core.TextField{Id: "id1", Name: "test1"}
-	f2 := &core.EmailField{Id: "id2", Name: "test2"}
-	testFieldsList := core.NewFieldsList(f1, f2)
+	f1 := &kernel.TextField{Id: "id1", Name: "test1"}
+	f2 := &kernel.EmailField{Id: "id2", Name: "test2"}
+	testFieldsList := kernel.NewFieldsList(f1, f2)
 
 	// missing field name
 	result1 := testFieldsList.GetByName("id1")
@@ -139,13 +139,13 @@ func TestFieldsListGetByName(t *testing.T) {
 }
 
 func TestFieldsListRemove(t *testing.T) {
-	testFieldsList := core.NewFieldsList(
-		&core.TextField{Id: "id1", Name: "test1"},
-		&core.TextField{Id: "id2", Name: "test2"},
-		&core.TextField{Id: "id3", Name: "test3"},
-		&core.TextField{Id: "id4", Name: "test4"},
-		&core.TextField{Id: "id5", Name: "test5"},
-		&core.TextField{Id: "id6", Name: "test6"},
+	testFieldsList := kernel.NewFieldsList(
+		&kernel.TextField{Id: "id1", Name: "test1"},
+		&kernel.TextField{Id: "id2", Name: "test2"},
+		&kernel.TextField{Id: "id3", Name: "test3"},
+		&kernel.TextField{Id: "id4", Name: "test4"},
+		&kernel.TextField{Id: "id5", Name: "test5"},
+		&kernel.TextField{Id: "id6", Name: "test6"},
 	)
 
 	// remove by id
@@ -170,14 +170,14 @@ func TestFieldsListRemove(t *testing.T) {
 }
 
 func TestFieldsListAdd(t *testing.T) {
-	f0 := &core.TextField{}
-	f1 := &core.TextField{Name: "test1"}
-	f2 := &core.TextField{Id: "f2Id", Name: "test2"}
-	f3 := &core.TextField{Id: "f3Id", Name: "test3"}
-	testFieldsList := core.NewFieldsList(f0, f1, f2, f3)
+	f0 := &kernel.TextField{}
+	f1 := &kernel.TextField{Name: "test1"}
+	f2 := &kernel.TextField{Id: "f2Id", Name: "test2"}
+	f3 := &kernel.TextField{Id: "f3Id", Name: "test3"}
+	testFieldsList := kernel.NewFieldsList(f0, f1, f2, f3)
 
-	f2New := &core.EmailField{Id: "f2Id", Name: "test2_new"}
-	f4 := &core.URLField{Name: "test4"}
+	f2New := &kernel.EmailField{Id: "f2Id", Name: "test2_new"}
+	f4 := &kernel.URLField{Name: "test4"}
 
 	testFieldsList.Add(f2New)
 	testFieldsList.Add(f4)
@@ -194,7 +194,7 @@ func TestFieldsListAdd(t *testing.T) {
 	}
 
 	// check if f2 field was replaced
-	if f := testFieldsList.GetById("f2Id"); f == nil || f.Type() != core.FieldTypeEmail {
+	if f := testFieldsList.GetById("f2Id"); f == nil || f.Type() != kernel.FieldTypeEmail {
 		t.Fatalf("Expected f2 field to be replaced, found %v", f)
 	}
 
@@ -217,39 +217,39 @@ func TestFieldsListAddMarshaledJSON(t *testing.T) {
 			"nil",
 			nil,
 			false,
-			map[string]string{"abc": core.FieldTypeNumber},
+			map[string]string{"abc": kernel.FieldTypeNumber},
 		},
 		{
 			"empty array",
 			[]byte(`[]`),
 			false,
-			map[string]string{"abc": core.FieldTypeNumber},
+			map[string]string{"abc": kernel.FieldTypeNumber},
 		},
 		{
 			"empty object",
 			[]byte(`{}`),
 			true,
-			map[string]string{"abc": core.FieldTypeNumber},
+			map[string]string{"abc": kernel.FieldTypeNumber},
 		},
 		{
 			"array with empty object",
 			[]byte(`[{}]`),
 			true,
-			map[string]string{"abc": core.FieldTypeNumber},
+			map[string]string{"abc": kernel.FieldTypeNumber},
 		},
 		{
 			"single object with invalid type",
 			[]byte(`{"type":"missing","name":"test"}`),
 			true,
-			map[string]string{"abc": core.FieldTypeNumber},
+			map[string]string{"abc": kernel.FieldTypeNumber},
 		},
 		{
 			"single object with valid type",
 			[]byte(`{"type":"text","name":"test"}`),
 			false,
 			map[string]string{
-				"abc":  core.FieldTypeNumber,
-				"test": core.FieldTypeText,
+				"abc":  kernel.FieldTypeNumber,
+				"test": kernel.FieldTypeText,
 			},
 		},
 		{
@@ -257,9 +257,9 @@ func TestFieldsListAddMarshaledJSON(t *testing.T) {
 			[]byte(`[{"type":"text","name":"test1"},{"type":"url","name":"test2"}]`),
 			false,
 			map[string]string{
-				"abc":   core.FieldTypeNumber,
-				"test1": core.FieldTypeText,
-				"test2": core.FieldTypeURL,
+				"abc":   kernel.FieldTypeNumber,
+				"test1": kernel.FieldTypeText,
+				"test2": kernel.FieldTypeURL,
 			},
 		},
 		{
@@ -267,16 +267,16 @@ func TestFieldsListAddMarshaledJSON(t *testing.T) {
 			[]byte(`[{"type":"text","name":"test1"},{"type":"url","name":"test2"},{"type":"text","name":"abc2", "id":"abc_id"}]`),
 			false,
 			map[string]string{
-				"abc2":  core.FieldTypeText,
-				"test1": core.FieldTypeText,
-				"test2": core.FieldTypeURL,
+				"abc2":  kernel.FieldTypeText,
+				"test1": kernel.FieldTypeText,
+				"test2": kernel.FieldTypeURL,
 			},
 		},
 	}
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			testList := core.NewFieldsList(&core.NumberField{Name: "abc", Id: "abc_id"})
+			testList := kernel.NewFieldsList(&kernel.NumberField{Name: "abc", Id: "abc_id"})
 			err := testList.AddMarshaledJSON(s.raw)
 
 			hasErr := err != nil
@@ -321,13 +321,13 @@ func TestFieldsListAddAt(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(strconv.Itoa(s.position), func(t *testing.T) {
-			f1 := &core.TextField{Id: "f1Id", Name: "test1"}
-			f2 := &core.TextField{Id: "f2Id", Name: "test2"}
-			f3 := &core.TextField{Id: "f3Id", Name: "test3"}
-			testFieldsList := core.NewFieldsList(f1, f2, f3)
+			f1 := &kernel.TextField{Id: "f1Id", Name: "test1"}
+			f2 := &kernel.TextField{Id: "f2Id", Name: "test2"}
+			f3 := &kernel.TextField{Id: "f3Id", Name: "test3"}
+			testFieldsList := kernel.NewFieldsList(f1, f2, f3)
 
-			f2New := &core.EmailField{Id: "f2Id", Name: "test2_new"}
-			f4 := &core.URLField{Name: "test4"}
+			f2New := &kernel.EmailField{Id: "f2Id", Name: "test2_new"}
+			f4 := &kernel.URLField{Name: "test4"}
 			testFieldsList.AddAt(s.position, f2New, f4)
 
 			rawNames, err := json.Marshal(testFieldsList.FieldNames())
@@ -364,10 +364,10 @@ func TestFieldsListAddMarshaledJSONAt(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(strconv.Itoa(s.position), func(t *testing.T) {
-			f1 := &core.TextField{Id: "f1Id", Name: "test1"}
-			f2 := &core.TextField{Id: "f2Id", Name: "test2"}
-			f3 := &core.TextField{Id: "f3Id", Name: "test3"}
-			testFieldsList := core.NewFieldsList(f1, f2, f3)
+			f1 := &kernel.TextField{Id: "f1Id", Name: "test1"}
+			f2 := &kernel.TextField{Id: "f2Id", Name: "test2"}
+			f3 := &kernel.TextField{Id: "f3Id", Name: "test3"}
+			testFieldsList := kernel.NewFieldsList(f1, f2, f3)
 
 			err := testFieldsList.AddMarshaledJSONAt(s.position, []byte(`[
 				{"id":"f2Id", "name":"test2_new", "type": "text"},
@@ -396,7 +396,7 @@ func TestFieldsListAddMarshaledJSONAt(t *testing.T) {
 
 func TestFieldsListStringAndValue(t *testing.T) {
 	t.Run("empty list", func(t *testing.T) {
-		testFieldsList := core.NewFieldsList()
+		testFieldsList := kernel.NewFieldsList()
 
 		str := testFieldsList.String()
 		if str != "[]" {
@@ -413,10 +413,10 @@ func TestFieldsListStringAndValue(t *testing.T) {
 	})
 
 	t.Run("list with fields", func(t *testing.T) {
-		testFieldsList := core.NewFieldsList(
-			&core.TextField{Id: "f1id", Name: "test1"},
-			&core.BoolField{Id: "f2id", Name: "test2"},
-			&core.URLField{Id: "f3id", Name: "test3"},
+		testFieldsList := kernel.NewFieldsList(
+			&kernel.TextField{Id: "f1id", Name: "test1"},
+			&kernel.BoolField{Id: "f2id", Name: "test2"},
+			&kernel.URLField{Id: "f3id", Name: "test3"},
 		)
 
 		str := testFieldsList.String()
@@ -485,7 +485,7 @@ func TestFieldsListScan(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			testFieldsList := core.FieldsList{}
+			testFieldsList := kernel.FieldsList{}
 
 			err := testFieldsList.Scan(s.data)
 
@@ -535,7 +535,7 @@ func TestFieldsListJSON(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			testFieldsList := core.FieldsList{}
+			testFieldsList := kernel.FieldsList{}
 
 			err := testFieldsList.UnmarshalJSON([]byte(s.data))
 

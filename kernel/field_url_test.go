@@ -5,19 +5,19 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
 func TestURLFieldBaseMethods(t *testing.T) {
-	testFieldBaseMethods(t, core.FieldTypeURL)
+	testFieldBaseMethods(t, kernel.FieldTypeURL)
 }
 
 func TestURLFieldColumnType(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.URLField{}
+	f := &kernel.URLField{}
 
 	expected := "TEXT DEFAULT '' NOT NULL"
 
@@ -30,8 +30,8 @@ func TestURLFieldPrepareValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.URLField{}
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	f := &kernel.URLField{}
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 
 	scenarios := []struct {
 		raw      any
@@ -67,19 +67,19 @@ func TestURLFieldValidateValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name        string
-		field       *core.URLField
-		record      func() *core.Record
+		field       *kernel.URLField
+		record      func() *kernel.Record
 		expectError bool
 	}{
 		{
 			"invalid raw value",
-			&core.URLField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.URLField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 123)
 				return record
 			},
@@ -87,9 +87,9 @@ func TestURLFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (not required)",
-			&core.URLField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.URLField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "")
 				return record
 			},
@@ -97,9 +97,9 @@ func TestURLFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (required)",
-			&core.URLField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.URLField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "")
 				return record
 			},
@@ -107,9 +107,9 @@ func TestURLFieldValidateValue(t *testing.T) {
 		},
 		{
 			"non-zero field value (required)",
-			&core.URLField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.URLField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "https://example.com")
 				return record
 			},
@@ -117,9 +117,9 @@ func TestURLFieldValidateValue(t *testing.T) {
 		},
 		{
 			"invalid url",
-			&core.URLField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.URLField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "invalid")
 				return record
 			},
@@ -127,9 +127,9 @@ func TestURLFieldValidateValue(t *testing.T) {
 		},
 		{
 			"failed onlyDomains",
-			&core.URLField{Name: "test", OnlyDomains: []string{"example.org", "example.net"}},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.URLField{Name: "test", OnlyDomains: []string{"example.org", "example.net"}},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "https://example.com")
 				return record
 			},
@@ -137,9 +137,9 @@ func TestURLFieldValidateValue(t *testing.T) {
 		},
 		{
 			"success onlyDomains",
-			&core.URLField{Name: "test", OnlyDomains: []string{"example.org", "example.com"}},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.URLField{Name: "test", OnlyDomains: []string{"example.org", "example.com"}},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "https://example.com")
 				return record
 			},
@@ -147,9 +147,9 @@ func TestURLFieldValidateValue(t *testing.T) {
 		},
 		{
 			"failed exceptDomains",
-			&core.URLField{Name: "test", ExceptDomains: []string{"example.org", "example.com"}},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.URLField{Name: "test", ExceptDomains: []string{"example.org", "example.com"}},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "https://example.com")
 				return record
 			},
@@ -157,9 +157,9 @@ func TestURLFieldValidateValue(t *testing.T) {
 		},
 		{
 			"success exceptDomains",
-			&core.URLField{Name: "test", ExceptDomains: []string{"example.org", "example.net"}},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.URLField{Name: "test", ExceptDomains: []string{"example.org", "example.net"}},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "https://example.com")
 				return record
 			},
@@ -180,24 +180,24 @@ func TestURLFieldValidateValue(t *testing.T) {
 }
 
 func TestURLFieldValidateSettings(t *testing.T) {
-	testDefaultFieldIdValidation(t, core.FieldTypeURL)
-	testDefaultFieldNameValidation(t, core.FieldTypeURL)
-	testDefaultFieldHelpValidation[core.URLField](t)
+	testDefaultFieldIdValidation(t, kernel.FieldTypeURL)
+	testDefaultFieldNameValidation(t, kernel.FieldTypeURL)
+	testDefaultFieldHelpValidation[kernel.URLField](t)
 
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name         string
-		field        func() *core.URLField
+		field        func() *kernel.URLField
 		expectErrors []string
 	}{
 		{
 			"zero minimal",
-			func() *core.URLField {
-				return &core.URLField{
+			func() *kernel.URLField {
+				return &kernel.URLField{
 					Id:   "test",
 					Name: "test",
 				}
@@ -206,8 +206,8 @@ func TestURLFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"both onlyDomains and exceptDomains",
-			func() *core.URLField {
-				return &core.URLField{
+			func() *kernel.URLField {
+				return &kernel.URLField{
 					Id:            "test",
 					Name:          "test",
 					OnlyDomains:   []string{"example.com"},
@@ -218,8 +218,8 @@ func TestURLFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"invalid onlyDomains",
-			func() *core.URLField {
-				return &core.URLField{
+			func() *kernel.URLField {
+				return &kernel.URLField{
 					Id:          "test",
 					Name:        "test",
 					OnlyDomains: []string{"example.com", "invalid"},
@@ -229,8 +229,8 @@ func TestURLFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"valid onlyDomains",
-			func() *core.URLField {
-				return &core.URLField{
+			func() *kernel.URLField {
+				return &kernel.URLField{
 					Id:          "test",
 					Name:        "test",
 					OnlyDomains: []string{"example.com", "example.org"},
@@ -240,8 +240,8 @@ func TestURLFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"invalid exceptDomains",
-			func() *core.URLField {
-				return &core.URLField{
+			func() *kernel.URLField {
+				return &kernel.URLField{
 					Id:            "test",
 					Name:          "test",
 					ExceptDomains: []string{"example.com", "invalid"},
@@ -251,8 +251,8 @@ func TestURLFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"valid exceptDomains",
-			func() *core.URLField {
-				return &core.URLField{
+			func() *kernel.URLField {
+				return &kernel.URLField{
 					Id:            "test",
 					Name:          "test",
 					ExceptDomains: []string{"example.com", "example.org"},

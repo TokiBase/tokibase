@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/pocketbase/dbx"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
@@ -26,7 +26,7 @@ func TestHasTable(t *testing.T) {
 	}{
 		{"", false},
 		{"test", false},
-		{core.CollectionNameSuperusers, true},
+		{kernel.CollectionNameSuperusers, true},
 		{"demo3", true},
 		{"DEMO3", true}, // table names are case insensitives by default
 		{"view1", true}, // view
@@ -149,7 +149,7 @@ func TestTableIndexes(t *testing.T) {
 		{"", nil},
 		{"missing", nil},
 		{
-			core.CollectionNameSuperusers,
+			kernel.CollectionNameSuperusers,
 			[]string{"idx_email__pbc_3323866339", "idx_tokenKey__pbc_3323866339"},
 		},
 	}

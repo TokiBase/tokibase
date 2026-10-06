@@ -1,16 +1,14 @@
 package kernel_test
 
 import (
-	"bytes"
 	"encoding/json/v2"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
-	"github.com/tokibase/tokibase/tools/auth"
 	"github.com/tokibase/tokibase/tools/types"
 )
 
@@ -19,14 +17,14 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 
 	scenarios := []struct {
 		name           string
-		collection     func(app core.App) (*core.Collection, error)
+		collection     func(app kernel.App) (*kernel.Collection, error)
 		expectedErrors []string
 	}{
 		// authRule
 		{
 			name: "nil authRule",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.AuthRule = nil
 				return c, nil
 			},
@@ -34,8 +32,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "empty authRule",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.AuthRule = types.Pointer("")
 				return c, nil
 			},
@@ -43,8 +41,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "invalid authRule",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.AuthRule = types.Pointer("missing != ''")
 				return c, nil
 			},
@@ -52,8 +50,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "valid authRule",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.AuthRule = types.Pointer("id != ''")
 				return c, nil
 			},
@@ -63,8 +61,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		// manageRule
 		{
 			name: "nil manageRule",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.ManageRule = nil
 				return c, nil
 			},
@@ -72,8 +70,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "empty manageRule",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.ManageRule = types.Pointer("")
 				return c, nil
 			},
@@ -81,8 +79,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "invalid manageRule",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.ManageRule = types.Pointer("missing != ''")
 				return c, nil
 			},
@@ -90,8 +88,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "valid manageRule",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.ManageRule = types.Pointer("id != ''")
 				return c, nil
 			},
@@ -101,9 +99,9 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		// passwordAuth
 		{
 			name: "trigger passwordAuth validations",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
-				c.PasswordAuth = core.PasswordAuthConfig{
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
+				c.PasswordAuth = kernel.PasswordAuthConfig{
 					Enabled: true,
 				}
 				return c, nil
@@ -112,10 +110,10 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "passwordAuth with non-unique identity fields",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
-				c.Fields.Add(&core.TextField{Name: "test"})
-				c.PasswordAuth = core.PasswordAuthConfig{
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
+				c.Fields.Add(&kernel.TextField{Name: "test"})
+				c.PasswordAuth = kernel.PasswordAuthConfig{
 					Enabled:        true,
 					IdentityFields: []string{"email", "test"},
 				}
@@ -125,11 +123,11 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "passwordAuth with non-unique identity fields",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
-				c.Fields.Add(&core.TextField{Name: "test"})
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
+				c.Fields.Add(&kernel.TextField{Name: "test"})
 				c.AddIndex("auth_test_idx", true, "test", "")
-				c.PasswordAuth = core.PasswordAuthConfig{
+				c.PasswordAuth = kernel.PasswordAuthConfig{
 					Enabled:        true,
 					IdentityFields: []string{"email", "test"},
 				}
@@ -141,11 +139,11 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		// oauth2
 		{
 			name: "trigger oauth2 validations",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
-				c.OAuth2 = core.OAuth2Config{
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
+				c.OAuth2 = kernel.OAuth2Config{
 					Enabled: true,
-					Providers: []core.OAuth2ProviderConfig{
+					Providers: []kernel.OAuth2ProviderConfig{
 						{Name: "missing"},
 					},
 				}
@@ -157,9 +155,9 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		// otp
 		{
 			name: "trigger otp validations",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
-				c.OTP = core.OTPConfig{
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
+				c.OTP = kernel.OTPConfig{
 					Enabled:  true,
 					Duration: -10,
 				}
@@ -171,9 +169,9 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		// mfa
 		{
 			name: "trigger mfa validations",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
-				c.MFA = core.MFAConfig{
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
+				c.MFA = kernel.MFAConfig{
 					Enabled:  true,
 					Duration: -10,
 				}
@@ -183,8 +181,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "mfa enabled with < 2 auth methods",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.MFA.Enabled = true
 				c.PasswordAuth.Enabled = true
 				c.OTP.Enabled = false
@@ -195,8 +193,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "mfa enabled with >= 2 auth methods",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.MFA.Enabled = true
 				c.PasswordAuth.Enabled = true
 				c.OTP.Enabled = true
@@ -207,8 +205,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "mfa disabled with invalid rule",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.PasswordAuth.Enabled = true
 				c.OTP.Enabled = true
 				c.MFA.Enabled = false
@@ -219,8 +217,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "mfa enabled with invalid rule",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.PasswordAuth.Enabled = true
 				c.OTP.Enabled = true
 				c.MFA.Enabled = true
@@ -231,8 +229,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "mfa enabled with valid rule",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.PasswordAuth.Enabled = true
 				c.OTP.Enabled = true
 				c.MFA.Enabled = true
@@ -245,8 +243,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		// tokens
 		{
 			name: "trigger authToken validations",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.AuthToken.Secret = ""
 				return c, nil
 			},
@@ -254,8 +252,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "trigger passwordResetToken validations",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.PasswordResetToken.Secret = ""
 				return c, nil
 			},
@@ -263,8 +261,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "trigger emailChangeToken validations",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.EmailChangeToken.Secret = ""
 				return c, nil
 			},
@@ -272,8 +270,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "trigger verificationToken validations",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.VerificationToken.Secret = ""
 				return c, nil
 			},
@@ -281,8 +279,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "trigger fileToken validations",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.FileToken.Secret = ""
 				return c, nil
 			},
@@ -292,8 +290,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		// templates
 		{
 			name: "trigger verificationTemplate validations",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.VerificationTemplate.Body = ""
 				return c, nil
 			},
@@ -301,8 +299,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "trigger resetPasswordTemplate validations",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.ResetPasswordTemplate.Body = ""
 				return c, nil
 			},
@@ -310,8 +308,8 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 		},
 		{
 			name: "trigger confirmEmailChangeTemplate validations",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new_auth")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new_auth")
 				c.ConfirmEmailChangeTemplate.Body = ""
 				return c, nil
 			},
@@ -339,17 +337,17 @@ func TestCollectionAuthOptionsValidate(t *testing.T) {
 func TestEmailTemplateValidate(t *testing.T) {
 	scenarios := []struct {
 		name           string
-		template       core.EmailTemplate
+		template       kernel.EmailTemplate
 		expectedErrors []string
 	}{
 		{
 			"zero value",
-			core.EmailTemplate{},
+			kernel.EmailTemplate{},
 			[]string{"subject", "body"},
 		},
 		{
 			"non-empty data",
-			core.EmailTemplate{
+			kernel.EmailTemplate{
 				Subject: "a",
 				Body:    "b",
 			},
@@ -367,7 +365,7 @@ func TestEmailTemplateValidate(t *testing.T) {
 }
 
 func TestEmailTemplateResolve(t *testing.T) {
-	template := core.EmailTemplate{
+	template := kernel.EmailTemplate{
 		Subject: "test_subject {PARAM3} {PARAM1}-{PARAM2} repeat-{PARAM1}",
 		Body:    "test_body {PARAM3} {PARAM2}-{PARAM1} repeat-{PARAM2}",
 	}
@@ -375,7 +373,7 @@ func TestEmailTemplateResolve(t *testing.T) {
 	scenarios := []struct {
 		name            string
 		placeholders    map[string]any
-		template        core.EmailTemplate
+		template        kernel.EmailTemplate
 		expectedSubject string
 		expectedBody    string
 	}{
@@ -420,17 +418,17 @@ func TestEmailTemplateResolve(t *testing.T) {
 func TestTokenConfigValidate(t *testing.T) {
 	scenarios := []struct {
 		name           string
-		config         core.TokenConfig
+		config         kernel.TokenConfig
 		expectedErrors []string
 	}{
 		{
 			"zero value",
-			core.TokenConfig{},
+			kernel.TokenConfig{},
 			[]string{"secret", "duration"},
 		},
 		{
 			"invalid data",
-			core.TokenConfig{
+			kernel.TokenConfig{
 				Secret:   strings.Repeat("a", 29),
 				Duration: 9,
 			},
@@ -438,7 +436,7 @@ func TestTokenConfigValidate(t *testing.T) {
 		},
 		{
 			"valid data",
-			core.TokenConfig{
+			kernel.TokenConfig{
 				Secret:   strings.Repeat("a", 30),
 				Duration: 10,
 			},
@@ -457,11 +455,11 @@ func TestTokenConfigValidate(t *testing.T) {
 
 func TestTokenConfigDurationTime(t *testing.T) {
 	scenarios := []struct {
-		config   core.TokenConfig
+		config   kernel.TokenConfig
 		expected time.Duration
 	}{
-		{core.TokenConfig{}, 0 * time.Second},
-		{core.TokenConfig{Duration: 1234}, 1234 * time.Second},
+		{kernel.TokenConfig{}, 0 * time.Second},
+		{kernel.TokenConfig{Duration: 1234}, 1234 * time.Second},
 	}
 
 	for i, s := range scenarios {
@@ -478,30 +476,30 @@ func TestTokenConfigDurationTime(t *testing.T) {
 func TestAuthAlertConfigValidate(t *testing.T) {
 	scenarios := []struct {
 		name           string
-		config         core.AuthAlertConfig
+		config         kernel.AuthAlertConfig
 		expectedErrors []string
 	}{
 		{
 			"zero value (disabled)",
-			core.AuthAlertConfig{},
+			kernel.AuthAlertConfig{},
 			[]string{"emailTemplate"},
 		},
 		{
 			"zero value (enabled)",
-			core.AuthAlertConfig{Enabled: true},
+			kernel.AuthAlertConfig{Enabled: true},
 			[]string{"emailTemplate"},
 		},
 		{
 			"invalid template",
-			core.AuthAlertConfig{
-				EmailTemplate: core.EmailTemplate{Body: "", Subject: "b"},
+			kernel.AuthAlertConfig{
+				EmailTemplate: kernel.EmailTemplate{Body: "", Subject: "b"},
 			},
 			[]string{"emailTemplate"},
 		},
 		{
 			"valid data",
-			core.AuthAlertConfig{
-				EmailTemplate: core.EmailTemplate{Body: "a", Subject: "b"},
+			kernel.AuthAlertConfig{
+				EmailTemplate: kernel.EmailTemplate{Body: "a", Subject: "b"},
 			},
 			[]string{},
 		},
@@ -519,24 +517,24 @@ func TestAuthAlertConfigValidate(t *testing.T) {
 func TestOTPConfigValidate(t *testing.T) {
 	scenarios := []struct {
 		name           string
-		config         core.OTPConfig
+		config         kernel.OTPConfig
 		expectedErrors []string
 	}{
 		{
 			"zero value (disabled)",
-			core.OTPConfig{},
+			kernel.OTPConfig{},
 			[]string{"emailTemplate"},
 		},
 		{
 			"zero value (enabled)",
-			core.OTPConfig{Enabled: true},
+			kernel.OTPConfig{Enabled: true},
 			[]string{"duration", "length", "emailTemplate"},
 		},
 		{
 			"invalid length (< 3)",
-			core.OTPConfig{
+			kernel.OTPConfig{
 				Enabled:       true,
-				EmailTemplate: core.EmailTemplate{Body: "a", Subject: "b"},
+				EmailTemplate: kernel.EmailTemplate{Body: "a", Subject: "b"},
 				Duration:      100,
 				Length:        3,
 			},
@@ -544,9 +542,9 @@ func TestOTPConfigValidate(t *testing.T) {
 		},
 		{
 			"invalid duration (< 10)",
-			core.OTPConfig{
+			kernel.OTPConfig{
 				Enabled:       true,
-				EmailTemplate: core.EmailTemplate{Body: "a", Subject: "b"},
+				EmailTemplate: kernel.EmailTemplate{Body: "a", Subject: "b"},
 				Duration:      9,
 				Length:        100,
 			},
@@ -554,9 +552,9 @@ func TestOTPConfigValidate(t *testing.T) {
 		},
 		{
 			"invalid duration (> 86400)",
-			core.OTPConfig{
+			kernel.OTPConfig{
 				Enabled:       true,
-				EmailTemplate: core.EmailTemplate{Body: "a", Subject: "b"},
+				EmailTemplate: kernel.EmailTemplate{Body: "a", Subject: "b"},
 				Duration:      86401,
 				Length:        100,
 			},
@@ -564,9 +562,9 @@ func TestOTPConfigValidate(t *testing.T) {
 		},
 		{
 			"invalid template (triggering EmailTemplate validations)",
-			core.OTPConfig{
+			kernel.OTPConfig{
 				Enabled:       true,
-				EmailTemplate: core.EmailTemplate{Body: "", Subject: "b"},
+				EmailTemplate: kernel.EmailTemplate{Body: "", Subject: "b"},
 				Duration:      86400,
 				Length:        4,
 			},
@@ -574,9 +572,9 @@ func TestOTPConfigValidate(t *testing.T) {
 		},
 		{
 			"valid data",
-			core.OTPConfig{
+			kernel.OTPConfig{
 				Enabled:       true,
-				EmailTemplate: core.EmailTemplate{Body: "a", Subject: "b"},
+				EmailTemplate: kernel.EmailTemplate{Body: "a", Subject: "b"},
 				Duration:      86400,
 				Length:        4,
 			},
@@ -595,11 +593,11 @@ func TestOTPConfigValidate(t *testing.T) {
 
 func TestOTPConfigDurationTime(t *testing.T) {
 	scenarios := []struct {
-		config   core.OTPConfig
+		config   kernel.OTPConfig
 		expected time.Duration
 	}{
-		{core.OTPConfig{}, 0 * time.Second},
-		{core.OTPConfig{Duration: 1234}, 1234 * time.Second},
+		{kernel.OTPConfig{}, 0 * time.Second},
+		{kernel.OTPConfig{Duration: 1234}, 1234 * time.Second},
 	}
 
 	for i, s := range scenarios {
@@ -616,32 +614,32 @@ func TestOTPConfigDurationTime(t *testing.T) {
 func TestMFAConfigValidate(t *testing.T) {
 	scenarios := []struct {
 		name           string
-		config         core.MFAConfig
+		config         kernel.MFAConfig
 		expectedErrors []string
 	}{
 		{
 			"zero value (disabled)",
-			core.MFAConfig{},
+			kernel.MFAConfig{},
 			[]string{},
 		},
 		{
 			"zero value (enabled)",
-			core.MFAConfig{Enabled: true},
+			kernel.MFAConfig{Enabled: true},
 			[]string{"duration"},
 		},
 		{
 			"invalid duration (< 10)",
-			core.MFAConfig{Enabled: true, Duration: 9},
+			kernel.MFAConfig{Enabled: true, Duration: 9},
 			[]string{"duration"},
 		},
 		{
 			"invalid duration (> 86400)",
-			core.MFAConfig{Enabled: true, Duration: 86401},
+			kernel.MFAConfig{Enabled: true, Duration: 86401},
 			[]string{"duration"},
 		},
 		{
 			"valid data",
-			core.MFAConfig{Enabled: true, Duration: 86400},
+			kernel.MFAConfig{Enabled: true, Duration: 86400},
 			[]string{},
 		},
 	}
@@ -657,11 +655,11 @@ func TestMFAConfigValidate(t *testing.T) {
 
 func TestMFAConfigDurationTime(t *testing.T) {
 	scenarios := []struct {
-		config   core.MFAConfig
+		config   kernel.MFAConfig
 		expected time.Duration
 	}{
-		{core.MFAConfig{}, 0 * time.Second},
-		{core.MFAConfig{Duration: 1234}, 1234 * time.Second},
+		{kernel.MFAConfig{}, 0 * time.Second},
+		{kernel.MFAConfig{Duration: 1234}, 1234 * time.Second},
 	}
 
 	for i, s := range scenarios {
@@ -678,27 +676,27 @@ func TestMFAConfigDurationTime(t *testing.T) {
 func TestPasswordAuthConfigValidate(t *testing.T) {
 	scenarios := []struct {
 		name           string
-		config         core.PasswordAuthConfig
+		config         kernel.PasswordAuthConfig
 		expectedErrors []string
 	}{
 		{
 			"zero value (disabled)",
-			core.PasswordAuthConfig{},
+			kernel.PasswordAuthConfig{},
 			[]string{},
 		},
 		{
 			"zero value (enabled)",
-			core.PasswordAuthConfig{Enabled: true},
+			kernel.PasswordAuthConfig{Enabled: true},
 			[]string{"identityFields"},
 		},
 		{
 			"empty values",
-			core.PasswordAuthConfig{Enabled: true, IdentityFields: []string{"", ""}},
+			kernel.PasswordAuthConfig{Enabled: true, IdentityFields: []string{"", ""}},
 			[]string{"identityFields"},
 		},
 		{
 			"valid data",
-			core.PasswordAuthConfig{Enabled: true, IdentityFields: []string{"abc"}},
+			kernel.PasswordAuthConfig{Enabled: true, IdentityFields: []string{"abc"}},
 			[]string{},
 		},
 	}
@@ -753,12 +751,12 @@ func TestOAuth2ConfigUnmarshalJSON(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			config := core.OAuth2Config{
+			config := kernel.OAuth2Config{
 				Enabled: false,
-				MappedFields: core.OAuth2KnownFields{
+				MappedFields: kernel.OAuth2KnownFields{
 					Name: "name_test",
 				},
-				Providers: []core.OAuth2ProviderConfig{
+				Providers: []kernel.OAuth2ProviderConfig{
 					{Name: "a", ClientId: "a_clientId", ClientSecret: "a_clientSecret"},
 					{Name: "b", ClientId: "b_clientId", ClientSecret: "b_clientSecret"},
 				},
@@ -786,31 +784,31 @@ func TestOAuth2ConfigGetProviderConfig(t *testing.T) {
 	scenarios := []struct {
 		name           string
 		providerName   string
-		config         core.OAuth2Config
+		config         kernel.OAuth2Config
 		expectedExists bool
 	}{
 		{
 			"zero value",
 			"gitlab",
-			core.OAuth2Config{},
+			kernel.OAuth2Config{},
 			false,
 		},
 		{
 			"empty config with valid provider",
 			"gitlab",
-			core.OAuth2Config{},
+			kernel.OAuth2Config{},
 			false,
 		},
 		{
 			"non-empty config with missing provider",
 			"gitlab",
-			core.OAuth2Config{Providers: []core.OAuth2ProviderConfig{{Name: "google"}, {Name: "github"}}},
+			kernel.OAuth2Config{Providers: []kernel.OAuth2ProviderConfig{{Name: "google"}, {Name: "github"}}},
 			false,
 		},
 		{
 			"config with existing provider",
 			"github",
-			core.OAuth2Config{Providers: []core.OAuth2ProviderConfig{{Name: "google"}, {Name: "github"}}},
+			kernel.OAuth2Config{Providers: []kernel.OAuth2ProviderConfig{{Name: "google"}, {Name: "github"}}},
 			true,
 		},
 	}
@@ -839,43 +837,43 @@ func TestOAuth2ConfigGetProviderConfig(t *testing.T) {
 func TestOAuth2ConfigValidate(t *testing.T) {
 	scenarios := []struct {
 		name           string
-		config         core.OAuth2Config
+		config         kernel.OAuth2Config
 		expectedErrors []string
 	}{
 		{
 			"zero value (disabled)",
-			core.OAuth2Config{},
+			kernel.OAuth2Config{},
 			[]string{},
 		},
 		{
 			"zero value (enabled)",
-			core.OAuth2Config{Enabled: true},
+			kernel.OAuth2Config{Enabled: true},
 			[]string{},
 		},
 		{
 			"unknown provider",
-			core.OAuth2Config{Enabled: true, Providers: []core.OAuth2ProviderConfig{
+			kernel.OAuth2Config{Enabled: true, Providers: []kernel.OAuth2ProviderConfig{
 				{Name: "missing", ClientId: "abc", ClientSecret: "456"},
 			}},
 			[]string{"providers"},
 		},
 		{
 			"known provider with invalid data",
-			core.OAuth2Config{Enabled: true, Providers: []core.OAuth2ProviderConfig{
+			kernel.OAuth2Config{Enabled: true, Providers: []kernel.OAuth2ProviderConfig{
 				{Name: "gitlab", ClientId: "abc", TokenURL: "!invalid!"},
 			}},
 			[]string{"providers"},
 		},
 		{
 			"known provider with valid data",
-			core.OAuth2Config{Enabled: true, Providers: []core.OAuth2ProviderConfig{
+			kernel.OAuth2Config{Enabled: true, Providers: []kernel.OAuth2ProviderConfig{
 				{Name: "gitlab", ClientId: "abc", ClientSecret: "456", TokenURL: "https://example.com"},
 			}},
 			[]string{},
 		},
 		{
 			"known provider with valid data (duplicated)",
-			core.OAuth2Config{Enabled: true, Providers: []core.OAuth2ProviderConfig{
+			kernel.OAuth2Config{Enabled: true, Providers: []kernel.OAuth2ProviderConfig{
 				{Name: "gitlab", ClientId: "abc1", ClientSecret: "1", TokenURL: "https://example1.com"},
 				{Name: "google", ClientId: "abc2", ClientSecret: "2", TokenURL: "https://example2.com"},
 				{Name: "gitlab", ClientId: "abc3", ClientSecret: "3", TokenURL: "https://example3.com"},
@@ -896,27 +894,27 @@ func TestOAuth2ConfigValidate(t *testing.T) {
 func TestOAuth2ProviderConfigValidate(t *testing.T) {
 	scenarios := []struct {
 		name           string
-		config         core.OAuth2ProviderConfig
+		config         kernel.OAuth2ProviderConfig
 		expectedErrors []string
 	}{
 		{
 			"zero value",
-			core.OAuth2ProviderConfig{},
+			kernel.OAuth2ProviderConfig{},
 			[]string{"name", "clientId", "clientSecret"},
 		},
 		{
 			"minimum valid data",
-			core.OAuth2ProviderConfig{Name: "gitlab", ClientId: "abc", ClientSecret: "456"},
+			kernel.OAuth2ProviderConfig{Name: "gitlab", ClientId: "abc", ClientSecret: "456"},
 			[]string{},
 		},
 		{
 			"non-existing provider",
-			core.OAuth2ProviderConfig{Name: "missing", ClientId: "abc", ClientSecret: "456"},
+			kernel.OAuth2ProviderConfig{Name: "missing", ClientId: "abc", ClientSecret: "456"},
 			[]string{"name"},
 		},
 		{
 			"invalid urls",
-			core.OAuth2ProviderConfig{
+			kernel.OAuth2ProviderConfig{
 				Name:         "gitlab",
 				ClientId:     "abc",
 				ClientSecret: "456",
@@ -928,7 +926,7 @@ func TestOAuth2ProviderConfigValidate(t *testing.T) {
 		},
 		{
 			"valid urls",
-			core.OAuth2ProviderConfig{
+			kernel.OAuth2ProviderConfig{
 				Name:         "gitlab",
 				ClientId:     "abc",
 				ClientSecret: "456",
@@ -945,152 +943,6 @@ func TestOAuth2ProviderConfigValidate(t *testing.T) {
 			result := s.config.Validate()
 
 			tests.TestValidationErrors(t, result, s.expectedErrors)
-		})
-	}
-}
-
-func TestOAuth2ProviderConfigInitProvider(t *testing.T) {
-	scenarios := []struct {
-		name           string
-		config         core.OAuth2ProviderConfig
-		expectedConfig core.OAuth2ProviderConfig
-		expectedError  bool
-	}{
-		{
-			"empty config",
-			core.OAuth2ProviderConfig{},
-			core.OAuth2ProviderConfig{},
-			true,
-		},
-		{
-			"missing provider",
-			core.OAuth2ProviderConfig{
-				Name:         "missing",
-				ClientId:     "test_ClientId",
-				ClientSecret: "test_ClientSecret",
-				AuthURL:      "test_AuthURL",
-				TokenURL:     "test_TokenURL",
-				UserInfoURL:  "test_UserInfoURL",
-				DisplayName:  "test_DisplayName",
-				PKCE:         types.Pointer(true),
-			},
-			core.OAuth2ProviderConfig{
-				Name:         "missing",
-				ClientId:     "test_ClientId",
-				ClientSecret: "test_ClientSecret",
-				AuthURL:      "test_AuthURL",
-				TokenURL:     "test_TokenURL",
-				UserInfoURL:  "test_UserInfoURL",
-				DisplayName:  "test_DisplayName",
-				PKCE:         types.Pointer(true),
-			},
-			true,
-		},
-		{
-			"existing provider minimal",
-			core.OAuth2ProviderConfig{
-				Name: "gitlab",
-			},
-			core.OAuth2ProviderConfig{
-				Name:         "gitlab",
-				ClientId:     "",
-				ClientSecret: "",
-				AuthURL:      "https://gitlab.com/oauth/authorize",
-				TokenURL:     "https://gitlab.com/oauth/token",
-				UserInfoURL:  "https://gitlab.com/api/v4/user",
-				DisplayName:  "GitLab",
-				PKCE:         types.Pointer(true),
-			},
-			false,
-		},
-		{
-			"existing provider with all fields",
-			core.OAuth2ProviderConfig{
-				Name:         "gitlab",
-				ClientId:     "test_ClientId",
-				ClientSecret: "test_ClientSecret",
-				AuthURL:      "test_AuthURL",
-				TokenURL:     "test_TokenURL",
-				UserInfoURL:  "test_UserInfoURL",
-				DisplayName:  "test_DisplayName",
-				PKCE:         types.Pointer(true),
-				Extra:        map[string]any{"a": 1},
-			},
-			core.OAuth2ProviderConfig{
-				Name:         "gitlab",
-				ClientId:     "test_ClientId",
-				ClientSecret: "test_ClientSecret",
-				AuthURL:      "test_AuthURL",
-				TokenURL:     "test_TokenURL",
-				UserInfoURL:  "test_UserInfoURL",
-				DisplayName:  "test_DisplayName",
-				PKCE:         types.Pointer(true),
-				Extra:        map[string]any{"a": 1},
-			},
-			false,
-		},
-	}
-
-	for _, s := range scenarios {
-		t.Run(s.name, func(t *testing.T) {
-			provider, err := s.config.InitProvider()
-
-			hasErr := err != nil
-			if hasErr != s.expectedError {
-				t.Fatalf("Expected hasErr %v, got %v", s.expectedError, hasErr)
-			}
-
-			if hasErr {
-				if provider != nil {
-					t.Fatalf("Expected nil provider, got %v", provider)
-				}
-				return
-			}
-
-			factory, ok := auth.Providers[s.expectedConfig.Name]
-			if !ok {
-				t.Fatalf("Missing factory for provider %q", s.expectedConfig.Name)
-			}
-
-			expectedType := fmt.Sprintf("%T", factory())
-			providerType := fmt.Sprintf("%T", provider)
-			if expectedType != providerType {
-				t.Fatalf("Expected provider instanceof %q, got %q", expectedType, providerType)
-			}
-
-			if provider.ClientId() != s.expectedConfig.ClientId {
-				t.Fatalf("Expected ClientId %q, got %q", s.expectedConfig.ClientId, provider.ClientId())
-			}
-
-			if provider.ClientSecret() != s.expectedConfig.ClientSecret {
-				t.Fatalf("Expected ClientSecret %q, got %q", s.expectedConfig.ClientSecret, provider.ClientSecret())
-			}
-
-			if provider.AuthURL() != s.expectedConfig.AuthURL {
-				t.Fatalf("Expected AuthURL %q, got %q", s.expectedConfig.AuthURL, provider.AuthURL())
-			}
-
-			if provider.UserInfoURL() != s.expectedConfig.UserInfoURL {
-				t.Fatalf("Expected UserInfoURL %q, got %q", s.expectedConfig.UserInfoURL, provider.UserInfoURL())
-			}
-
-			if provider.TokenURL() != s.expectedConfig.TokenURL {
-				t.Fatalf("Expected TokenURL %q, got %q", s.expectedConfig.TokenURL, provider.TokenURL())
-			}
-
-			if provider.DisplayName() != s.expectedConfig.DisplayName {
-				t.Fatalf("Expected DisplayName %q, got %q", s.expectedConfig.DisplayName, provider.DisplayName())
-			}
-
-			if provider.PKCE() != *s.expectedConfig.PKCE {
-				t.Fatalf("Expected PKCE %v, got %v", *s.expectedConfig.PKCE, provider.PKCE())
-			}
-
-			rawMeta, _ := json.Marshal(provider.Extra(), json.Deterministic(true))
-			expectedMeta, _ := json.Marshal(s.expectedConfig.Extra, json.Deterministic(true))
-			if !bytes.Equal(rawMeta, expectedMeta) {
-				t.Fatalf("Expected PKCE %v, got %v", *s.expectedConfig.PKCE, provider.PKCE())
-			}
 		})
 	}
 }

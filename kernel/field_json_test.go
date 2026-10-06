@@ -6,20 +6,20 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/types"
 )
 
 func TestJSONFieldBaseMethods(t *testing.T) {
-	testFieldBaseMethods(t, core.FieldTypeJSON)
+	testFieldBaseMethods(t, kernel.FieldTypeJSON)
 }
 
 func TestJSONFieldColumnType(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.JSONField{}
+	f := &kernel.JSONField{}
 
 	expected := "JSON DEFAULT NULL"
 
@@ -32,8 +32,8 @@ func TestJSONFieldPrepareValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.JSONField{}
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	f := &kernel.JSONField{}
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 
 	scenarios := []struct {
 		raw      any
@@ -83,19 +83,19 @@ func TestJSONFieldValidateValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name        string
-		field       *core.JSONField
-		record      func() *core.Record
+		field       *kernel.JSONField
+		record      func() *kernel.Record
 		expectError bool
 	}{
 		{
 			"invalid raw value",
-			&core.JSONField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.JSONField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 123)
 				return record
 			},
@@ -103,9 +103,9 @@ func TestJSONFieldValidateValue(t *testing.T) {
 		},
 		{
 			"invalid raw value (v2 semantics)",
-			&core.JSONField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.JSONField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.JSONRaw(`{"a": 1, "a": 2}`))
 				return record
 			},
@@ -113,9 +113,9 @@ func TestJSONFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (not required)",
-			&core.JSONField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.JSONField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.JSONRaw{})
 				return record
 			},
@@ -123,9 +123,9 @@ func TestJSONFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (required)",
-			&core.JSONField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.JSONField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.JSONRaw{})
 				return record
 			},
@@ -133,9 +133,9 @@ func TestJSONFieldValidateValue(t *testing.T) {
 		},
 		{
 			"non-zero field value (required)",
-			&core.JSONField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.JSONField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.JSONRaw("[1,2,3]"))
 				return record
 			},
@@ -143,9 +143,9 @@ func TestJSONFieldValidateValue(t *testing.T) {
 		},
 		{
 			"non-zero field value (required)",
-			&core.JSONField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.JSONField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.JSONRaw(`"aaa"`))
 				return record
 			},
@@ -153,9 +153,9 @@ func TestJSONFieldValidateValue(t *testing.T) {
 		},
 		{
 			"> default MaxSize",
-			&core.JSONField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.JSONField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.JSONRaw(`"`+strings.Repeat("a", (1<<20))+`"`))
 				return record
 			},
@@ -163,9 +163,9 @@ func TestJSONFieldValidateValue(t *testing.T) {
 		},
 		{
 			"> MaxSize",
-			&core.JSONField{Name: "test", MaxSize: 5},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.JSONField{Name: "test", MaxSize: 5},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.JSONRaw(`"aaaa"`))
 				return record
 			},
@@ -173,9 +173,9 @@ func TestJSONFieldValidateValue(t *testing.T) {
 		},
 		{
 			"<= MaxSize",
-			&core.JSONField{Name: "test", MaxSize: 5},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.JSONField{Name: "test", MaxSize: 5},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.JSONRaw(`"aaa"`))
 				return record
 			},
@@ -196,24 +196,24 @@ func TestJSONFieldValidateValue(t *testing.T) {
 }
 
 func TestJSONFieldValidateSettings(t *testing.T) {
-	testDefaultFieldIdValidation(t, core.FieldTypeJSON)
-	testDefaultFieldNameValidation(t, core.FieldTypeJSON)
-	testDefaultFieldHelpValidation[core.JSONField](t)
+	testDefaultFieldIdValidation(t, kernel.FieldTypeJSON)
+	testDefaultFieldNameValidation(t, kernel.FieldTypeJSON)
+	testDefaultFieldHelpValidation[kernel.JSONField](t)
 
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name         string
-		field        func() *core.JSONField
+		field        func() *kernel.JSONField
 		expectErrors []string
 	}{
 		{
 			"MaxSize < 0",
-			func() *core.JSONField {
-				return &core.JSONField{
+			func() *kernel.JSONField {
+				return &kernel.JSONField{
 					Id:      "test",
 					Name:    "test",
 					MaxSize: -1,
@@ -223,8 +223,8 @@ func TestJSONFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"MaxSize = 0",
-			func() *core.JSONField {
-				return &core.JSONField{
+			func() *kernel.JSONField {
+				return &kernel.JSONField{
 					Id:   "test",
 					Name: "test",
 				}
@@ -233,8 +233,8 @@ func TestJSONFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"MaxSize > 0",
-			func() *core.JSONField {
-				return &core.JSONField{
+			func() *kernel.JSONField {
+				return &kernel.JSONField{
 					Id:      "test",
 					Name:    "test",
 					MaxSize: 1,
@@ -244,8 +244,8 @@ func TestJSONFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"MaxSize > safe json int",
-			func() *core.JSONField {
-				return &core.JSONField{
+			func() *kernel.JSONField {
+				return &kernel.JSONField{
 					Id:      "test",
 					Name:    "test",
 					MaxSize: 1 << 53,
@@ -269,11 +269,11 @@ func TestJSONFieldCalculateMaxBodySize(t *testing.T) {
 	defer testApp.Cleanup()
 
 	scenarios := []struct {
-		field    *core.JSONField
+		field    *kernel.JSONField
 		expected int64
 	}{
-		{&core.JSONField{}, core.DefaultJSONFieldMaxSize},
-		{&core.JSONField{MaxSize: 10}, 10},
+		{&kernel.JSONField{}, kernel.DefaultJSONFieldMaxSize},
+		{&kernel.JSONField{MaxSize: 10}, 10},
 	}
 
 	for i, s := range scenarios {

@@ -5,20 +5,20 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/types"
 )
 
 func TestNumberFieldBaseMethods(t *testing.T) {
-	testFieldBaseMethods(t, core.FieldTypeNumber)
+	testFieldBaseMethods(t, kernel.FieldTypeNumber)
 }
 
 func TestNumberFieldColumnType(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.NumberField{}
+	f := &kernel.NumberField{}
 
 	expected := "NUMERIC DEFAULT 0 NOT NULL"
 
@@ -31,8 +31,8 @@ func TestNumberFieldPrepareValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.NumberField{}
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	f := &kernel.NumberField{}
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 
 	scenarios := []struct {
 		raw      any
@@ -69,19 +69,19 @@ func TestNumberFieldValidateValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name        string
-		field       *core.NumberField
-		record      func() *core.Record
+		field       *kernel.NumberField
+		record      func() *kernel.Record
 		expectError bool
 	}{
 		{
 			"invalid raw value",
-			&core.NumberField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.NumberField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "123")
 				return record
 			},
@@ -89,9 +89,9 @@ func TestNumberFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (not required)",
-			&core.NumberField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.NumberField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 0.0)
 				return record
 			},
@@ -99,9 +99,9 @@ func TestNumberFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (required)",
-			&core.NumberField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.NumberField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 0.0)
 				return record
 			},
@@ -109,9 +109,9 @@ func TestNumberFieldValidateValue(t *testing.T) {
 		},
 		{
 			"non-zero field value (required)",
-			&core.NumberField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.NumberField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 123.0)
 				return record
 			},
@@ -119,9 +119,9 @@ func TestNumberFieldValidateValue(t *testing.T) {
 		},
 		{
 			"decimal with onlyInt",
-			&core.NumberField{Name: "test", OnlyInt: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.NumberField{Name: "test", OnlyInt: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 123.456)
 				return record
 			},
@@ -129,9 +129,9 @@ func TestNumberFieldValidateValue(t *testing.T) {
 		},
 		{
 			"int with onlyInt",
-			&core.NumberField{Name: "test", OnlyInt: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.NumberField{Name: "test", OnlyInt: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 123.0)
 				return record
 			},
@@ -139,9 +139,9 @@ func TestNumberFieldValidateValue(t *testing.T) {
 		},
 		{
 			"< min",
-			&core.NumberField{Name: "test", Min: types.Pointer(2.0)},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.NumberField{Name: "test", Min: types.Pointer(2.0)},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 1.0)
 				return record
 			},
@@ -149,9 +149,9 @@ func TestNumberFieldValidateValue(t *testing.T) {
 		},
 		{
 			">= min",
-			&core.NumberField{Name: "test", Min: types.Pointer(2.0)},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.NumberField{Name: "test", Min: types.Pointer(2.0)},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 2.0)
 				return record
 			},
@@ -159,9 +159,9 @@ func TestNumberFieldValidateValue(t *testing.T) {
 		},
 		{
 			"> max",
-			&core.NumberField{Name: "test", Max: types.Pointer(2.0)},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.NumberField{Name: "test", Max: types.Pointer(2.0)},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 3.0)
 				return record
 			},
@@ -169,9 +169,9 @@ func TestNumberFieldValidateValue(t *testing.T) {
 		},
 		{
 			"<= max",
-			&core.NumberField{Name: "test", Max: types.Pointer(2.0)},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.NumberField{Name: "test", Max: types.Pointer(2.0)},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 2.0)
 				return record
 			},
@@ -179,9 +179,9 @@ func TestNumberFieldValidateValue(t *testing.T) {
 		},
 		{
 			"infinity",
-			&core.NumberField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.NumberField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.Set("test", "Inf")
 				return record
 			},
@@ -189,9 +189,9 @@ func TestNumberFieldValidateValue(t *testing.T) {
 		},
 		{
 			"NaN",
-			&core.NumberField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.NumberField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.Set("test", "NaN")
 				return record
 			},
@@ -212,24 +212,24 @@ func TestNumberFieldValidateValue(t *testing.T) {
 }
 
 func TestNumberFieldValidateSettings(t *testing.T) {
-	testDefaultFieldIdValidation(t, core.FieldTypeNumber)
-	testDefaultFieldNameValidation(t, core.FieldTypeNumber)
-	testDefaultFieldHelpValidation[core.NumberField](t)
+	testDefaultFieldIdValidation(t, kernel.FieldTypeNumber)
+	testDefaultFieldNameValidation(t, kernel.FieldTypeNumber)
+	testDefaultFieldHelpValidation[kernel.NumberField](t)
 
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name         string
-		field        func() *core.NumberField
+		field        func() *kernel.NumberField
 		expectErrors []string
 	}{
 		{
 			"zero",
-			func() *core.NumberField {
-				return &core.NumberField{
+			func() *kernel.NumberField {
+				return &kernel.NumberField{
 					Id:   "test",
 					Name: "test",
 				}
@@ -238,8 +238,8 @@ func TestNumberFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"decimal min",
-			func() *core.NumberField {
-				return &core.NumberField{
+			func() *kernel.NumberField {
+				return &kernel.NumberField{
 					Id:   "test",
 					Name: "test",
 					Min:  types.Pointer(1.2),
@@ -249,8 +249,8 @@ func TestNumberFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"decimal min (onlyInt)",
-			func() *core.NumberField {
-				return &core.NumberField{
+			func() *kernel.NumberField {
+				return &kernel.NumberField{
 					Id:      "test",
 					Name:    "test",
 					OnlyInt: true,
@@ -261,8 +261,8 @@ func TestNumberFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"int min (onlyInt)",
-			func() *core.NumberField {
-				return &core.NumberField{
+			func() *kernel.NumberField {
+				return &kernel.NumberField{
 					Id:      "test",
 					Name:    "test",
 					OnlyInt: true,
@@ -273,8 +273,8 @@ func TestNumberFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"decimal max",
-			func() *core.NumberField {
-				return &core.NumberField{
+			func() *kernel.NumberField {
+				return &kernel.NumberField{
 					Id:   "test",
 					Name: "test",
 					Max:  types.Pointer(1.2),
@@ -284,8 +284,8 @@ func TestNumberFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"decimal max (onlyInt)",
-			func() *core.NumberField {
-				return &core.NumberField{
+			func() *kernel.NumberField {
+				return &kernel.NumberField{
 					Id:      "test",
 					Name:    "test",
 					OnlyInt: true,
@@ -296,8 +296,8 @@ func TestNumberFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"int max (onlyInt)",
-			func() *core.NumberField {
-				return &core.NumberField{
+			func() *kernel.NumberField {
+				return &kernel.NumberField{
 					Id:      "test",
 					Name:    "test",
 					OnlyInt: true,
@@ -308,8 +308,8 @@ func TestNumberFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"min > max (0)",
-			func() *core.NumberField {
-				return &core.NumberField{
+			func() *kernel.NumberField {
+				return &kernel.NumberField{
 					Id:   "test",
 					Name: "test",
 					Min:  types.Pointer(2.0),
@@ -320,8 +320,8 @@ func TestNumberFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"min (0) > max",
-			func() *core.NumberField {
-				return &core.NumberField{
+			func() *kernel.NumberField {
+				return &kernel.NumberField{
 					Id:   "test",
 					Name: "test",
 					Min:  types.Pointer(0.0),
@@ -332,8 +332,8 @@ func TestNumberFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"min == max",
-			func() *core.NumberField {
-				return &core.NumberField{
+			func() *kernel.NumberField {
+				return &kernel.NumberField{
 					Id:   "test",
 					Name: "test",
 					Min:  types.Pointer(2.0),
@@ -344,8 +344,8 @@ func TestNumberFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"min < max",
-			func() *core.NumberField {
-				return &core.NumberField{
+			func() *kernel.NumberField {
+				return &kernel.NumberField{
 					Id:   "test",
 					Name: "test",
 					Min:  types.Pointer(2.0),
@@ -366,9 +366,9 @@ func TestNumberFieldValidateSettings(t *testing.T) {
 }
 
 func TestNumberFieldFindSetter(t *testing.T) {
-	field := &core.NumberField{Name: "test"}
+	field := &kernel.NumberField{Name: "test"}
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 	collection.Fields.Add(field)
 
 	t.Run("no match", func(t *testing.T) {
@@ -384,7 +384,7 @@ func TestNumberFieldFindSetter(t *testing.T) {
 			t.Fatal("Expected non-nil setter")
 		}
 
-		record := core.NewRecord(collection)
+		record := kernel.NewRecord(collection)
 		record.SetRaw("test", 2.0)
 
 		f(record, "123.456") // should be casted
@@ -400,7 +400,7 @@ func TestNumberFieldFindSetter(t *testing.T) {
 			t.Fatal("Expected non-nil setter")
 		}
 
-		record := core.NewRecord(collection)
+		record := kernel.NewRecord(collection)
 		record.SetRaw("test", 2.0)
 
 		f(record, "1.5") // should be casted and appended to the existing value
@@ -416,7 +416,7 @@ func TestNumberFieldFindSetter(t *testing.T) {
 			t.Fatal("Expected non-nil setter")
 		}
 
-		record := core.NewRecord(collection)
+		record := kernel.NewRecord(collection)
 		record.SetRaw("test", 2.0)
 
 		f(record, "1.5") // should be casted and subtracted from the existing value

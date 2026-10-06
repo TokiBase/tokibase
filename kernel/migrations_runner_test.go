@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/pocketbase/dbx"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
@@ -19,57 +19,57 @@ func TestMigrationsRunnerUpAndDown(t *testing.T) {
 
 	callsOrder := []string{}
 
-	l := core.MigrationsList{}
-	l.Register(func(app core.App) error {
+	l := kernel.MigrationsList{}
+	l.Register(func(app kernel.App) error {
 		callsOrder = append(callsOrder, "up2")
 		return nil
-	}, func(app core.App) error {
+	}, func(app kernel.App) error {
 		callsOrder = append(callsOrder, "down2")
 		return nil
 	}, "2_test")
-	l.Register(func(app core.App) error {
+	l.Register(func(app kernel.App) error {
 		callsOrder = append(callsOrder, "up3")
 		return nil
-	}, func(app core.App) error {
+	}, func(app kernel.App) error {
 		callsOrder = append(callsOrder, "down3")
 		return nil
 	}, "3_test")
-	l.Register(func(app core.App) error {
+	l.Register(func(app kernel.App) error {
 		callsOrder = append(callsOrder, "up1")
 		return nil
-	}, func(app core.App) error {
+	}, func(app kernel.App) error {
 		callsOrder = append(callsOrder, "down1")
 		return nil
 	}, "1_test")
-	l.Register(func(app core.App) error {
+	l.Register(func(app kernel.App) error {
 		callsOrder = append(callsOrder, "up4")
 		return nil
-	}, func(app core.App) error {
+	}, func(app kernel.App) error {
 		callsOrder = append(callsOrder, "down4")
 		return nil
 	}, "4_test")
-	l.Add(&core.Migration{
-		Up: func(app core.App) error {
+	l.Add(&kernel.Migration{
+		Up: func(app kernel.App) error {
 			callsOrder = append(callsOrder, "up5")
 			return nil
 		},
-		Down: func(app core.App) error {
+		Down: func(app kernel.App) error {
 			callsOrder = append(callsOrder, "down5")
 			return nil
 		},
 		File: "5_test",
-		ReapplyCondition: func(txApp core.App, runner *core.MigrationsRunner, fileName string) (bool, error) {
+		ReapplyCondition: func(txApp kernel.App, runner *kernel.MigrationsRunner, fileName string) (bool, error) {
 			return true, nil
 		},
 	})
 
-	runner := core.NewMigrationsRunner(app, l)
+	runner := kernel.NewMigrationsRunner(app, l)
 
 	// ---------------------------------------------------------------
 	// simulate partially out-of-order applied migration
 	// ---------------------------------------------------------------
 
-	_, err := app.DB().Insert(core.DefaultMigrationsTable, dbx.Params{
+	_, err := app.DB().Insert(kernel.DefaultMigrationsTable, dbx.Params{
 		"file":    "4_test",
 		"applied": time.Now().UnixMicro() - 2,
 	}).Execute()
@@ -77,7 +77,7 @@ func TestMigrationsRunnerUpAndDown(t *testing.T) {
 		t.Fatalf("Failed to insert 5_test migration: %v", err)
 	}
 
-	_, err = app.DB().Insert(core.DefaultMigrationsTable, dbx.Params{
+	_, err = app.DB().Insert(kernel.DefaultMigrationsTable, dbx.Params{
 		"file":    "5_test",
 		"applied": time.Now().UnixMicro() - 1,
 	}).Execute()
@@ -85,7 +85,7 @@ func TestMigrationsRunnerUpAndDown(t *testing.T) {
 		t.Fatalf("Failed to insert 5_test migration: %v", err)
 	}
 
-	_, err = app.DB().Insert(core.DefaultMigrationsTable, dbx.Params{
+	_, err = app.DB().Insert(kernel.DefaultMigrationsTable, dbx.Params{
 		"file":    "2_test",
 		"applied": time.Now().UnixMicro(),
 	}).Execute()
@@ -118,13 +118,13 @@ func TestMigrationsRunnerUpAndDown(t *testing.T) {
 	callsOrder = []string{}
 
 	// simulate unrun migration
-	l.Register(nil, func(app core.App) error {
+	l.Register(nil, func(app kernel.App) error {
 		callsOrder = append(callsOrder, "down6")
 		return nil
 	}, "6_test")
 
 	// simulate applied migrations from different migrations list
-	_, err = app.DB().Insert(core.DefaultMigrationsTable, dbx.Params{
+	_, err = app.DB().Insert(kernel.DefaultMigrationsTable, dbx.Params{
 		"file":    "from_different_list",
 		"applied": time.Now().UnixMicro(),
 	}).Execute()
@@ -162,7 +162,7 @@ func TestMigrationsRunnerRemoveMissingAppliedMigrations(t *testing.T) {
 
 	// mock migrations history
 	for i := 1; i <= 3; i++ {
-		_, err := app.DB().Insert(core.DefaultMigrationsTable, dbx.Params{
+		_, err := app.DB().Insert(kernel.DefaultMigrationsTable, dbx.Params{
 			"file":    fmt.Sprintf("%d_test", i),
 			"applied": time.Now().UnixMicro(),
 		}).Execute()
@@ -176,19 +176,19 @@ func TestMigrationsRunnerRemoveMissingAppliedMigrations(t *testing.T) {
 	}
 
 	// create a runner without 2_test to mock deleted migration
-	l := core.MigrationsList{}
-	l.Register(func(app core.App) error {
+	l := kernel.MigrationsList{}
+	l.Register(func(app kernel.App) error {
 		return nil
-	}, func(app core.App) error {
+	}, func(app kernel.App) error {
 		return nil
 	}, "1_test")
-	l.Register(func(app core.App) error {
+	l.Register(func(app kernel.App) error {
 		return nil
-	}, func(app core.App) error {
+	}, func(app kernel.App) error {
 		return nil
 	}, "3_test")
 
-	r := core.NewMigrationsRunner(app, l)
+	r := kernel.NewMigrationsRunner(app, l)
 
 	if err := r.RemoveMissingAppliedMigrations(); err != nil {
 		t.Fatalf("Failed to remove missing applied migrations: %v", err)
@@ -199,11 +199,11 @@ func TestMigrationsRunnerRemoveMissingAppliedMigrations(t *testing.T) {
 	}
 }
 
-func isMigrationApplied(app core.App, file string) bool {
+func isMigrationApplied(app kernel.App, file string) bool {
 	var exists int
 
 	err := app.DB().Select("(1)").
-		From(core.DefaultMigrationsTable).
+		From(kernel.DefaultMigrationsTable).
 		Where(dbx.HashExp{"file": file}).
 		Limit(1).
 		Row(&exists)

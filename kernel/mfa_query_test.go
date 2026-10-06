@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
@@ -24,12 +24,12 @@ func TestFindAllMFAsByRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	superuser2, err := app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test2@example.com")
+	superuser2, err := app.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test2@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	superuser4, err := app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test4@example.com")
+	superuser4, err := app.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test4@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestFindAllMFAsByRecord(t *testing.T) {
 	}
 
 	scenarios := []struct {
-		record   *core.Record
+		record   *kernel.Record
 		expected []string
 	}{
 		{demo1, nil},
@@ -84,7 +84,7 @@ func TestFindAllMFAsByCollection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	superusers, err := app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
+	superusers, err := app.FindCollectionByNameOrId(kernel.CollectionNameSuperusers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestFindAllMFAsByCollection(t *testing.T) {
 	}
 
 	scenarios := []struct {
-		collection *core.Collection
+		collection *kernel.Collection
 		expected   []string
 	}{
 		{demo1, nil},
@@ -189,12 +189,12 @@ func TestDeleteAllMFAsByRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	superuser2, err := testApp.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test2@example.com")
+	superuser2, err := testApp.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test2@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	superuser4, err := testApp.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test4@example.com")
+	superuser4, err := testApp.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test4@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestDeleteAllMFAsByRecord(t *testing.T) {
 	}
 
 	scenarios := []struct {
-		record     *core.Record
+		record     *kernel.Record
 		deletedIds []string
 	}{
 		{demo1, nil}, // non-auth record
@@ -224,7 +224,7 @@ func TestDeleteAllMFAsByRecord(t *testing.T) {
 			}
 
 			deletedIds := []string{}
-			app.OnRecordAfterDeleteSuccess().BindFunc(func(e *core.RecordEvent) error {
+			app.OnRecordAfterDeleteSuccess().BindFunc(func(e *kernel.RecordEvent) error {
 				deletedIds = append(deletedIds, e.Record.Id)
 				return e.Next()
 			})
@@ -250,13 +250,13 @@ func TestDeleteAllMFAsByRecord(t *testing.T) {
 func TestDeleteExpiredMFAs(t *testing.T) {
 	t.Parallel()
 
-	checkDeletedIds := func(app core.App, t *testing.T, expectedDeletedIds []string) {
+	checkDeletedIds := func(app kernel.App, t *testing.T, expectedDeletedIds []string) {
 		if err := tests.StubMFARecords(app); err != nil {
 			t.Fatal(err)
 		}
 
 		deletedIds := []string{}
-		app.OnRecordDelete().BindFunc(func(e *core.RecordEvent) error {
+		app.OnRecordDelete().BindFunc(func(e *kernel.RecordEvent) error {
 			deletedIds = append(deletedIds, e.Record.Id)
 			return e.Next()
 		})
@@ -291,7 +291,7 @@ func TestDeleteExpiredMFAs(t *testing.T) {
 		app, _ := tests.NewTestApp()
 		defer app.Cleanup()
 
-		superusers, err := app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
+		superusers, err := app.FindCollectionByNameOrId(kernel.CollectionNameSuperusers)
 		if err != nil {
 			t.Fatal(err)
 		}

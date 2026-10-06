@@ -8,12 +8,12 @@ import (
 	"testing"
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
 func testFieldBaseMethods(t *testing.T, fieldType string) {
-	factory, ok := core.Fields[fieldType]
+	factory, ok := kernel.Fields[fieldType]
 	if !ok {
 		t.Fatalf("Missing %q field factory", fieldType)
 	}
@@ -74,25 +74,25 @@ func testDefaultFieldIdValidation(t *testing.T, fieldType string) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name        string
-		field       func() core.Field
+		field       func() kernel.Field
 		expectError bool
 	}{
 		{
 			"empty value",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				return f
 			},
 			true,
 		},
 		{
 			"invalid length",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				f.SetId(strings.Repeat("a", 101))
 				return f
 			},
@@ -100,8 +100,8 @@ func testDefaultFieldIdValidation(t *testing.T, fieldType string) {
 		},
 		{
 			"valid length",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				f.SetId(strings.Repeat("a", 100))
 				return f
 			},
@@ -125,25 +125,25 @@ func testDefaultFieldNameValidation(t *testing.T, fieldType string) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name        string
-		field       func() core.Field
+		field       func() kernel.Field
 		expectError bool
 	}{
 		{
 			"empty value",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				return f
 			},
 			true,
 		},
 		{
 			"invalid length",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				f.SetName(strings.Repeat("a", 101))
 				return f
 			},
@@ -151,8 +151,8 @@ func testDefaultFieldNameValidation(t *testing.T, fieldType string) {
 		},
 		{
 			"valid length",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				f.SetName(strings.Repeat("a", 100))
 				return f
 			},
@@ -160,8 +160,8 @@ func testDefaultFieldNameValidation(t *testing.T, fieldType string) {
 		},
 		{
 			"invalid regex",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				f.SetName("test(")
 				return f
 			},
@@ -169,8 +169,8 @@ func testDefaultFieldNameValidation(t *testing.T, fieldType string) {
 		},
 		{
 			"valid regex",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				f.SetName("test_123")
 				return f
 			},
@@ -178,8 +178,8 @@ func testDefaultFieldNameValidation(t *testing.T, fieldType string) {
 		},
 		{
 			"_via_",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				f.SetName("a_via_b")
 				return f
 			},
@@ -187,8 +187,8 @@ func testDefaultFieldNameValidation(t *testing.T, fieldType string) {
 		},
 		{
 			"system reserved - null",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				f.SetName("null")
 				return f
 			},
@@ -196,8 +196,8 @@ func testDefaultFieldNameValidation(t *testing.T, fieldType string) {
 		},
 		{
 			"system reserved - false",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				f.SetName("false")
 				return f
 			},
@@ -205,8 +205,8 @@ func testDefaultFieldNameValidation(t *testing.T, fieldType string) {
 		},
 		{
 			"system reserved - true",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				f.SetName("true")
 				return f
 			},
@@ -214,8 +214,8 @@ func testDefaultFieldNameValidation(t *testing.T, fieldType string) {
 		},
 		{
 			"system reserved - _rowid_",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				f.SetName("_rowid_")
 				return f
 			},
@@ -223,8 +223,8 @@ func testDefaultFieldNameValidation(t *testing.T, fieldType string) {
 		},
 		{
 			"system reserved - expand",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				f.SetName("expand")
 				return f
 			},
@@ -232,8 +232,8 @@ func testDefaultFieldNameValidation(t *testing.T, fieldType string) {
 		},
 		{
 			"system reserved - collectionId",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				f.SetName("collectionId")
 				return f
 			},
@@ -241,8 +241,8 @@ func testDefaultFieldNameValidation(t *testing.T, fieldType string) {
 		},
 		{
 			"system reserved - collectionName",
-			func() core.Field {
-				f := core.Fields[fieldType]()
+			func() kernel.Field {
+				f := kernel.Fields[fieldType]()
 				f.SetName("collectionName")
 				return f
 			},
@@ -266,7 +266,7 @@ func testDefaultFieldHelpValidation[T any](t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name        string
@@ -299,9 +299,9 @@ func testDefaultFieldHelpValidation[T any](t *testing.T) {
 		t.Run("[help] "+s.name, func(t *testing.T) {
 			var zeroField T
 
-			field, ok := reflect.New(reflect.TypeOf(zeroField)).Interface().(core.Field)
+			field, ok := reflect.New(reflect.TypeOf(zeroField)).Interface().(kernel.Field)
 			if !ok {
-				t.Fatalf("Expected core.Field instance, got %T", zeroField)
+				t.Fatalf("Expected kernel.Field instance, got %T", zeroField)
 			}
 
 			err := json.Unmarshal([]byte(s.json), &field)

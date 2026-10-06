@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/types"
 )
@@ -15,20 +15,20 @@ func TestNewExternalAuth(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	ea := core.NewExternalAuth(app)
+	ea := kernel.NewExternalAuth(app)
 
-	if ea.Collection().Name != core.CollectionNameExternalAuths {
-		t.Fatalf("Expected record with %q collection, got %q", core.CollectionNameExternalAuths, ea.Collection().Name)
+	if ea.Collection().Name != kernel.CollectionNameExternalAuths {
+		t.Fatalf("Expected record with %q collection, got %q", kernel.CollectionNameExternalAuths, ea.Collection().Name)
 	}
 }
 
 func TestExternalAuthProxyRecord(t *testing.T) {
 	t.Parallel()
 
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 	record.Id = "test_id"
 
-	ea := core.ExternalAuth{}
+	ea := kernel.ExternalAuth{}
 	ea.SetProxyRecord(record)
 
 	if ea.ProxyRecord() == nil || ea.ProxyRecord().Id != record.Id {
@@ -42,7 +42,7 @@ func TestExternalAuthRecordRef(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	ea := core.NewExternalAuth(app)
+	ea := kernel.NewExternalAuth(app)
 
 	testValues := []string{"test_1", "test2", ""}
 	for i, testValue := range testValues {
@@ -66,7 +66,7 @@ func TestExternalAuthCollectionRef(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	ea := core.NewExternalAuth(app)
+	ea := kernel.NewExternalAuth(app)
 
 	testValues := []string{"test_1", "test2", ""}
 	for i, testValue := range testValues {
@@ -90,7 +90,7 @@ func TestExternalAuthProvider(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	ea := core.NewExternalAuth(app)
+	ea := kernel.NewExternalAuth(app)
 
 	testValues := []string{"test_1", "test2", ""}
 	for i, testValue := range testValues {
@@ -114,7 +114,7 @@ func TestExternalAuthProviderId(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	ea := core.NewExternalAuth(app)
+	ea := kernel.NewExternalAuth(app)
 
 	testValues := []string{"test_1", "test2", ""}
 	for i, testValue := range testValues {
@@ -138,7 +138,7 @@ func TestExternalAuthCreated(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	ea := core.NewExternalAuth(app)
+	ea := kernel.NewExternalAuth(app)
 
 	if v := ea.Created().String(); v != "" {
 		t.Fatalf("Expected empty created, got %q", v)
@@ -158,7 +158,7 @@ func TestExternalAuthUpdated(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	ea := core.NewExternalAuth(app)
+	ea := kernel.NewExternalAuth(app)
 
 	if v := ea.Updated().String(); v != "" {
 		t.Fatalf("Expected empty updated, got %q", v)
@@ -178,7 +178,7 @@ func TestExternalAuthPreValidate(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	externalAuthsCol, err := app.FindCollectionByNameOrId(core.CollectionNameExternalAuths)
+	externalAuthsCol, err := app.FindCollectionByNameOrId(kernel.CollectionNameExternalAuths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestExternalAuthPreValidate(t *testing.T) {
 	}
 
 	t.Run("no proxy record", func(t *testing.T) {
-		externalAuth := &core.ExternalAuth{}
+		externalAuth := &kernel.ExternalAuth{}
 
 		if err := app.Validate(externalAuth); err == nil {
 			t.Fatal("Expected collection validation error")
@@ -197,8 +197,8 @@ func TestExternalAuthPreValidate(t *testing.T) {
 	})
 
 	t.Run("non-ExternalAuth collection", func(t *testing.T) {
-		externalAuth := &core.ExternalAuth{}
-		externalAuth.SetProxyRecord(core.NewRecord(core.NewBaseCollection("invalid")))
+		externalAuth := &kernel.ExternalAuth{}
+		externalAuth.SetProxyRecord(kernel.NewRecord(kernel.NewBaseCollection("invalid")))
 		externalAuth.SetRecordRef(user.Id)
 		externalAuth.SetCollectionRef(user.Collection().Id)
 		externalAuth.SetProvider("gitlab")
@@ -210,8 +210,8 @@ func TestExternalAuthPreValidate(t *testing.T) {
 	})
 
 	t.Run("ExternalAuth collection", func(t *testing.T) {
-		externalAuth := &core.ExternalAuth{}
-		externalAuth.SetProxyRecord(core.NewRecord(externalAuthsCol))
+		externalAuth := &kernel.ExternalAuth{}
+		externalAuth.SetProxyRecord(kernel.NewRecord(externalAuthsCol))
 		externalAuth.SetRecordRef(user.Id)
 		externalAuth.SetCollectionRef(user.Collection().Id)
 		externalAuth.SetProvider("gitlab")
@@ -241,20 +241,20 @@ func TestExternalAuthValidateHook(t *testing.T) {
 
 	scenarios := []struct {
 		name         string
-		externalAuth func() *core.ExternalAuth
+		externalAuth func() *kernel.ExternalAuth
 		expectErrors []string
 	}{
 		{
 			"empty",
-			func() *core.ExternalAuth {
-				return core.NewExternalAuth(app)
+			func() *kernel.ExternalAuth {
+				return kernel.NewExternalAuth(app)
 			},
 			[]string{"collectionRef", "recordRef", "provider", "providerId"},
 		},
 		{
 			"non-auth collection",
-			func() *core.ExternalAuth {
-				ea := core.NewExternalAuth(app)
+			func() *kernel.ExternalAuth {
+				ea := kernel.NewExternalAuth(app)
 				ea.SetCollectionRef(demo1.Collection().Id)
 				ea.SetRecordRef(demo1.Id)
 				ea.SetProvider("gitlab")
@@ -265,8 +265,8 @@ func TestExternalAuthValidateHook(t *testing.T) {
 		},
 		{
 			"disabled provider",
-			func() *core.ExternalAuth {
-				ea := core.NewExternalAuth(app)
+			func() *kernel.ExternalAuth {
+				ea := kernel.NewExternalAuth(app)
 				ea.SetCollectionRef(user.Collection().Id)
 				ea.SetRecordRef("missing")
 				ea.SetProvider("apple")
@@ -277,8 +277,8 @@ func TestExternalAuthValidateHook(t *testing.T) {
 		},
 		{
 			"missing record id",
-			func() *core.ExternalAuth {
-				ea := core.NewExternalAuth(app)
+			func() *kernel.ExternalAuth {
+				ea := kernel.NewExternalAuth(app)
 				ea.SetCollectionRef(user.Collection().Id)
 				ea.SetRecordRef("missing")
 				ea.SetProvider("gitlab")
@@ -289,8 +289,8 @@ func TestExternalAuthValidateHook(t *testing.T) {
 		},
 		{
 			"valid ref",
-			func() *core.ExternalAuth {
-				ea := core.NewExternalAuth(app)
+			func() *kernel.ExternalAuth {
+				ea := kernel.NewExternalAuth(app)
 				ea.SetCollectionRef(user.Collection().Id)
 				ea.SetRecordRef(user.Id)
 				ea.SetProvider("gitlab")

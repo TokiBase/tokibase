@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/types"
 )
 
 func TestRelationFieldBaseMethods(t *testing.T) {
-	testFieldBaseMethods(t, core.FieldTypeRelation)
+	testFieldBaseMethods(t, kernel.FieldTypeRelation)
 }
 
 func TestRelationFieldColumnType(t *testing.T) {
@@ -21,22 +21,22 @@ func TestRelationFieldColumnType(t *testing.T) {
 
 	scenarios := []struct {
 		name     string
-		field    *core.RelationField
+		field    *kernel.RelationField
 		expected string
 	}{
 		{
 			"single (zero)",
-			&core.RelationField{},
+			&kernel.RelationField{},
 			"TEXT DEFAULT '' NOT NULL",
 		},
 		{
 			"single",
-			&core.RelationField{MaxSelect: 1},
+			&kernel.RelationField{MaxSelect: 1},
 			"TEXT DEFAULT '' NOT NULL",
 		},
 		{
 			"multiple",
-			&core.RelationField{MaxSelect: 2},
+			&kernel.RelationField{MaxSelect: 2},
 			"JSON DEFAULT '[]' NOT NULL",
 		},
 	}
@@ -53,22 +53,22 @@ func TestRelationFieldColumnType(t *testing.T) {
 func TestRelationFieldIsMultiple(t *testing.T) {
 	scenarios := []struct {
 		name     string
-		field    *core.RelationField
+		field    *kernel.RelationField
 		expected bool
 	}{
 		{
 			"zero",
-			&core.RelationField{},
+			&kernel.RelationField{},
 			false,
 		},
 		{
 			"single",
-			&core.RelationField{MaxSelect: 1},
+			&kernel.RelationField{MaxSelect: 1},
 			false,
 		},
 		{
 			"multiple",
-			&core.RelationField{MaxSelect: 2},
+			&kernel.RelationField{MaxSelect: 2},
 			true,
 		},
 	}
@@ -86,30 +86,30 @@ func TestRelationFieldPrepareValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 
 	scenarios := []struct {
 		raw      any
-		field    *core.RelationField
+		field    *kernel.RelationField
 		expected string
 	}{
 		// single
-		{nil, &core.RelationField{MaxSelect: 1}, `""`},
-		{"", &core.RelationField{MaxSelect: 1}, `""`},
-		{123, &core.RelationField{MaxSelect: 1}, `"123"`},
-		{"a", &core.RelationField{MaxSelect: 1}, `"a"`},
-		{`["a"]`, &core.RelationField{MaxSelect: 1}, `"a"`},
-		{[]string{}, &core.RelationField{MaxSelect: 1}, `""`},
-		{[]string{"a", "b"}, &core.RelationField{MaxSelect: 1}, `"b"`},
+		{nil, &kernel.RelationField{MaxSelect: 1}, `""`},
+		{"", &kernel.RelationField{MaxSelect: 1}, `""`},
+		{123, &kernel.RelationField{MaxSelect: 1}, `"123"`},
+		{"a", &kernel.RelationField{MaxSelect: 1}, `"a"`},
+		{`["a"]`, &kernel.RelationField{MaxSelect: 1}, `"a"`},
+		{[]string{}, &kernel.RelationField{MaxSelect: 1}, `""`},
+		{[]string{"a", "b"}, &kernel.RelationField{MaxSelect: 1}, `"b"`},
 
 		// multiple
-		{nil, &core.RelationField{MaxSelect: 2}, `[]`},
-		{"", &core.RelationField{MaxSelect: 2}, `[]`},
-		{123, &core.RelationField{MaxSelect: 2}, `["123"]`},
-		{"a", &core.RelationField{MaxSelect: 2}, `["a"]`},
-		{`["a"]`, &core.RelationField{MaxSelect: 2}, `["a"]`},
-		{[]string{}, &core.RelationField{MaxSelect: 2}, `[]`},
-		{[]string{"a", "b", "c"}, &core.RelationField{MaxSelect: 2}, `["a","b","c"]`},
+		{nil, &kernel.RelationField{MaxSelect: 2}, `[]`},
+		{"", &kernel.RelationField{MaxSelect: 2}, `[]`},
+		{123, &kernel.RelationField{MaxSelect: 2}, `["123"]`},
+		{"a", &kernel.RelationField{MaxSelect: 2}, `["a"]`},
+		{`["a"]`, &kernel.RelationField{MaxSelect: 2}, `["a"]`},
+		{[]string{}, &kernel.RelationField{MaxSelect: 2}, `[]`},
+		{[]string{"a", "b", "c"}, &kernel.RelationField{MaxSelect: 2}, `["a","b","c"]`},
 	}
 
 	for i, s := range scenarios {
@@ -137,31 +137,31 @@ func TestRelationFieldDriverValue(t *testing.T) {
 
 	scenarios := []struct {
 		raw      any
-		field    *core.RelationField
+		field    *kernel.RelationField
 		expected string
 	}{
 		// single
-		{nil, &core.RelationField{MaxSelect: 1}, `""`},
-		{"", &core.RelationField{MaxSelect: 1}, `""`},
-		{123, &core.RelationField{MaxSelect: 1}, `"123"`},
-		{"a", &core.RelationField{MaxSelect: 1}, `"a"`},
-		{`["a"]`, &core.RelationField{MaxSelect: 1}, `"a"`},
-		{[]string{}, &core.RelationField{MaxSelect: 1}, `""`},
-		{[]string{"a", "b"}, &core.RelationField{MaxSelect: 1}, `"b"`},
+		{nil, &kernel.RelationField{MaxSelect: 1}, `""`},
+		{"", &kernel.RelationField{MaxSelect: 1}, `""`},
+		{123, &kernel.RelationField{MaxSelect: 1}, `"123"`},
+		{"a", &kernel.RelationField{MaxSelect: 1}, `"a"`},
+		{`["a"]`, &kernel.RelationField{MaxSelect: 1}, `"a"`},
+		{[]string{}, &kernel.RelationField{MaxSelect: 1}, `""`},
+		{[]string{"a", "b"}, &kernel.RelationField{MaxSelect: 1}, `"b"`},
 
 		// multiple
-		{nil, &core.RelationField{MaxSelect: 2}, `[]`},
-		{"", &core.RelationField{MaxSelect: 2}, `[]`},
-		{123, &core.RelationField{MaxSelect: 2}, `["123"]`},
-		{"a", &core.RelationField{MaxSelect: 2}, `["a"]`},
-		{`["a"]`, &core.RelationField{MaxSelect: 2}, `["a"]`},
-		{[]string{}, &core.RelationField{MaxSelect: 2}, `[]`},
-		{[]string{"a", "b", "c"}, &core.RelationField{MaxSelect: 2}, `["a","b","c"]`},
+		{nil, &kernel.RelationField{MaxSelect: 2}, `[]`},
+		{"", &kernel.RelationField{MaxSelect: 2}, `[]`},
+		{123, &kernel.RelationField{MaxSelect: 2}, `["123"]`},
+		{"a", &kernel.RelationField{MaxSelect: 2}, `["a"]`},
+		{`["a"]`, &kernel.RelationField{MaxSelect: 2}, `["a"]`},
+		{[]string{}, &kernel.RelationField{MaxSelect: 2}, `[]`},
+		{[]string{"a", "b", "c"}, &kernel.RelationField{MaxSelect: 2}, `["a","b","c"]`},
 	}
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%#v_%v", i, s.raw, s.field.IsMultiple()), func(t *testing.T) {
-			record := core.NewRecord(core.NewBaseCollection("test"))
+			record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 			record.SetRaw(s.field.GetName(), s.raw)
 
 			v, err := s.field.DriverValue(record)
@@ -204,16 +204,16 @@ func TestRelationFieldValidateValue(t *testing.T) {
 
 	scenarios := []struct {
 		name        string
-		field       *core.RelationField
-		record      func() *core.Record
+		field       *kernel.RelationField
+		record      func() *kernel.Record
 		expectError bool
 	}{
 		// single
 		{
 			"[single] zero field value (not required)",
-			&core.RelationField{Name: "test", MaxSelect: 1, CollectionId: demo1.Id},
-			func() *core.Record {
-				record := core.NewRecord(core.NewBaseCollection("test_collection"))
+			&kernel.RelationField{Name: "test", MaxSelect: 1, CollectionId: demo1.Id},
+			func() *kernel.Record {
+				record := kernel.NewRecord(kernel.NewBaseCollection("test_collection"))
 				record.SetRaw("test", "")
 				return record
 			},
@@ -221,9 +221,9 @@ func TestRelationFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[single] zero field value (required)",
-			&core.RelationField{Name: "test", MaxSelect: 1, CollectionId: demo1.Id, Required: true},
-			func() *core.Record {
-				record := core.NewRecord(core.NewBaseCollection("test_collection"))
+			&kernel.RelationField{Name: "test", MaxSelect: 1, CollectionId: demo1.Id, Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(kernel.NewBaseCollection("test_collection"))
 				record.SetRaw("test", "")
 				return record
 			},
@@ -231,9 +231,9 @@ func TestRelationFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[single] id from other collection",
-			&core.RelationField{Name: "test", MaxSelect: 1, CollectionId: demo1.Id},
-			func() *core.Record {
-				record := core.NewRecord(core.NewBaseCollection("test_collection"))
+			&kernel.RelationField{Name: "test", MaxSelect: 1, CollectionId: demo1.Id},
+			func() *kernel.Record {
+				record := kernel.NewRecord(kernel.NewBaseCollection("test_collection"))
 				record.SetRaw("test", "achvryl401bhse3")
 				return record
 			},
@@ -241,9 +241,9 @@ func TestRelationFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[single] valid id",
-			&core.RelationField{Name: "test", MaxSelect: 1, CollectionId: demo1.Id},
-			func() *core.Record {
-				record := core.NewRecord(core.NewBaseCollection("test_collection"))
+			&kernel.RelationField{Name: "test", MaxSelect: 1, CollectionId: demo1.Id},
+			func() *kernel.Record {
+				record := kernel.NewRecord(kernel.NewBaseCollection("test_collection"))
 				record.SetRaw("test", "84nmscqy84lsi1t")
 				return record
 			},
@@ -251,9 +251,9 @@ func TestRelationFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[single] > MaxSelect",
-			&core.RelationField{Name: "test", MaxSelect: 1, CollectionId: demo1.Id},
-			func() *core.Record {
-				record := core.NewRecord(core.NewBaseCollection("test_collection"))
+			&kernel.RelationField{Name: "test", MaxSelect: 1, CollectionId: demo1.Id},
+			func() *kernel.Record {
+				record := kernel.NewRecord(kernel.NewBaseCollection("test_collection"))
 				record.SetRaw("test", []string{"84nmscqy84lsi1t", "al1h9ijdeojtsjy"})
 				return record
 			},
@@ -263,9 +263,9 @@ func TestRelationFieldValidateValue(t *testing.T) {
 		// multiple
 		{
 			"[multiple] zero field value (not required)",
-			&core.RelationField{Name: "test", MaxSelect: 2, CollectionId: demo1.Id},
-			func() *core.Record {
-				record := core.NewRecord(core.NewBaseCollection("test_collection"))
+			&kernel.RelationField{Name: "test", MaxSelect: 2, CollectionId: demo1.Id},
+			func() *kernel.Record {
+				record := kernel.NewRecord(kernel.NewBaseCollection("test_collection"))
 				record.SetRaw("test", []string{})
 				return record
 			},
@@ -273,9 +273,9 @@ func TestRelationFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[multiple] zero field value (required)",
-			&core.RelationField{Name: "test", MaxSelect: 2, CollectionId: demo1.Id, Required: true},
-			func() *core.Record {
-				record := core.NewRecord(core.NewBaseCollection("test_collection"))
+			&kernel.RelationField{Name: "test", MaxSelect: 2, CollectionId: demo1.Id, Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(kernel.NewBaseCollection("test_collection"))
 				record.SetRaw("test", []string{})
 				return record
 			},
@@ -283,9 +283,9 @@ func TestRelationFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[multiple] id from other collection",
-			&core.RelationField{Name: "test", MaxSelect: 2, CollectionId: demo1.Id},
-			func() *core.Record {
-				record := core.NewRecord(core.NewBaseCollection("test_collection"))
+			&kernel.RelationField{Name: "test", MaxSelect: 2, CollectionId: demo1.Id},
+			func() *kernel.Record {
+				record := kernel.NewRecord(kernel.NewBaseCollection("test_collection"))
 				record.SetRaw("test", []string{"84nmscqy84lsi1t", "achvryl401bhse3"})
 				return record
 			},
@@ -293,9 +293,9 @@ func TestRelationFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[multiple] valid id",
-			&core.RelationField{Name: "test", MaxSelect: 2, CollectionId: demo1.Id},
-			func() *core.Record {
-				record := core.NewRecord(core.NewBaseCollection("test_collection"))
+			&kernel.RelationField{Name: "test", MaxSelect: 2, CollectionId: demo1.Id},
+			func() *kernel.Record {
+				record := kernel.NewRecord(kernel.NewBaseCollection("test_collection"))
 				record.SetRaw("test", []string{"84nmscqy84lsi1t", "al1h9ijdeojtsjy"})
 				return record
 			},
@@ -303,9 +303,9 @@ func TestRelationFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[multiple] > MaxSelect",
-			&core.RelationField{Name: "test", MaxSelect: 2, CollectionId: demo1.Id},
-			func() *core.Record {
-				record := core.NewRecord(core.NewBaseCollection("test_collection"))
+			&kernel.RelationField{Name: "test", MaxSelect: 2, CollectionId: demo1.Id},
+			func() *kernel.Record {
+				record := kernel.NewRecord(kernel.NewBaseCollection("test_collection"))
 				record.SetRaw("test", []string{"84nmscqy84lsi1t", "al1h9ijdeojtsjy", "imy661ixudk5izi"})
 				return record
 			},
@@ -313,9 +313,9 @@ func TestRelationFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[multiple] < MinSelect",
-			&core.RelationField{Name: "test", MinSelect: 2, MaxSelect: 99, CollectionId: demo1.Id},
-			func() *core.Record {
-				record := core.NewRecord(core.NewBaseCollection("test_collection"))
+			&kernel.RelationField{Name: "test", MinSelect: 2, MaxSelect: 99, CollectionId: demo1.Id},
+			func() *kernel.Record {
+				record := kernel.NewRecord(kernel.NewBaseCollection("test_collection"))
 				record.SetRaw("test", []string{"84nmscqy84lsi1t"})
 				return record
 			},
@@ -323,9 +323,9 @@ func TestRelationFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[multiple] >= MinSelect",
-			&core.RelationField{Name: "test", MinSelect: 2, MaxSelect: 99, CollectionId: demo1.Id},
-			func() *core.Record {
-				record := core.NewRecord(core.NewBaseCollection("test_collection"))
+			&kernel.RelationField{Name: "test", MinSelect: 2, MaxSelect: 99, CollectionId: demo1.Id},
+			func() *kernel.Record {
+				record := kernel.NewRecord(kernel.NewBaseCollection("test_collection"))
 				record.SetRaw("test", []string{"84nmscqy84lsi1t", "al1h9ijdeojtsjy", "imy661ixudk5izi"})
 				return record
 			},
@@ -346,9 +346,9 @@ func TestRelationFieldValidateValue(t *testing.T) {
 }
 
 func TestRelationFieldValidateSettings(t *testing.T) {
-	testDefaultFieldIdValidation(t, core.FieldTypeRelation)
-	testDefaultFieldNameValidation(t, core.FieldTypeRelation)
-	testDefaultFieldHelpValidation[core.RelationField](t)
+	testDefaultFieldIdValidation(t, kernel.FieldTypeRelation)
+	testDefaultFieldNameValidation(t, kernel.FieldTypeRelation)
+	testDefaultFieldHelpValidation[kernel.RelationField](t)
 
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
@@ -360,13 +360,13 @@ func TestRelationFieldValidateSettings(t *testing.T) {
 
 	scenarios := []struct {
 		name         string
-		field        func(col *core.Collection) *core.RelationField
+		field        func(col *kernel.Collection) *kernel.RelationField
 		expectErrors []string
 	}{
 		{
 			"zero minimal",
-			func(col *core.Collection) *core.RelationField {
-				return &core.RelationField{
+			func(col *kernel.Collection) *kernel.RelationField {
+				return &kernel.RelationField{
 					Id:   "test",
 					Name: "test",
 				}
@@ -375,8 +375,8 @@ func TestRelationFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"invalid collectionId",
-			func(col *core.Collection) *core.RelationField {
-				return &core.RelationField{
+			func(col *kernel.Collection) *kernel.RelationField {
+				return &kernel.RelationField{
 					Id:           "test",
 					Name:         "test",
 					CollectionId: demo1.Name,
@@ -386,8 +386,8 @@ func TestRelationFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"valid collectionId",
-			func(col *core.Collection) *core.RelationField {
-				return &core.RelationField{
+			func(col *kernel.Collection) *kernel.RelationField {
+				return &kernel.RelationField{
 					Id:           "test",
 					Name:         "test",
 					CollectionId: demo1.Id,
@@ -397,8 +397,8 @@ func TestRelationFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"base->view",
-			func(col *core.Collection) *core.RelationField {
-				return &core.RelationField{
+			func(col *kernel.Collection) *kernel.RelationField {
+				return &kernel.RelationField{
 					Id:           "test",
 					Name:         "test",
 					CollectionId: "v9gwnfh02gjq1q0",
@@ -408,9 +408,9 @@ func TestRelationFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"view->view",
-			func(col *core.Collection) *core.RelationField {
-				col.Type = core.CollectionTypeView
-				return &core.RelationField{
+			func(col *kernel.Collection) *kernel.RelationField {
+				col.Type = kernel.CollectionTypeView
+				return &kernel.RelationField{
 					Id:           "test",
 					Name:         "test",
 					CollectionId: "v9gwnfh02gjq1q0",
@@ -420,8 +420,8 @@ func TestRelationFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"MinSelect < 0",
-			func(col *core.Collection) *core.RelationField {
-				return &core.RelationField{
+			func(col *kernel.Collection) *kernel.RelationField {
+				return &kernel.RelationField{
 					Id:           "test",
 					Name:         "test",
 					CollectionId: demo1.Id,
@@ -432,8 +432,8 @@ func TestRelationFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"MinSelect > 0",
-			func(col *core.Collection) *core.RelationField {
-				return &core.RelationField{
+			func(col *kernel.Collection) *kernel.RelationField {
+				return &kernel.RelationField{
 					Id:           "test",
 					Name:         "test",
 					CollectionId: demo1.Id,
@@ -444,8 +444,8 @@ func TestRelationFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"MaxSelect < MinSelect",
-			func(col *core.Collection) *core.RelationField {
-				return &core.RelationField{
+			func(col *kernel.Collection) *kernel.RelationField {
+				return &kernel.RelationField{
 					Id:           "test",
 					Name:         "test",
 					CollectionId: demo1.Id,
@@ -457,8 +457,8 @@ func TestRelationFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"MaxSelect >= MinSelect",
-			func(col *core.Collection) *core.RelationField {
-				return &core.RelationField{
+			func(col *kernel.Collection) *kernel.RelationField {
+				return &kernel.RelationField{
 					Id:           "test",
 					Name:         "test",
 					CollectionId: demo1.Id,
@@ -472,7 +472,7 @@ func TestRelationFieldValidateSettings(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			collection := core.NewBaseCollection("test_collection")
+			collection := kernel.NewBaseCollection("test_collection")
 			collection.Fields.GetByName("id").SetId("test") // set a dummy known id so that it can be replaced
 
 			field := s.field(collection)
@@ -491,7 +491,7 @@ func TestRelationFieldFindSetter(t *testing.T) {
 		name      string
 		key       string
 		value     any
-		field     *core.RelationField
+		field     *kernel.RelationField
 		hasSetter bool
 		expected  string
 	}{
@@ -499,7 +499,7 @@ func TestRelationFieldFindSetter(t *testing.T) {
 			"no match",
 			"example",
 			"b",
-			&core.RelationField{Name: "test", MaxSelect: 1},
+			&kernel.RelationField{Name: "test", MaxSelect: 1},
 			false,
 			"",
 		},
@@ -507,7 +507,7 @@ func TestRelationFieldFindSetter(t *testing.T) {
 			"exact match (single)",
 			"test",
 			"b",
-			&core.RelationField{Name: "test", MaxSelect: 1},
+			&kernel.RelationField{Name: "test", MaxSelect: 1},
 			true,
 			`"b"`,
 		},
@@ -515,7 +515,7 @@ func TestRelationFieldFindSetter(t *testing.T) {
 			"exact match (multiple)",
 			"test",
 			[]string{"a", "b"},
-			&core.RelationField{Name: "test", MaxSelect: 2},
+			&kernel.RelationField{Name: "test", MaxSelect: 2},
 			true,
 			`["a","b"]`,
 		},
@@ -523,7 +523,7 @@ func TestRelationFieldFindSetter(t *testing.T) {
 			"append (single)",
 			"test+",
 			"b",
-			&core.RelationField{Name: "test", MaxSelect: 1},
+			&kernel.RelationField{Name: "test", MaxSelect: 1},
 			true,
 			`"b"`,
 		},
@@ -531,7 +531,7 @@ func TestRelationFieldFindSetter(t *testing.T) {
 			"append (multiple)",
 			"test+",
 			[]string{"a"},
-			&core.RelationField{Name: "test", MaxSelect: 2},
+			&kernel.RelationField{Name: "test", MaxSelect: 2},
 			true,
 			`["c","d","a"]`,
 		},
@@ -539,7 +539,7 @@ func TestRelationFieldFindSetter(t *testing.T) {
 			"prepend (single)",
 			"+test",
 			"b",
-			&core.RelationField{Name: "test", MaxSelect: 1},
+			&kernel.RelationField{Name: "test", MaxSelect: 1},
 			true,
 			`"d"`, // the last of the existing values
 		},
@@ -547,7 +547,7 @@ func TestRelationFieldFindSetter(t *testing.T) {
 			"prepend (multiple)",
 			"+test",
 			[]string{"a"},
-			&core.RelationField{Name: "test", MaxSelect: 2},
+			&kernel.RelationField{Name: "test", MaxSelect: 2},
 			true,
 			`["a","c","d"]`,
 		},
@@ -555,7 +555,7 @@ func TestRelationFieldFindSetter(t *testing.T) {
 			"subtract (single)",
 			"test-",
 			"d",
-			&core.RelationField{Name: "test", MaxSelect: 1},
+			&kernel.RelationField{Name: "test", MaxSelect: 1},
 			true,
 			`"c"`,
 		},
@@ -563,7 +563,7 @@ func TestRelationFieldFindSetter(t *testing.T) {
 			"subtract (multiple)",
 			"test-",
 			[]string{"unknown", "c"},
-			&core.RelationField{Name: "test", MaxSelect: 2},
+			&kernel.RelationField{Name: "test", MaxSelect: 2},
 			true,
 			`["d"]`,
 		},
@@ -571,7 +571,7 @@ func TestRelationFieldFindSetter(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			collection := core.NewBaseCollection("test_collection")
+			collection := kernel.NewBaseCollection("test_collection")
 			collection.Fields.Add(s.field)
 
 			setter := s.field.FindSetter(s.key)
@@ -585,7 +585,7 @@ func TestRelationFieldFindSetter(t *testing.T) {
 				return
 			}
 
-			record := core.NewRecord(collection)
+			record := kernel.NewRecord(collection)
 			record.SetRaw(s.field.GetName(), []string{"c", "d"})
 
 			setter(record, s.value)

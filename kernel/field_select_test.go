@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/types"
 )
 
 func TestSelectFieldBaseMethods(t *testing.T) {
-	testFieldBaseMethods(t, core.FieldTypeSelect)
+	testFieldBaseMethods(t, kernel.FieldTypeSelect)
 }
 
 func TestSelectFieldColumnType(t *testing.T) {
@@ -21,22 +21,22 @@ func TestSelectFieldColumnType(t *testing.T) {
 
 	scenarios := []struct {
 		name     string
-		field    *core.SelectField
+		field    *kernel.SelectField
 		expected string
 	}{
 		{
 			"single (zero)",
-			&core.SelectField{},
+			&kernel.SelectField{},
 			"TEXT DEFAULT '' NOT NULL",
 		},
 		{
 			"single",
-			&core.SelectField{MaxSelect: 1},
+			&kernel.SelectField{MaxSelect: 1},
 			"TEXT DEFAULT '' NOT NULL",
 		},
 		{
 			"multiple",
-			&core.SelectField{MaxSelect: 2},
+			&kernel.SelectField{MaxSelect: 2},
 			"JSON DEFAULT '[]' NOT NULL",
 		},
 	}
@@ -53,22 +53,22 @@ func TestSelectFieldColumnType(t *testing.T) {
 func TestSelectFieldIsMultiple(t *testing.T) {
 	scenarios := []struct {
 		name     string
-		field    *core.SelectField
+		field    *kernel.SelectField
 		expected bool
 	}{
 		{
 			"single (zero)",
-			&core.SelectField{},
+			&kernel.SelectField{},
 			false,
 		},
 		{
 			"single",
-			&core.SelectField{MaxSelect: 1},
+			&kernel.SelectField{MaxSelect: 1},
 			false,
 		},
 		{
 			"multiple (>1)",
-			&core.SelectField{MaxSelect: 2},
+			&kernel.SelectField{MaxSelect: 2},
 			true,
 		},
 	}
@@ -86,30 +86,30 @@ func TestSelectFieldPrepareValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 
 	scenarios := []struct {
 		raw      any
-		field    *core.SelectField
+		field    *kernel.SelectField
 		expected string
 	}{
 		// single
-		{nil, &core.SelectField{}, `""`},
-		{"", &core.SelectField{}, `""`},
-		{123, &core.SelectField{}, `"123"`},
-		{"a", &core.SelectField{}, `"a"`},
-		{`["a"]`, &core.SelectField{}, `"a"`},
-		{[]string{}, &core.SelectField{}, `""`},
-		{[]string{"a", "b"}, &core.SelectField{}, `"b"`},
+		{nil, &kernel.SelectField{}, `""`},
+		{"", &kernel.SelectField{}, `""`},
+		{123, &kernel.SelectField{}, `"123"`},
+		{"a", &kernel.SelectField{}, `"a"`},
+		{`["a"]`, &kernel.SelectField{}, `"a"`},
+		{[]string{}, &kernel.SelectField{}, `""`},
+		{[]string{"a", "b"}, &kernel.SelectField{}, `"b"`},
 
 		// multiple
-		{nil, &core.SelectField{MaxSelect: 2}, `[]`},
-		{"", &core.SelectField{MaxSelect: 2}, `[]`},
-		{123, &core.SelectField{MaxSelect: 2}, `["123"]`},
-		{"a", &core.SelectField{MaxSelect: 2}, `["a"]`},
-		{`["a"]`, &core.SelectField{MaxSelect: 2}, `["a"]`},
-		{[]string{}, &core.SelectField{MaxSelect: 2}, `[]`},
-		{[]string{"a", "b", "c"}, &core.SelectField{MaxSelect: 2}, `["a","b","c"]`},
+		{nil, &kernel.SelectField{MaxSelect: 2}, `[]`},
+		{"", &kernel.SelectField{MaxSelect: 2}, `[]`},
+		{123, &kernel.SelectField{MaxSelect: 2}, `["123"]`},
+		{"a", &kernel.SelectField{MaxSelect: 2}, `["a"]`},
+		{`["a"]`, &kernel.SelectField{MaxSelect: 2}, `["a"]`},
+		{[]string{}, &kernel.SelectField{MaxSelect: 2}, `[]`},
+		{[]string{"a", "b", "c"}, &kernel.SelectField{MaxSelect: 2}, `["a","b","c"]`},
 	}
 
 	for i, s := range scenarios {
@@ -137,31 +137,31 @@ func TestSelectFieldDriverValue(t *testing.T) {
 
 	scenarios := []struct {
 		raw      any
-		field    *core.SelectField
+		field    *kernel.SelectField
 		expected string
 	}{
 		// single
-		{nil, &core.SelectField{}, `""`},
-		{"", &core.SelectField{}, `""`},
-		{123, &core.SelectField{}, `"123"`},
-		{"a", &core.SelectField{}, `"a"`},
-		{`["a"]`, &core.SelectField{}, `"a"`},
-		{[]string{}, &core.SelectField{}, `""`},
-		{[]string{"a", "b"}, &core.SelectField{}, `"b"`},
+		{nil, &kernel.SelectField{}, `""`},
+		{"", &kernel.SelectField{}, `""`},
+		{123, &kernel.SelectField{}, `"123"`},
+		{"a", &kernel.SelectField{}, `"a"`},
+		{`["a"]`, &kernel.SelectField{}, `"a"`},
+		{[]string{}, &kernel.SelectField{}, `""`},
+		{[]string{"a", "b"}, &kernel.SelectField{}, `"b"`},
 
 		// multiple
-		{nil, &core.SelectField{MaxSelect: 2}, `[]`},
-		{"", &core.SelectField{MaxSelect: 2}, `[]`},
-		{123, &core.SelectField{MaxSelect: 2}, `["123"]`},
-		{"a", &core.SelectField{MaxSelect: 2}, `["a"]`},
-		{`["a"]`, &core.SelectField{MaxSelect: 2}, `["a"]`},
-		{[]string{}, &core.SelectField{MaxSelect: 2}, `[]`},
-		{[]string{"a", "b", "c"}, &core.SelectField{MaxSelect: 2}, `["a","b","c"]`},
+		{nil, &kernel.SelectField{MaxSelect: 2}, `[]`},
+		{"", &kernel.SelectField{MaxSelect: 2}, `[]`},
+		{123, &kernel.SelectField{MaxSelect: 2}, `["123"]`},
+		{"a", &kernel.SelectField{MaxSelect: 2}, `["a"]`},
+		{`["a"]`, &kernel.SelectField{MaxSelect: 2}, `["a"]`},
+		{[]string{}, &kernel.SelectField{MaxSelect: 2}, `[]`},
+		{[]string{"a", "b", "c"}, &kernel.SelectField{MaxSelect: 2}, `["a","b","c"]`},
 	}
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%#v_%v", i, s.raw, s.field.IsMultiple()), func(t *testing.T) {
-			record := core.NewRecord(core.NewBaseCollection("test"))
+			record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 			record.SetRaw(s.field.GetName(), s.raw)
 
 			v, err := s.field.DriverValue(record)
@@ -197,22 +197,22 @@ func TestSelectFieldValidateValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	values := []string{"a", "b", "c"}
 
 	scenarios := []struct {
 		name        string
-		field       *core.SelectField
-		record      func() *core.Record
+		field       *kernel.SelectField
+		record      func() *kernel.Record
 		expectError bool
 	}{
 		// single
 		{
 			"[single] zero field value (not required)",
-			&core.SelectField{Name: "test", Values: values, MaxSelect: 1},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.SelectField{Name: "test", Values: values, MaxSelect: 1},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "")
 				return record
 			},
@@ -220,9 +220,9 @@ func TestSelectFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[single] zero field value (required)",
-			&core.SelectField{Name: "test", Values: values, MaxSelect: 1, Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.SelectField{Name: "test", Values: values, MaxSelect: 1, Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "")
 				return record
 			},
@@ -230,9 +230,9 @@ func TestSelectFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[single] unknown value",
-			&core.SelectField{Name: "test", Values: values, MaxSelect: 1},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.SelectField{Name: "test", Values: values, MaxSelect: 1},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "unknown")
 				return record
 			},
@@ -240,9 +240,9 @@ func TestSelectFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[single] known value",
-			&core.SelectField{Name: "test", Values: values, MaxSelect: 1},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.SelectField{Name: "test", Values: values, MaxSelect: 1},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "a")
 				return record
 			},
@@ -250,9 +250,9 @@ func TestSelectFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[single] > MaxSelect",
-			&core.SelectField{Name: "test", Values: values, MaxSelect: 1},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.SelectField{Name: "test", Values: values, MaxSelect: 1},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", []string{"a", "b"})
 				return record
 			},
@@ -262,9 +262,9 @@ func TestSelectFieldValidateValue(t *testing.T) {
 		// multiple
 		{
 			"[multiple] zero field value (not required)",
-			&core.SelectField{Name: "test", Values: values, MaxSelect: 2},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.SelectField{Name: "test", Values: values, MaxSelect: 2},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", []string{})
 				return record
 			},
@@ -272,9 +272,9 @@ func TestSelectFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[multiple] zero field value (required)",
-			&core.SelectField{Name: "test", Values: values, MaxSelect: 2, Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.SelectField{Name: "test", Values: values, MaxSelect: 2, Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", []string{})
 				return record
 			},
@@ -282,9 +282,9 @@ func TestSelectFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[multiple] unknown value",
-			&core.SelectField{Name: "test", Values: values, MaxSelect: 2},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.SelectField{Name: "test", Values: values, MaxSelect: 2},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", []string{"a", "unknown"})
 				return record
 			},
@@ -292,9 +292,9 @@ func TestSelectFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[multiple] known value",
-			&core.SelectField{Name: "test", Values: values, MaxSelect: 2},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.SelectField{Name: "test", Values: values, MaxSelect: 2},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", []string{"a", "b"})
 				return record
 			},
@@ -302,9 +302,9 @@ func TestSelectFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[multiple] > MaxSelect",
-			&core.SelectField{Name: "test", Values: values, MaxSelect: 2},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.SelectField{Name: "test", Values: values, MaxSelect: 2},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", []string{"a", "b", "c"})
 				return record
 			},
@@ -312,9 +312,9 @@ func TestSelectFieldValidateValue(t *testing.T) {
 		},
 		{
 			"[multiple] > MaxSelect (duplicated values)",
-			&core.SelectField{Name: "test", Values: values, MaxSelect: 2},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.SelectField{Name: "test", Values: values, MaxSelect: 2},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", []string{"a", "b", "b", "a"})
 				return record
 			},
@@ -335,22 +335,22 @@ func TestSelectFieldValidateValue(t *testing.T) {
 }
 
 func TestSelectFieldValidateSettings(t *testing.T) {
-	testDefaultFieldIdValidation(t, core.FieldTypeSelect)
-	testDefaultFieldNameValidation(t, core.FieldTypeSelect)
-	testDefaultFieldHelpValidation[core.SelectField](t)
+	testDefaultFieldIdValidation(t, kernel.FieldTypeSelect)
+	testDefaultFieldNameValidation(t, kernel.FieldTypeSelect)
+	testDefaultFieldHelpValidation[kernel.SelectField](t)
 
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
 	scenarios := []struct {
 		name         string
-		field        func() *core.SelectField
+		field        func() *kernel.SelectField
 		expectErrors []string
 	}{
 		{
 			"zero minimal",
-			func() *core.SelectField {
-				return &core.SelectField{
+			func() *kernel.SelectField {
+				return &kernel.SelectField{
 					Id:   "test",
 					Name: "test",
 				}
@@ -359,8 +359,8 @@ func TestSelectFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"MaxSelect > Values length",
-			func() *core.SelectField {
-				return &core.SelectField{
+			func() *kernel.SelectField {
+				return &kernel.SelectField{
 					Id:        "test",
 					Name:      "test",
 					Values:    []string{"a", "b"},
@@ -371,8 +371,8 @@ func TestSelectFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"MaxSelect <= Values length",
-			func() *core.SelectField {
-				return &core.SelectField{
+			func() *kernel.SelectField {
+				return &kernel.SelectField{
 					Id:        "test",
 					Name:      "test",
 					Values:    []string{"a", "b"},
@@ -387,7 +387,7 @@ func TestSelectFieldValidateSettings(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			field := s.field()
 
-			collection := core.NewBaseCollection("test_collection")
+			collection := kernel.NewBaseCollection("test_collection")
 			collection.Fields.Add(field)
 
 			errs := field.ValidateSettings(context.Background(), app, collection)
@@ -404,7 +404,7 @@ func TestSelectFieldFindSetter(t *testing.T) {
 		name      string
 		key       string
 		value     any
-		field     *core.SelectField
+		field     *kernel.SelectField
 		hasSetter bool
 		expected  string
 	}{
@@ -412,7 +412,7 @@ func TestSelectFieldFindSetter(t *testing.T) {
 			"no match",
 			"example",
 			"b",
-			&core.SelectField{Name: "test", MaxSelect: 1, Values: values},
+			&kernel.SelectField{Name: "test", MaxSelect: 1, Values: values},
 			false,
 			"",
 		},
@@ -420,7 +420,7 @@ func TestSelectFieldFindSetter(t *testing.T) {
 			"exact match (single)",
 			"test",
 			"b",
-			&core.SelectField{Name: "test", MaxSelect: 1, Values: values},
+			&kernel.SelectField{Name: "test", MaxSelect: 1, Values: values},
 			true,
 			`"b"`,
 		},
@@ -428,7 +428,7 @@ func TestSelectFieldFindSetter(t *testing.T) {
 			"exact match (multiple)",
 			"test",
 			[]string{"a", "b"},
-			&core.SelectField{Name: "test", MaxSelect: 2, Values: values},
+			&kernel.SelectField{Name: "test", MaxSelect: 2, Values: values},
 			true,
 			`["a","b"]`,
 		},
@@ -436,7 +436,7 @@ func TestSelectFieldFindSetter(t *testing.T) {
 			"append (single)",
 			"test+",
 			"b",
-			&core.SelectField{Name: "test", MaxSelect: 1, Values: values},
+			&kernel.SelectField{Name: "test", MaxSelect: 1, Values: values},
 			true,
 			`"b"`,
 		},
@@ -444,7 +444,7 @@ func TestSelectFieldFindSetter(t *testing.T) {
 			"append (multiple)",
 			"test+",
 			[]string{"a"},
-			&core.SelectField{Name: "test", MaxSelect: 2, Values: values},
+			&kernel.SelectField{Name: "test", MaxSelect: 2, Values: values},
 			true,
 			`["c","d","a"]`,
 		},
@@ -452,7 +452,7 @@ func TestSelectFieldFindSetter(t *testing.T) {
 			"prepend (single)",
 			"+test",
 			"b",
-			&core.SelectField{Name: "test", MaxSelect: 1, Values: values},
+			&kernel.SelectField{Name: "test", MaxSelect: 1, Values: values},
 			true,
 			`"d"`, // the last of the existing values
 		},
@@ -460,7 +460,7 @@ func TestSelectFieldFindSetter(t *testing.T) {
 			"prepend (multiple)",
 			"+test",
 			[]string{"a"},
-			&core.SelectField{Name: "test", MaxSelect: 2, Values: values},
+			&kernel.SelectField{Name: "test", MaxSelect: 2, Values: values},
 			true,
 			`["a","c","d"]`,
 		},
@@ -468,7 +468,7 @@ func TestSelectFieldFindSetter(t *testing.T) {
 			"subtract (single)",
 			"test-",
 			"d",
-			&core.SelectField{Name: "test", MaxSelect: 1, Values: values},
+			&kernel.SelectField{Name: "test", MaxSelect: 1, Values: values},
 			true,
 			`"c"`,
 		},
@@ -476,7 +476,7 @@ func TestSelectFieldFindSetter(t *testing.T) {
 			"subtract (multiple)",
 			"test-",
 			[]string{"unknown", "c"},
-			&core.SelectField{Name: "test", MaxSelect: 2, Values: values},
+			&kernel.SelectField{Name: "test", MaxSelect: 2, Values: values},
 			true,
 			`["d"]`,
 		},
@@ -484,7 +484,7 @@ func TestSelectFieldFindSetter(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			collection := core.NewBaseCollection("test_collection")
+			collection := kernel.NewBaseCollection("test_collection")
 			collection.Fields.Add(s.field)
 
 			setter := s.field.FindSetter(s.key)
@@ -498,7 +498,7 @@ func TestSelectFieldFindSetter(t *testing.T) {
 				return
 			}
 
-			record := core.NewRecord(collection)
+			record := kernel.NewRecord(collection)
 			record.SetRaw(s.field.GetName(), []string{"c", "d"})
 
 			setter(record, s.value)

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/types"
 )
@@ -14,10 +14,10 @@ import (
 func TestLogTableName(t *testing.T) {
 	t.Parallel()
 
-	var log core.Log
+	var log kernel.Log
 
-	if name := log.TableName(); name != core.LogsTableName {
-		t.Fatalf("Expected Log table name %q, got %q", core.LogsTableName, name)
+	if name := log.TableName(); name != kernel.LogsTableName {
+		t.Fatalf("Expected Log table name %q, got %q", kernel.LogsTableName, name)
 	}
 }
 
@@ -37,20 +37,20 @@ func TestLogDBExport(t *testing.T) {
 
 	scenarios := []struct {
 		name       string
-		log        core.Log
+		log        kernel.Log
 		limit      int64 // 0 -> use default
 		expectJSON string
 	}{
 		{
 			"empty log",
-			core.Log{},
+			kernel.Log{},
 			0,
 			`{"created":"","data":{},"id":"","level":0,"message":""}`,
 		},
 		{
 			"with message and data below the default limits",
-			core.Log{
-				BaseModel: core.BaseModel{Id: "test_id"},
+			kernel.Log{
+				BaseModel: kernel.BaseModel{Id: "test_id"},
 				Created:   date,
 				Level:     123,
 				Message:   "test_message",
@@ -61,8 +61,8 @@ func TestLogDBExport(t *testing.T) {
 		},
 		{
 			"with message and data exactly the default limits",
-			core.Log{
-				BaseModel: core.BaseModel{Id: "test_id"},
+			kernel.Log{
+				BaseModel: kernel.BaseModel{Id: "test_id"},
 				Created:   date,
 				Level:     123,
 				Message:   strings.Repeat("a", messageLimit),
@@ -73,8 +73,8 @@ func TestLogDBExport(t *testing.T) {
 		},
 		{
 			"with message and data above the default limits",
-			core.Log{
-				BaseModel: core.BaseModel{Id: "test_id"},
+			kernel.Log{
+				BaseModel: kernel.BaseModel{Id: "test_id"},
 				Created:   date,
 				Level:     123,
 				Message:   strings.Repeat("a", messageLimit) + "x",                                                      // "x" should be omitted
@@ -85,8 +85,8 @@ func TestLogDBExport(t *testing.T) {
 		},
 		{
 			"with data above custom limit",
-			core.Log{
-				BaseModel: core.BaseModel{Id: "test_id"},
+			kernel.Log{
+				BaseModel: kernel.BaseModel{Id: "test_id"},
 				Created:   date,
 				Level:     123,
 				Message:   "test_message",

@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
@@ -20,12 +20,12 @@ func TestFindAllAuthOriginsByRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	superuser2, err := app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test2@example.com")
+	superuser2, err := app.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test2@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	superuser4, err := app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test4@example.com")
+	superuser4, err := app.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test4@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestFindAllAuthOriginsByRecord(t *testing.T) {
 	}
 
 	scenarios := []struct {
-		record   *core.Record
+		record   *kernel.Record
 		expected []string
 	}{
 		{demo1, nil},
@@ -76,7 +76,7 @@ func TestFindAllAuthOriginsByCollection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	superusers, err := app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
+	superusers, err := app.FindCollectionByNameOrId(kernel.CollectionNameSuperusers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestFindAllAuthOriginsByCollection(t *testing.T) {
 	}
 
 	scenarios := []struct {
-		collection *core.Collection
+		collection *kernel.Collection
 		expected   []string
 	}{
 		{demo1, nil},
@@ -161,13 +161,13 @@ func TestFindAuthOriginByRecordAndFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	superuser2, err := app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test2@example.com")
+	superuser2, err := app.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test2@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	scenarios := []struct {
-		record      *core.Record
+		record      *kernel.Record
 		fingerprint string
 		expectError bool
 	}{
@@ -213,12 +213,12 @@ func TestDeleteAllAuthOriginsByRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	superuser2, err := testApp.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test2@example.com")
+	superuser2, err := testApp.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test2@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	superuser4, err := testApp.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test4@example.com")
+	superuser4, err := testApp.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test4@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestDeleteAllAuthOriginsByRecord(t *testing.T) {
 	}
 
 	scenarios := []struct {
-		record     *core.Record
+		record     *kernel.Record
 		deletedIds []string
 	}{
 		{demo1, nil}, // non-auth record
@@ -244,7 +244,7 @@ func TestDeleteAllAuthOriginsByRecord(t *testing.T) {
 			defer app.Cleanup()
 
 			deletedIds := []string{}
-			app.OnRecordDelete().BindFunc(func(e *core.RecordEvent) error {
+			app.OnRecordDelete().BindFunc(func(e *kernel.RecordEvent) error {
 				deletedIds = append(deletedIds, e.Record.Id)
 				return e.Next()
 			})

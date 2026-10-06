@@ -17,7 +17,7 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/spf13/cast"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/filesystem"
 	"github.com/tokibase/tokibase/tools/hook"
@@ -27,10 +27,10 @@ import (
 func TestNewRecord(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test")
-	collection.Fields.Add(&core.BoolField{Name: "status"})
+	collection := kernel.NewBaseCollection("test")
+	collection.Fields.Add(&kernel.BoolField{Name: "status"})
 
-	m := core.NewRecord(collection)
+	m := kernel.NewRecord(collection)
 
 	rawData, err := json.Marshal(m.FieldsData(), json.Deterministic(true)) // should be initialized with the defaults
 	if err != nil {
@@ -47,9 +47,9 @@ func TestNewRecord(t *testing.T) {
 func TestRecordCollection(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test")
+	collection := kernel.NewBaseCollection("test")
 
-	m := core.NewRecord(collection)
+	m := kernel.NewRecord(collection)
 
 	if m.Collection().Name != collection.Name {
 		t.Fatalf("Expected collection with name %q, got %q", collection.Name, m.Collection().Name)
@@ -59,9 +59,9 @@ func TestRecordCollection(t *testing.T) {
 func TestRecordTableName(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test")
+	collection := kernel.NewBaseCollection("test")
 
-	m := core.NewRecord(collection)
+	m := kernel.NewRecord(collection)
 
 	if m.TableName() != collection.Name {
 		t.Fatalf("Expected table %q, got %q", collection.Name, m.TableName())
@@ -71,10 +71,10 @@ func TestRecordTableName(t *testing.T) {
 func TestRecordPostScan(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test_collection")
-	collection.Fields.Add(&core.TextField{Name: "test"})
+	collection := kernel.NewBaseCollection("test_collection")
+	collection.Fields.Add(&kernel.TextField{Name: "test"})
 
-	m := core.NewRecord(collection)
+	m := kernel.NewRecord(collection)
 
 	// calling PostScan without id
 	err := m.PostScan()
@@ -114,9 +114,9 @@ func TestRecordPostScan(t *testing.T) {
 func TestRecordHookTags(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test")
+	collection := kernel.NewBaseCollection("test")
 
-	m := core.NewRecord(collection)
+	m := kernel.NewRecord(collection)
 
 	tags := m.HookTags()
 
@@ -136,9 +136,9 @@ func TestRecordHookTags(t *testing.T) {
 func TestRecordBaseFilesPath(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test")
+	collection := kernel.NewBaseCollection("test")
 
-	m := core.NewRecord(collection)
+	m := kernel.NewRecord(collection)
 	m.Id = "abc"
 
 	result := m.BaseFilesPath()
@@ -414,7 +414,7 @@ func TestRecordClone(t *testing.T) {
 func TestRecordExpand(t *testing.T) {
 	t.Parallel()
 
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 
 	expand := record.Expand()
 	if expand == nil || len(expand) != 0 {
@@ -441,81 +441,81 @@ func TestRecordExpand(t *testing.T) {
 func TestRecordMergeExpand(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test")
+	collection := kernel.NewBaseCollection("test")
 	collection.Id = "_pbc_123"
 
-	m := core.NewRecord(collection)
+	m := kernel.NewRecord(collection)
 	m.Id = "m"
 
 	// a
-	a := core.NewRecord(collection)
+	a := kernel.NewRecord(collection)
 	a.Id = "a"
-	a1 := core.NewRecord(collection)
+	a1 := kernel.NewRecord(collection)
 	a1.Id = "a1"
-	a2 := core.NewRecord(collection)
+	a2 := kernel.NewRecord(collection)
 	a2.Id = "a2"
-	a3 := core.NewRecord(collection)
+	a3 := kernel.NewRecord(collection)
 	a3.Id = "a3"
-	a31 := core.NewRecord(collection)
+	a31 := kernel.NewRecord(collection)
 	a31.Id = "a31"
-	a32 := core.NewRecord(collection)
+	a32 := kernel.NewRecord(collection)
 	a32.Id = "a32"
 	a.SetExpand(map[string]any{
 		"a1":  a1,
-		"a23": []*core.Record{a2, a3},
+		"a23": []*kernel.Record{a2, a3},
 	})
 	a3.SetExpand(map[string]any{
 		"a31": a31,
-		"a32": []*core.Record{a32},
+		"a32": []*kernel.Record{a32},
 	})
 
 	// b
-	b := core.NewRecord(collection)
+	b := kernel.NewRecord(collection)
 	b.Id = "b"
-	b1 := core.NewRecord(collection)
+	b1 := kernel.NewRecord(collection)
 	b1.Id = "b1"
 	b.SetExpand(map[string]any{
 		"b1": b1,
 	})
 
 	// c
-	c := core.NewRecord(collection)
+	c := kernel.NewRecord(collection)
 	c.Id = "c"
 
 	// load initial expand
 	m.SetExpand(map[string]any{
 		"a": a,
 		"b": b,
-		"c": []*core.Record{c},
+		"c": []*kernel.Record{c},
 	})
 
 	// a (new)
-	aNew := core.NewRecord(collection)
+	aNew := kernel.NewRecord(collection)
 	aNew.Id = a.Id
-	a3New := core.NewRecord(collection)
+	a3New := kernel.NewRecord(collection)
 	a3New.Id = a3.Id
-	a32New := core.NewRecord(collection)
+	a32New := kernel.NewRecord(collection)
 	a32New.Id = "a32New"
-	a33New := core.NewRecord(collection)
+	a33New := kernel.NewRecord(collection)
 	a33New.Id = "a33New"
 	a3New.SetExpand(map[string]any{
-		"a32":    []*core.Record{a32New},
+		"a32":    []*kernel.Record{a32New},
 		"a33New": a33New,
 	})
 	aNew.SetExpand(map[string]any{
-		"a23": []*core.Record{a2, a3New},
+		"a23": []*kernel.Record{a2, a3New},
 	})
 
 	// b (new)
-	bNew := core.NewRecord(collection)
+	bNew := kernel.NewRecord(collection)
 	bNew.Id = "bNew"
-	dNew := core.NewRecord(collection)
+	dNew := kernel.NewRecord(collection)
 	dNew.Id = "dNew"
 
 	// merge expands
 	m.MergeExpand(map[string]any{
 		"a":    aNew,
-		"b":    []*core.Record{bNew},
+		"b":    []*kernel.Record{bNew},
 		"dNew": dNew,
 	})
 
@@ -537,7 +537,7 @@ func TestRecordMergeExpand(t *testing.T) {
 func TestRecordMergeExpandNilCheck(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test")
+	collection := kernel.NewBaseCollection("test")
 	collection.Id = "_pbc_123"
 
 	scenarios := []struct {
@@ -557,14 +557,14 @@ func TestRecordMergeExpandNilCheck(t *testing.T) {
 		},
 		{
 			"non-empty expand",
-			map[string]any{"test": core.NewRecord(collection)},
+			map[string]any{"test": kernel.NewRecord(collection)},
 			`{"collectionId":"_pbc_123","collectionName":"test","expand":{"test":{"collectionId":"_pbc_123","collectionName":"test","id":""}},"id":""}`,
 		},
 	}
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			m := core.NewRecord(collection)
+			m := kernel.NewRecord(collection)
 			m.MergeExpand(s.expand)
 
 			raw, err := json.Marshal(m, json.Deterministic(true))
@@ -583,22 +583,22 @@ func TestRecordMergeExpandNilCheck(t *testing.T) {
 func TestRecordExpandedOne(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test")
+	collection := kernel.NewBaseCollection("test")
 
-	main := core.NewRecord(collection)
+	main := kernel.NewRecord(collection)
 
-	single := core.NewRecord(collection)
+	single := kernel.NewRecord(collection)
 	single.Id = "single"
 
-	multiple1 := core.NewRecord(collection)
+	multiple1 := kernel.NewRecord(collection)
 	multiple1.Id = "multiple1"
 
-	multiple2 := core.NewRecord(collection)
+	multiple2 := kernel.NewRecord(collection)
 	multiple2.Id = "multiple2"
 
 	main.SetExpand(map[string]any{
 		"single":   single,
-		"multiple": []*core.Record{multiple1, multiple2},
+		"multiple": []*kernel.Record{multiple1, multiple2},
 	})
 
 	if v := main.ExpandedOne("missing"); v != nil {
@@ -617,22 +617,22 @@ func TestRecordExpandedOne(t *testing.T) {
 func TestRecordExpandedAll(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test")
+	collection := kernel.NewBaseCollection("test")
 
-	main := core.NewRecord(collection)
+	main := kernel.NewRecord(collection)
 
-	single := core.NewRecord(collection)
+	single := kernel.NewRecord(collection)
 	single.Id = "single"
 
-	multiple1 := core.NewRecord(collection)
+	multiple1 := kernel.NewRecord(collection)
 	multiple1.Id = "multiple1"
 
-	multiple2 := core.NewRecord(collection)
+	multiple2 := kernel.NewRecord(collection)
 	multiple2.Id = "multiple2"
 
 	main.SetExpand(map[string]any{
 		"single":   single,
-		"multiple": []*core.Record{multiple1, multiple2},
+		"multiple": []*kernel.Record{multiple1, multiple2},
 	})
 
 	if v := main.ExpandedAll("missing"); v != nil {
@@ -651,11 +651,11 @@ func TestRecordExpandedAll(t *testing.T) {
 func TestRecordFieldsData(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewAuthCollection("test")
-	collection.Fields.Add(&core.TextField{Name: "field1"})
-	collection.Fields.Add(&core.TextField{Name: "field2"})
+	collection := kernel.NewAuthCollection("test")
+	collection.Fields.Add(&kernel.TextField{Name: "field1"})
+	collection.Fields.Add(&kernel.TextField{Name: "field2"})
 
-	m := core.NewRecord(collection)
+	m := kernel.NewRecord(collection)
 	m.Id = "test_id" // direct id assignment
 	m.Set("email", "test@example.com")
 	m.Set("password", "123") // hidden fields should be also returned
@@ -679,11 +679,11 @@ func TestRecordFieldsData(t *testing.T) {
 func TestRecordCustomData(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewAuthCollection("test")
-	collection.Fields.Add(&core.TextField{Name: "field1"})
-	collection.Fields.Add(&core.TextField{Name: "field2"})
+	collection := kernel.NewAuthCollection("test")
+	collection.Fields.Add(&kernel.TextField{Name: "field1"})
+	collection.Fields.Add(&kernel.TextField{Name: "field2"})
 
-	m := core.NewRecord(collection)
+	m := kernel.NewRecord(collection)
 	m.Id = "test_id" // direct id assignment
 	m.Set("email", "test@example.com")
 	m.Set("password", "123") // hidden fields should be also returned
@@ -716,14 +716,14 @@ func TestRecordSetGet(t *testing.T) {
 	f3 := &mockField{}
 	f3.Name = "mock3"
 
-	collection := core.NewBaseCollection("test")
-	collection.Fields.Add(&core.TextField{Name: "text1"})
-	collection.Fields.Add(&core.TextField{Name: "text2"})
+	collection := kernel.NewBaseCollection("test")
+	collection.Fields.Add(&kernel.TextField{Name: "text1"})
+	collection.Fields.Add(&kernel.TextField{Name: "text2"})
 	collection.Fields.Add(f1)
 	collection.Fields.Add(f2)
 	collection.Fields.Add(f3)
 
-	record := core.NewRecord(collection)
+	record := kernel.NewRecord(collection)
 	record.Set("text1", 123) // should be converted to string using the ScanValue fallback
 	record.SetRaw("text2", 456)
 	record.Set("mock1", 1) // should be converted to string using the setter
@@ -773,10 +773,10 @@ func TestRecordSetGet(t *testing.T) {
 func TestRecordLoad(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test")
-	collection.Fields.Add(&core.TextField{Name: "text"})
+	collection := kernel.NewBaseCollection("test")
+	collection.Fields.Add(&kernel.TextField{Name: "text"})
 
-	record := core.NewRecord(collection)
+	record := kernel.NewRecord(collection)
 	record.Load(map[string]any{
 		"text":   123,
 		"custom": 456,
@@ -815,8 +815,8 @@ func TestRecordGetBool(t *testing.T) {
 		{true, true},
 	}
 
-	collection := core.NewBaseCollection("test")
-	record := core.NewRecord(collection)
+	collection := kernel.NewBaseCollection("test")
+	record := kernel.NewRecord(collection)
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%#v", i, s.value), func(t *testing.T) {
@@ -849,8 +849,8 @@ func TestRecordGetString(t *testing.T) {
 		{true, "true"},
 	}
 
-	collection := core.NewBaseCollection("test")
-	record := core.NewRecord(collection)
+	collection := kernel.NewBaseCollection("test")
+	record := kernel.NewRecord(collection)
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%#v", i, s.value), func(t *testing.T) {
@@ -885,8 +885,8 @@ func TestRecordGetInt(t *testing.T) {
 		{true, 1},
 	}
 
-	collection := core.NewBaseCollection("test")
-	record := core.NewRecord(collection)
+	collection := kernel.NewBaseCollection("test")
+	record := kernel.NewRecord(collection)
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%#v", i, s.value), func(t *testing.T) {
@@ -922,8 +922,8 @@ func TestRecordGetInt64(t *testing.T) {
 		{true, 1},
 	}
 
-	collection := core.NewBaseCollection("test")
-	record := core.NewRecord(collection)
+	collection := kernel.NewBaseCollection("test")
+	record := kernel.NewRecord(collection)
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%#v", i, s.value), func(t *testing.T) {
@@ -958,8 +958,8 @@ func TestRecordGetFloat(t *testing.T) {
 		{true, 1},
 	}
 
-	collection := core.NewBaseCollection("test")
-	record := core.NewRecord(collection)
+	collection := kernel.NewBaseCollection("test")
+	record := kernel.NewRecord(collection)
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%#v", i, s.value), func(t *testing.T) {
@@ -995,8 +995,8 @@ func TestRecordGetDateTime(t *testing.T) {
 		{nowTime, nowTime},
 	}
 
-	collection := core.NewBaseCollection("test")
-	record := core.NewRecord(collection)
+	collection := kernel.NewBaseCollection("test")
+	record := kernel.NewRecord(collection)
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%#v", i, s.value), func(t *testing.T) {
@@ -1032,8 +1032,8 @@ func TestRecordGetStringSlice(t *testing.T) {
 		{[]string{"test", "test", "123"}, []string{"test", "123"}},
 	}
 
-	collection := core.NewBaseCollection("test")
-	record := core.NewRecord(collection)
+	collection := kernel.NewBaseCollection("test")
+	record := kernel.NewRecord(collection)
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%#v", i, s.value), func(t *testing.T) {
@@ -1075,8 +1075,8 @@ func TestRecordGetGeoPoint(t *testing.T) {
 		{&types.GeoPoint{Lon: 1, Lat: 2}, `{"lon":1,"lat":2}`},
 	}
 
-	collection := core.NewBaseCollection("test")
-	record := core.NewRecord(collection)
+	collection := kernel.NewBaseCollection("test")
+	record := kernel.NewRecord(collection)
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%#v", i, s.value), func(t *testing.T) {
@@ -1159,10 +1159,10 @@ func TestRecordGetUnsavedFiles(t *testing.T) {
 func TestRecordUnmarshalJSONField(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test")
-	collection.Fields.Add(&core.JSONField{Name: "field"})
+	collection := kernel.NewBaseCollection("test")
+	collection.Fields.Add(&kernel.JSONField{Name: "field"})
 
-	record := core.NewRecord(collection)
+	record := kernel.NewRecord(collection)
 
 	var testPointer *string
 	var testStr string
@@ -1215,14 +1215,14 @@ func TestRecordUnmarshalJSONField(t *testing.T) {
 func TestRecordFindFileFieldByFile(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test")
+	collection := kernel.NewBaseCollection("test")
 	collection.Fields.Add(
-		&core.TextField{Name: "field1"},
-		&core.FileField{Name: "field2", MaxSelect: 1, MaxSize: 1},
-		&core.FileField{Name: "field3", MaxSelect: 2, MaxSize: 1},
+		&kernel.TextField{Name: "field1"},
+		&kernel.FileField{Name: "field2", MaxSelect: 1, MaxSize: 1},
+		&kernel.FileField{Name: "field3", MaxSelect: 2, MaxSize: 1},
 	)
 
-	m := core.NewRecord(collection)
+	m := kernel.NewRecord(collection)
 	m.Set("field1", "test")
 	m.Set("field2", "test.png")
 	m.Set("field3", []string{"test1.png", "test2.png"})
@@ -1260,19 +1260,19 @@ func TestRecordDBExport(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f1 := &core.TextField{Name: "field1"}
-	f2 := &core.FileField{Name: "field2", MaxSelect: 1, MaxSize: 1}
-	f3 := &core.SelectField{Name: "field3", MaxSelect: 2, Values: []string{"test1", "test2", "test3"}}
-	f4 := &core.RelationField{Name: "field4", MaxSelect: 2}
+	f1 := &kernel.TextField{Name: "field1"}
+	f2 := &kernel.FileField{Name: "field2", MaxSelect: 1, MaxSize: 1}
+	f3 := &kernel.SelectField{Name: "field3", MaxSelect: 2, Values: []string{"test1", "test2", "test3"}}
+	f4 := &kernel.RelationField{Name: "field4", MaxSelect: 2}
 
-	colBase := core.NewBaseCollection("test_base")
+	colBase := kernel.NewBaseCollection("test_base")
 	colBase.Fields.Add(f1, f2, f3, f4)
 
-	colAuth := core.NewAuthCollection("test_auth")
+	colAuth := kernel.NewAuthCollection("test_auth")
 	colAuth.Fields.Add(f1, f2, f3, f4)
 
 	scenarios := []struct {
-		collection *core.Collection
+		collection *kernel.Collection
 		expected   string
 	}{
 		{
@@ -1302,7 +1302,7 @@ func TestRecordDBExport(t *testing.T) {
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%s_%s", i, s.collection.Type, s.collection.Name), func(t *testing.T) {
-			record := core.NewRecord(s.collection)
+			record := kernel.NewRecord(s.collection)
 
 			record.Load(data)
 
@@ -1342,7 +1342,7 @@ func TestRecordIgnoreUnchangedFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	new := core.NewRecord(col)
+	new := kernel.NewRecord(col)
 
 	existing, err := app.FindRecordById(col, "mk5fmymtx4wsprk")
 	if err != nil {
@@ -1353,7 +1353,7 @@ func TestRecordIgnoreUnchangedFields(t *testing.T) {
 
 	scenarios := []struct {
 		ignoreUnchangedFields bool
-		record                *core.Record
+		record                *kernel.Record
 		expected              []string
 	}{
 		{
@@ -1408,24 +1408,24 @@ func TestRecordIgnoreUnchangedFields(t *testing.T) {
 func TestRecordPublicExportAndMarshalJSON(t *testing.T) {
 	t.Parallel()
 
-	f1 := &core.TextField{Name: "field1"}
-	f2 := &core.FileField{Name: "field2", MaxSelect: 1, MaxSize: 1}
-	f3 := &core.SelectField{Name: "field3", MaxSelect: 2, Values: []string{"test1", "test2", "test3"}}
-	f4 := &core.TextField{Name: "field4", Hidden: true}
-	f5 := &core.TextField{Name: "field5", Hidden: true}
-	f6 := &core.JSONField{Name: "field6"}
+	f1 := &kernel.TextField{Name: "field1"}
+	f2 := &kernel.FileField{Name: "field2", MaxSelect: 1, MaxSize: 1}
+	f3 := &kernel.SelectField{Name: "field3", MaxSelect: 2, Values: []string{"test1", "test2", "test3"}}
+	f4 := &kernel.TextField{Name: "field4", Hidden: true}
+	f5 := &kernel.TextField{Name: "field5", Hidden: true}
+	f6 := &kernel.JSONField{Name: "field6"}
 
-	colBase := core.NewBaseCollection("test_base")
+	colBase := kernel.NewBaseCollection("test_base")
 	colBase.Id = "_pbc_base_123"
 	colBase.Fields.Add(f1, f2, f3, f4, f5, f6)
 
-	colAuth := core.NewAuthCollection("test_auth")
+	colAuth := kernel.NewAuthCollection("test_auth")
 	colAuth.Id = "_pbc_auth_123"
 	colAuth.Fields.Add(f1, f2, f3, f4, f5, f6)
 
 	scenarios := []struct {
 		name                  string
-		collection            *core.Collection
+		collection            *kernel.Collection
 		ignoreEmailVisibility bool
 		withCustomData        bool
 		hideFields            []string
@@ -1549,7 +1549,7 @@ func TestRecordPublicExportAndMarshalJSON(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			m := core.NewRecord(s.collection)
+			m := kernel.NewRecord(s.collection)
 
 			m.Load(data)
 			m.IgnoreEmailVisibility(s.ignoreEmailVisibility)
@@ -1589,10 +1589,10 @@ func TestRecordPublicExportAndMarshalJSON(t *testing.T) {
 func TestRecordUnmarshalJSON(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test")
-	collection.Fields.Add(&core.TextField{Name: "text"})
+	collection := kernel.NewBaseCollection("test")
+	collection.Fields.Add(&kernel.TextField{Name: "text"})
 
-	record := core.NewRecord(collection)
+	record := kernel.NewRecord(collection)
 
 	data := map[string]any{
 		"text":   123,
@@ -1624,10 +1624,10 @@ func TestRecordUnmarshalJSON(t *testing.T) {
 func TestRecordReplaceModifiers(t *testing.T) {
 	t.Parallel()
 
-	collection := core.NewBaseCollection("test")
+	collection := kernel.NewBaseCollection("test")
 	collection.Fields.Add(
-		&mockField{core.TextField{Name: "mock"}},
-		&core.NumberField{Name: "number"},
+		&mockField{kernel.TextField{Name: "mock"}},
+		&kernel.NumberField{Name: "number"},
 	)
 
 	originalData := map[string]any{
@@ -1635,7 +1635,7 @@ func TestRecordReplaceModifiers(t *testing.T) {
 		"number": 2.1,
 	}
 
-	record := core.NewRecord(collection)
+	record := kernel.NewRecord(collection)
 	for k, v := range originalData {
 		record.Set(k, v)
 	}
@@ -1676,16 +1676,16 @@ func TestRecordValidate(t *testing.T) {
 	defer app.Cleanup()
 
 	// dummy collection to ensure that the specified field validators are triggered
-	collection := core.NewBaseCollection("validate_test")
+	collection := kernel.NewBaseCollection("validate_test")
 	collection.Fields.Add(
-		&core.TextField{Name: "f1", Min: 3},
-		&core.NumberField{Name: "f2", Required: true},
+		&kernel.TextField{Name: "f1", Min: 3},
+		&kernel.NumberField{Name: "f2", Required: true},
 	)
 	if err := app.Save(collection); err != nil {
 		t.Fatal(err)
 	}
 
-	record := core.NewRecord(collection)
+	record := kernel.NewRecord(collection)
 	record.Id = "!invalid"
 
 	t.Run("no data set", func(t *testing.T) {
@@ -1716,17 +1716,17 @@ func TestRecordModelEventSync(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	testRecords := make([]*core.Record, 4)
+	testRecords := make([]*kernel.Record, 4)
 	for i := 0; i < 4; i++ {
-		testRecords[i] = core.NewRecord(col)
+		testRecords[i] = kernel.NewRecord(col)
 		testRecords[i].Set("title", "sync_test_"+strconv.Itoa(i))
 		if err := app.Save(testRecords[i]); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	createModelEvent := func() *core.ModelEvent {
-		event := new(core.ModelEvent)
+	createModelEvent := func() *kernel.ModelEvent {
+		event := new(kernel.ModelEvent)
 		event.App = app
 		event.Context = context.Background()
 		event.Type = "test_a"
@@ -1734,35 +1734,35 @@ func TestRecordModelEventSync(t *testing.T) {
 		return event
 	}
 
-	createModelErrorEvent := func() *core.ModelErrorEvent {
-		event := new(core.ModelErrorEvent)
+	createModelErrorEvent := func() *kernel.ModelErrorEvent {
+		event := new(kernel.ModelErrorEvent)
 		event.ModelEvent = *createModelEvent()
 		event.Error = errors.New("error_a")
 		return event
 	}
 
-	changeRecordEventBefore := func(e *core.RecordEvent) {
+	changeRecordEventBefore := func(e *kernel.RecordEvent) {
 		e.Type = "test_b"
 		//nolint:staticcheck
 		e.Context = context.WithValue(context.Background(), "test", 123)
 		e.Record = testRecords[1]
 	}
 
-	modelEventFinalizerChange := func(e *core.ModelEvent) {
+	modelEventFinalizerChange := func(e *kernel.ModelEvent) {
 		e.Type = "test_c"
 		//nolint:staticcheck
 		e.Context = context.WithValue(context.Background(), "test", 456)
 		e.Model = testRecords[2]
 	}
 
-	changeRecordEventAfter := func(e *core.RecordEvent) {
+	changeRecordEventAfter := func(e *kernel.RecordEvent) {
 		e.Type = "test_d"
 		//nolint:staticcheck
 		e.Context = context.WithValue(context.Background(), "test", 789)
 		e.Record = testRecords[3]
 	}
 
-	expectedBeforeModelEventHandlerChecks := func(t *testing.T, e *core.ModelEvent) {
+	expectedBeforeModelEventHandlerChecks := func(t *testing.T, e *kernel.ModelEvent) {
 		if e.Type != "test_a" {
 			t.Fatalf("Expected type %q, got %q", "test_a", e.Type)
 		}
@@ -1776,7 +1776,7 @@ func TestRecordModelEventSync(t *testing.T) {
 		}
 	}
 
-	expectedAfterModelEventHandlerChecks := func(t *testing.T, e *core.ModelEvent) {
+	expectedAfterModelEventHandlerChecks := func(t *testing.T, e *kernel.ModelEvent) {
 		if e.Type != "test_d" {
 			t.Fatalf("Expected type %q, got %q", "test_d", e.Type)
 		}
@@ -1791,7 +1791,7 @@ func TestRecordModelEventSync(t *testing.T) {
 		}
 	}
 
-	expectedBeforeRecordEventHandlerChecks := func(t *testing.T, e *core.RecordEvent) {
+	expectedBeforeRecordEventHandlerChecks := func(t *testing.T, e *kernel.RecordEvent) {
 		if e.Type != "test_a" {
 			t.Fatalf("Expected type %q, got %q", "test_a", e.Type)
 		}
@@ -1805,7 +1805,7 @@ func TestRecordModelEventSync(t *testing.T) {
 		}
 	}
 
-	expectedAfterRecordEventHandlerChecks := func(t *testing.T, e *core.RecordEvent) {
+	expectedAfterRecordEventHandlerChecks := func(t *testing.T, e *kernel.RecordEvent) {
 		if e.Type != "test_c" {
 			t.Fatalf("Expected type %q, got %q", "test_c", e.Type)
 		}
@@ -1820,20 +1820,20 @@ func TestRecordModelEventSync(t *testing.T) {
 		}
 	}
 
-	modelEventFinalizer := func(e *core.ModelEvent) error {
+	modelEventFinalizer := func(e *kernel.ModelEvent) error {
 		modelEventFinalizerChange(e)
 		return nil
 	}
 
-	modelErrorEventFinalizer := func(e *core.ModelErrorEvent) error {
+	modelErrorEventFinalizer := func(e *kernel.ModelErrorEvent) error {
 		modelEventFinalizerChange(&e.ModelEvent)
 		e.Error = errors.New("error_c")
 		return nil
 	}
 
-	modelEventHandler := &hook.Handler[*core.ModelEvent]{
+	modelEventHandler := &hook.Handler[*kernel.ModelEvent]{
 		Priority: -999,
-		Func: func(e *core.ModelEvent) error {
+		Func: func(e *kernel.ModelEvent) error {
 			t.Run("before model", func(t *testing.T) {
 				expectedBeforeModelEventHandlerChecks(t, e)
 			})
@@ -1848,9 +1848,9 @@ func TestRecordModelEventSync(t *testing.T) {
 		},
 	}
 
-	modelErrorEventHandler := &hook.Handler[*core.ModelErrorEvent]{
+	modelErrorEventHandler := &hook.Handler[*kernel.ModelErrorEvent]{
 		Priority: -999,
-		Func: func(e *core.ModelErrorEvent) error {
+		Func: func(e *kernel.ModelErrorEvent) error {
 			t.Run("before model error", func(t *testing.T) {
 				expectedBeforeModelEventHandlerChecks(t, &e.ModelEvent)
 				if v := e.Error.Error(); v != "error_a" {
@@ -1871,9 +1871,9 @@ func TestRecordModelEventSync(t *testing.T) {
 		},
 	}
 
-	recordEventHandler := &hook.Handler[*core.RecordEvent]{
+	recordEventHandler := &hook.Handler[*kernel.RecordEvent]{
 		Priority: -999,
-		Func: func(e *core.RecordEvent) error {
+		Func: func(e *kernel.RecordEvent) error {
 			t.Run("before record", func(t *testing.T) {
 				expectedBeforeRecordEventHandlerChecks(t, e)
 			})
@@ -1892,9 +1892,9 @@ func TestRecordModelEventSync(t *testing.T) {
 		},
 	}
 
-	recordErrorEventHandler := &hook.Handler[*core.RecordErrorEvent]{
+	recordErrorEventHandler := &hook.Handler[*kernel.RecordErrorEvent]{
 		Priority: -999,
-		Func: func(e *core.RecordErrorEvent) error {
+		Func: func(e *kernel.RecordErrorEvent) error {
 			t.Run("before record error", func(t *testing.T) {
 				expectedBeforeRecordEventHandlerChecks(t, &e.RecordEvent)
 				if v := e.Error.Error(); v != "error_a" {
@@ -1992,22 +1992,22 @@ func TestRecordSave(t *testing.T) {
 
 	scenarios := []struct {
 		name        string
-		record      func(app core.App) (*core.Record, error)
+		record      func(app kernel.App) (*kernel.Record, error)
 		expectError bool
 	}{
 		// trigger validators
 		{
 			name: "create - trigger validators",
-			record: func(app core.App) (*core.Record, error) {
+			record: func(app kernel.App) (*kernel.Record, error) {
 				c, _ := app.FindCollectionByNameOrId("demo2")
-				record := core.NewRecord(c)
+				record := kernel.NewRecord(c)
 				return record, nil
 			},
 			expectError: true,
 		},
 		{
 			name: "update - trigger validators",
-			record: func(app core.App) (*core.Record, error) {
+			record: func(app kernel.App) (*kernel.Record, error) {
 				record, _ := app.FindFirstRecordByData("demo2", "title", "test1")
 				record.Set("title", "")
 				return record, nil
@@ -2018,9 +2018,9 @@ func TestRecordSave(t *testing.T) {
 		// create
 		{
 			name: "create base record",
-			record: func(app core.App) (*core.Record, error) {
+			record: func(app kernel.App) (*kernel.Record, error) {
 				c, _ := app.FindCollectionByNameOrId("demo2")
-				record := core.NewRecord(c)
+				record := kernel.NewRecord(c)
 				record.Set("title", "new_test")
 				return record, nil
 			},
@@ -2028,9 +2028,9 @@ func TestRecordSave(t *testing.T) {
 		},
 		{
 			name: "create auth record",
-			record: func(app core.App) (*core.Record, error) {
+			record: func(app kernel.App) (*kernel.Record, error) {
 				c, _ := app.FindCollectionByNameOrId("nologin")
-				record := core.NewRecord(c)
+				record := kernel.NewRecord(c)
 				record.Set("email", "test_new@example.com")
 				record.Set("password", "1234567890")
 				return record, nil
@@ -2039,9 +2039,9 @@ func TestRecordSave(t *testing.T) {
 		},
 		{
 			name: "create view record",
-			record: func(app core.App) (*core.Record, error) {
+			record: func(app kernel.App) (*kernel.Record, error) {
 				c, _ := app.FindCollectionByNameOrId("view2")
-				record := core.NewRecord(c)
+				record := kernel.NewRecord(c)
 				record.Set("state", true)
 				return record, nil
 			},
@@ -2051,7 +2051,7 @@ func TestRecordSave(t *testing.T) {
 		// update
 		{
 			name: "update base record",
-			record: func(app core.App) (*core.Record, error) {
+			record: func(app kernel.App) (*kernel.Record, error) {
 				record, _ := app.FindFirstRecordByData("demo2", "title", "test1")
 				record.Set("title", "test_new")
 				return record, nil
@@ -2060,7 +2060,7 @@ func TestRecordSave(t *testing.T) {
 		},
 		{
 			name: "update auth record",
-			record: func(app core.App) (*core.Record, error) {
+			record: func(app kernel.App) (*kernel.Record, error) {
 				record, _ := app.FindAuthRecordByEmail("nologin", "test@example.com")
 				record.Set("name", "test_new")
 				record.Set("email", "test_new@example.com")
@@ -2070,7 +2070,7 @@ func TestRecordSave(t *testing.T) {
 		},
 		{
 			name: "update view record",
-			record: func(app core.App) (*core.Record, error) {
+			record: func(app kernel.App) (*kernel.Record, error) {
 				record, _ := app.FindFirstRecordByData("view2", "state", true)
 				record.Set("state", false)
 				return record, nil
@@ -2142,7 +2142,7 @@ func TestRecordSaveIdFromOtherCollection(t *testing.T) {
 	authCollection, _ := app.FindCollectionByNameOrId("nologin")
 
 	// base collection test
-	r1 := core.NewRecord(baseCollection)
+	r1 := kernel.NewRecord(baseCollection)
 	r1.Set("title", "test_new")
 	r1.Set("id", "mk5fmymtx4wsprk") // existing id of demo3 record
 	if err := app.Save(r1); err != nil {
@@ -2150,7 +2150,7 @@ func TestRecordSaveIdFromOtherCollection(t *testing.T) {
 	}
 
 	// auth collection test
-	r2 := core.NewRecord(authCollection)
+	r2 := kernel.NewRecord(authCollection)
 	r2.SetEmail("test_new@example.com")
 	r2.SetPassword("1234567890")
 	r2.Set("id", "gk390qegs4y47wn") // existing id of "clients" record
@@ -2256,7 +2256,7 @@ func TestRecordDelete(t *testing.T) {
 
 	// delete unsaved record
 	// ---
-	newRec := core.NewRecord(demoCollection)
+	newRec := kernel.NewRecord(demoCollection)
 	if err := app.Delete(newRec); err == nil {
 		t.Fatal("(newRec) Didn't expect to succeed deleting unsaved record")
 	}
@@ -2345,16 +2345,16 @@ func TestRecordDeleteWithMultipleRelationCascade(t *testing.T) {
 
 	// create a mock collection with self referencing multiple relation field
 	// ---
-	collection := core.NewBaseCollection("test")
+	collection := kernel.NewBaseCollection("test")
 	err := app.Save(collection)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// for simpler mocks
-	collection.Fields.GetByName("id").(*core.TextField).Min = 1
+	collection.Fields.GetByName("id").(*kernel.TextField).Min = 1
 
-	collection.Fields.Add(&core.RelationField{
+	collection.Fields.Add(&kernel.RelationField{
 		Name:          "rels",
 		CollectionId:  collection.Id,
 		MaxSelect:     99,
@@ -2376,7 +2376,7 @@ func TestRecordDeleteWithMultipleRelationCascade(t *testing.T) {
 		"e": {"c", "d"},
 	}
 	for id, rels := range relsData {
-		record := core.NewRecord(collection)
+		record := kernel.NewRecord(collection)
 		record.Set("id", id)
 		record.Set("rels", rels)
 		err = app.SaveNoValidate(record) // map is not ordered
@@ -2476,13 +2476,13 @@ func TestRecordDeleteBatchProcessing(t *testing.T) {
 	}
 }
 
-func createMockBatchProcessingData(app core.App) error {
+func createMockBatchProcessingData(app kernel.App) error {
 	// create mock collection without relation
-	c1 := core.NewBaseCollection("c1")
+	c1 := kernel.NewBaseCollection("c1")
 	c1.Id = "c1"
 	c1.Fields.Add(
-		&core.TextField{Name: "text"},
-		&core.RelationField{
+		&kernel.TextField{Name: "text"},
+		&kernel.RelationField{
 			Name:          "rel",
 			MaxSelect:     1,
 			CollectionId:  "c1",
@@ -2494,11 +2494,11 @@ func createMockBatchProcessingData(app core.App) error {
 	}
 
 	// create mock collection with a multi-rel field
-	c2 := core.NewBaseCollection("c2")
+	c2 := kernel.NewBaseCollection("c2")
 	c2.Id = "c2"
 	c2.Fields.Add(
-		&core.TextField{Name: "text"},
-		&core.RelationField{
+		&kernel.TextField{Name: "text"},
+		&kernel.RelationField{
 			Name:          "rel",
 			MaxSelect:     10,
 			CollectionId:  "c1",
@@ -2510,10 +2510,10 @@ func createMockBatchProcessingData(app core.App) error {
 	}
 
 	// create mock collection with a single-rel field
-	c3 := core.NewBaseCollection("c3")
+	c3 := kernel.NewBaseCollection("c3")
 	c3.Id = "c3"
 	c3.Fields.Add(
-		&core.RelationField{
+		&kernel.RelationField{
 			Name:          "rel",
 			MaxSelect:     1,
 			CollectionId:  "c1",
@@ -2525,26 +2525,26 @@ func createMockBatchProcessingData(app core.App) error {
 	}
 
 	// insert mock records
-	c1RecordA := core.NewRecord(c1)
+	c1RecordA := kernel.NewRecord(c1)
 	c1RecordA.Id = "a"
 	c1RecordA.Set("rel", c1RecordA.Id) // self reference
 	if err := app.SaveNoValidate(c1RecordA); err != nil {
 		return err
 	}
-	c1RecordB := core.NewRecord(c1)
+	c1RecordB := kernel.NewRecord(c1)
 	c1RecordB.Id = "b"
 	c1RecordB.Set("rel", c1RecordA.Id) // rel to another record from the same collection
 	if err := app.SaveNoValidate(c1RecordB); err != nil {
 		return err
 	}
 	for i := 0; i < 4500; i++ {
-		c2Record := core.NewRecord(c2)
+		c2Record := kernel.NewRecord(c2)
 		c2Record.Set("rel", []string{c1RecordA.Id, c1RecordB.Id})
 		if err := app.SaveNoValidate(c2Record); err != nil {
 			return err
 		}
 
-		c3Record := core.NewRecord(c3)
+		c3Record := kernel.NewRecord(c3)
 		c3Record.Set("rel", c1RecordA.Id)
 		if err := app.SaveNoValidate(c3Record); err != nil {
 			return err
@@ -2553,7 +2553,7 @@ func createMockBatchProcessingData(app core.App) error {
 
 	// set the same id as the relation for at least 1 record
 	// to check whether the correct condition will be added
-	c3Record := core.NewRecord(c3)
+	c3Record := kernel.NewRecord(c3)
 	c3Record.Set("rel", c1RecordA.Id)
 	c3Record.Id = c1RecordA.Id
 	if err := app.SaveNoValidate(c3Record); err != nil {
@@ -2566,13 +2566,13 @@ func createMockBatchProcessingData(app core.App) error {
 // -------------------------------------------------------------------
 
 type mockField struct {
-	core.TextField
+	kernel.TextField
 }
 
-func (f *mockField) FindGetter(key string) core.GetterFunc {
+func (f *mockField) FindGetter(key string) kernel.GetterFunc {
 	switch key {
 	case f.Name + ":test":
-		return func(record *core.Record) any {
+		return func(record *kernel.Record) any {
 			return "modifier_get"
 		}
 	default:
@@ -2580,14 +2580,14 @@ func (f *mockField) FindGetter(key string) core.GetterFunc {
 	}
 }
 
-func (f *mockField) FindSetter(key string) core.SetterFunc {
+func (f *mockField) FindSetter(key string) kernel.SetterFunc {
 	switch key {
 	case f.Name:
-		return func(record *core.Record, raw any) {
+		return func(record *kernel.Record, raw any) {
 			record.SetRaw(f.Name, cast.ToString(raw))
 		}
 	case f.Name + ":test":
-		return func(record *core.Record, raw any) {
+		return func(record *kernel.Record, raw any) {
 			record.SetRaw(f.Name, "modifier_set")
 		}
 	default:

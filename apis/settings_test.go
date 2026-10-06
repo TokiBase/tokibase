@@ -71,7 +71,7 @@ func TestSettingsList(t *testing.T) {
 				app.OnSettingsListRequest().BindFunc(func(e *core.SettingsListRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -236,7 +236,7 @@ func TestSettingsSet(t *testing.T) {
 				app.OnSettingsUpdateRequest().BindFunc(func(e *core.SettingsUpdateRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {

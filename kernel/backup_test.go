@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/archive"
 	"github.com/tokibase/tokibase/tools/list"
@@ -25,11 +25,11 @@ func TestCreateBackup(t *testing.T) {
 	expectedAppNamePrefix := "test_" + strings.Repeat("a", 45)
 
 	// test pending error
-	app.Store().Set(core.StoreKeyActiveBackup, "")
+	app.Store().Set(kernel.StoreKeyActiveBackup, "")
 	if err := app.CreateBackup(context.Background(), "test.zip"); err == nil {
 		t.Fatal("Expected pending error, got nil")
 	}
-	app.Store().Remove(core.StoreKeyActiveBackup)
+	app.Store().Remove(kernel.StoreKeyActiveBackup)
 
 	// create with auto generated name
 	if err := app.CreateBackup(context.Background(), ""); err != nil {
@@ -46,7 +46,7 @@ func TestCreateBackup(t *testing.T) {
 		t.Fatal("Failed to create and replace a backup with the same name")
 	}
 
-	backupsDir := filepath.Join(app.DataDir(), core.LocalBackupsDirName)
+	backupsDir := filepath.Join(app.DataDir(), kernel.LocalBackupsDirName)
 
 	entries, err := os.ReadDir(backupsDir)
 	if err != nil {
@@ -98,11 +98,11 @@ func TestRestoreBackup(t *testing.T) {
 	}
 
 	// test pending error
-	app.Store().Set(core.StoreKeyActiveBackup, "")
+	app.Store().Set(kernel.StoreKeyActiveBackup, "")
 	if err := app.RestoreBackup(context.Background(), "test"); err == nil {
 		t.Fatal("Expected pending error, got nil")
 	}
-	app.Store().Remove(core.StoreKeyActiveBackup)
+	app.Store().Remove(kernel.StoreKeyActiveBackup)
 
 	// missing backup
 	if err := app.RestoreBackup(context.Background(), "missing"); err == nil {
@@ -112,7 +112,7 @@ func TestRestoreBackup(t *testing.T) {
 
 // -------------------------------------------------------------------
 
-func verifyBackupContent(app core.App, path string) error {
+func verifyBackupContent(app kernel.App, path string) error {
 	dir, err := os.MkdirTemp("", "backup_test")
 	if err != nil {
 		return err

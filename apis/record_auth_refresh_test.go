@@ -154,7 +154,7 @@ func TestRecordAuthRefresh(t *testing.T) {
 				app.OnRecordAuthRefreshRequest().BindFunc(func(e *core.RecordAuthRefreshRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {

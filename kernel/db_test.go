@@ -6,15 +6,15 @@ import (
 	"testing"
 
 	"github.com/pocketbase/dbx"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
 func TestGenerateDefaultRandomId(t *testing.T) {
 	t.Parallel()
 
-	id1 := core.GenerateDefaultRandomId()
-	id2 := core.GenerateDefaultRandomId()
+	id1 := kernel.GenerateDefaultRandomId()
+	id2 := kernel.GenerateDefaultRandomId()
 
 	if id1 == id2 {
 		t.Fatalf("Expected id1 and id2 to differ, got %q", id1)
@@ -35,8 +35,8 @@ func TestModelQuery(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	modelsQuery := app.ModelQuery(&core.Collection{})
-	logsModelQuery := app.AuxModelQuery(&core.Collection{})
+	modelsQuery := app.ModelQuery(&kernel.Collection{})
+	logsModelQuery := app.AuxModelQuery(&kernel.Collection{})
 
 	if app.ConcurrentDB() == modelsQuery.Info().Builder {
 		t.Fatalf("ModelQuery() is not using app.ConcurrentDB()")
@@ -65,7 +65,7 @@ func TestValidate(t *testing.T) {
 
 	testErr := errors.New("test")
 
-	app.OnModelValidate().BindFunc(func(e *core.ModelEvent) error {
+	app.OnModelValidate().BindFunc(func(e *kernel.ModelEvent) error {
 		return testErr
 	})
 
@@ -85,7 +85,7 @@ func TestValidateWithContext(t *testing.T) {
 
 	testErr := errors.New("test")
 
-	app.OnModelValidate().BindFunc(func(e *core.ModelEvent) error {
+	app.OnModelValidate().BindFunc(func(e *kernel.ModelEvent) error {
 		if v := e.Context.Value("test"); v != 123 {
 			t.Fatalf("Expected 'test' context value %#v, got %#v", 123, v)
 		}
@@ -104,10 +104,10 @@ func TestValidateWithContext(t *testing.T) {
 // -------------------------------------------------------------------
 
 type mockSuperusers struct {
-	core.BaseModel
+	kernel.BaseModel
 	Email string `db:"email"`
 }
 
 func (m *mockSuperusers) TableName() string {
-	return core.CollectionNameSuperusers
+	return kernel.CollectionNameSuperusers
 }

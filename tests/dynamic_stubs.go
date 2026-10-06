@@ -5,10 +5,11 @@ import (
 	"time"
 
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/types"
 )
 
-func StubOTPRecords(app core.App) error {
+func StubOTPRecords(app kernel.App) error {
 	superuser2, err := app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test2@example.com")
 	if err != nil {
 		return err
@@ -52,7 +53,7 @@ func StubOTPRecords(app core.App) error {
 	return nil
 }
 
-func StubMFARecords(app core.App) error {
+func StubMFARecords(app kernel.App) error {
 	superuser2, err := app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test2@example.com")
 	if err != nil {
 		return err

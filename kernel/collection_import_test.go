@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/pocketbase/dbx"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
@@ -16,13 +16,13 @@ func TestImportCollections(t *testing.T) {
 	testApp, _ := tests.NewTestApp()
 	defer testApp.Cleanup()
 
-	var regularCollections []*core.Collection
+	var regularCollections []*kernel.Collection
 	err := testApp.CollectionQuery().AndWhere(dbx.HashExp{"system": false}).All(&regularCollections)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var systemCollections []*core.Collection
+	var systemCollections []*kernel.Collection
 	err = testApp.CollectionQuery().AndWhere(dbx.HashExp{"system": true}).All(&systemCollections)
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +38,7 @@ func TestImportCollections(t *testing.T) {
 		deleteMissing          bool
 		expectError            bool
 		expectCollectionsCount int
-		afterTestFunc          func(testApp *tests.TestApp, resultCollections []*core.Collection)
+		afterTestFunc          func(testApp *tests.TestApp, resultCollections []*kernel.Collection)
 	}{
 		{
 			name:                   "empty collections",
@@ -166,16 +166,16 @@ func TestImportCollections(t *testing.T) {
 			deleteMissing:          false,
 			expectError:            false,
 			expectCollectionsCount: totalCollections + 1,
-			afterTestFunc: func(testApp *tests.TestApp, resultCollections []*core.Collection) {
+			afterTestFunc: func(testApp *tests.TestApp, resultCollections []*kernel.Collection) {
 				expectedCollectionFields := map[string]int{
-					core.CollectionNameAuthOrigins: 6,
-					"nologin":                      10,
-					"demo1":                        19,
-					"demo2":                        5,
-					"demo3":                        5,
-					"demo4":                        16,
-					"demo5":                        9,
-					"new_import":                   2,
+					kernel.CollectionNameAuthOrigins: 6,
+					"nologin":                        10,
+					"demo1":                          19,
+					"demo2":                          5,
+					"demo3":                          5,
+					"demo4":                          16,
+					"demo5":                          9,
+					"new_import":                     2,
 				}
 				for name, expectedCount := range expectedCollectionFields {
 					collection, err := testApp.FindCollectionByNameOrId(name)
@@ -204,7 +204,7 @@ func TestImportCollections(t *testing.T) {
 			}
 
 			// check collections count
-			collections := []*core.Collection{}
+			collections := []*kernel.Collection{}
 			if err := testApp.CollectionQuery().All(&collections); err != nil {
 				t.Fatal(err)
 			}
@@ -225,13 +225,13 @@ func TestImportCollectionsByMarshaledJSON(t *testing.T) {
 	testApp, _ := tests.NewTestApp()
 	defer testApp.Cleanup()
 
-	var regularCollections []*core.Collection
+	var regularCollections []*kernel.Collection
 	err := testApp.CollectionQuery().AndWhere(dbx.HashExp{"system": false}).All(&regularCollections)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var systemCollections []*core.Collection
+	var systemCollections []*kernel.Collection
 	err = testApp.CollectionQuery().AndWhere(dbx.HashExp{"system": true}).All(&systemCollections)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func TestImportCollectionsByMarshaledJSON(t *testing.T) {
 		deleteMissing          bool
 		expectError            bool
 		expectCollectionsCount int
-		afterTestFunc          func(testApp *tests.TestApp, resultCollections []*core.Collection)
+		afterTestFunc          func(testApp *tests.TestApp, resultCollections []*kernel.Collection)
 	}{
 		{
 			name:                   "invalid json array",
@@ -304,7 +304,7 @@ func TestImportCollectionsByMarshaledJSON(t *testing.T) {
 			}
 
 			// check collections count
-			collections := []*core.Collection{}
+			collections := []*kernel.Collection{}
 			if err := testApp.CollectionQuery().All(&collections); err != nil {
 				t.Fatal(err)
 			}

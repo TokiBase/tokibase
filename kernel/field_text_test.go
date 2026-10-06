@@ -6,19 +6,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
 func TestTextFieldBaseMethods(t *testing.T) {
-	testFieldBaseMethods(t, core.FieldTypeText)
+	testFieldBaseMethods(t, kernel.FieldTypeText)
 }
 
 func TestTextFieldColumnType(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.TextField{}
+	f := &kernel.TextField{}
 
 	expected := "TEXT DEFAULT '' NOT NULL"
 
@@ -31,8 +31,8 @@ func TestTextFieldPrepareValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.TextField{}
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	f := &kernel.TextField{}
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 
 	scenarios := []struct {
 		raw      any
@@ -80,15 +80,15 @@ func TestTextFieldValidateValue(t *testing.T) {
 
 	scenarios := []struct {
 		name        string
-		field       *core.TextField
-		record      func() *core.Record
+		field       *kernel.TextField
+		record      func() *kernel.Record
 		expectError bool
 	}{
 		{
 			"invalid raw value",
-			&core.TextField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 123)
 				return record
 			},
@@ -96,9 +96,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (not required)",
-			&core.TextField{Name: "test", Pattern: `\d+`, Min: 10, Max: 100}, // other fields validators should be ignored
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", Pattern: `\d+`, Min: 10, Max: 100}, // other fields validators should be ignored
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "")
 				return record
 			},
@@ -106,9 +106,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (required)",
-			&core.TextField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "")
 				return record
 			},
@@ -116,9 +116,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"non-zero field value (required)",
-			&core.TextField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "abc")
 				return record
 			},
@@ -126,9 +126,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"special forbidden character / (non-primaryKey)",
-			&core.TextField{Name: "test", PrimaryKey: false},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: false},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "abc/")
 				return record
 			},
@@ -136,9 +136,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"special forbidden character \\ (non-primaryKey)",
-			&core.TextField{Name: "test", PrimaryKey: false},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: false},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "abc\\")
 				return record
 			},
@@ -146,9 +146,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"special forbidden character . (non-primaryKey)",
-			&core.TextField{Name: "test", PrimaryKey: false},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: false},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "abc.")
 				return record
 			},
@@ -156,9 +156,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"special forbidden character ' ' (non-primaryKey)",
-			&core.TextField{Name: "test", PrimaryKey: false},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: false},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "ab c")
 				return record
 			},
@@ -166,9 +166,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"special forbidden character * (non-primaryKey)",
-			&core.TextField{Name: "test", PrimaryKey: false},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: false},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "abc*")
 				return record
 			},
@@ -176,9 +176,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"special forbidden character / (primaryKey)",
-			&core.TextField{Name: "test", PrimaryKey: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "abc/")
 				return record
 			},
@@ -186,9 +186,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"special forbidden character \\ (primaryKey)",
-			&core.TextField{Name: "test", PrimaryKey: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "abc\\")
 				return record
 			},
@@ -196,9 +196,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"special forbidden character . (primaryKey)",
-			&core.TextField{Name: "test", PrimaryKey: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "abc.")
 				return record
 			},
@@ -206,9 +206,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"special forbidden character ' ' (primaryKey)",
-			&core.TextField{Name: "test", PrimaryKey: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "ab c")
 				return record
 			},
@@ -216,9 +216,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"special forbidden character * (primaryKey; used in the realtime events too)",
-			&core.TextField{Name: "test", PrimaryKey: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "abc*")
 				return record
 			},
@@ -226,9 +226,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"reserved pk literal (non-primaryKey)",
-			&core.TextField{Name: "test", PrimaryKey: false},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: false},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "aUx")
 				return record
 			},
@@ -236,9 +236,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"reserved pk literal (primaryKey)",
-			&core.TextField{Name: "test", PrimaryKey: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "aUx")
 				return record
 			},
@@ -246,9 +246,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"reserved pk literal (non-exact match, primaryKey)",
-			&core.TextField{Name: "test", PrimaryKey: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "aUx-")
 				return record
 			},
@@ -256,9 +256,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (primaryKey)",
-			&core.TextField{Name: "test", PrimaryKey: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "")
 				return record
 			},
@@ -266,9 +266,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"non-zero field value (primaryKey)",
-			&core.TextField{Name: "test", PrimaryKey: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "abcd")
 				return record
 			},
@@ -276,9 +276,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"case-insensitive duplicated primary key check",
-			&core.TextField{Name: "test", PrimaryKey: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", PrimaryKey: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", strings.ToUpper(existingRecord.Id))
 				return record
 			},
@@ -286,9 +286,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"< min",
-			&core.TextField{Name: "test", Min: 4},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", Min: 4},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "абв") // multi-byte
 				return record
 			},
@@ -296,9 +296,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			">= min",
-			&core.TextField{Name: "test", Min: 3},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", Min: 3},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "абв") // multi-byte
 				return record
 			},
@@ -306,9 +306,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"> default max",
-			&core.TextField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", strings.Repeat("a", 5001))
 				return record
 			},
@@ -316,9 +316,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"<= default max",
-			&core.TextField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", strings.Repeat("a", 500))
 				return record
 			},
@@ -326,9 +326,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"> max",
-			&core.TextField{Name: "test", Max: 2},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", Max: 2},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "абв") // multi-byte
 				return record
 			},
@@ -336,9 +336,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"<= max",
-			&core.TextField{Name: "test", Min: 3},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", Min: 3},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "абв") // multi-byte
 				return record
 			},
@@ -346,9 +346,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"mismatched pattern",
-			&core.TextField{Name: "test", Pattern: `\d+`},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", Pattern: `\d+`},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "abc")
 				return record
 			},
@@ -356,9 +356,9 @@ func TestTextFieldValidateValue(t *testing.T) {
 		},
 		{
 			"matched pattern",
-			&core.TextField{Name: "test", Pattern: `\d+`},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.TextField{Name: "test", Pattern: `\d+`},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "123")
 				return record
 			},
@@ -379,22 +379,22 @@ func TestTextFieldValidateValue(t *testing.T) {
 }
 
 func TestTextFieldValidateSettings(t *testing.T) {
-	testDefaultFieldIdValidation(t, core.FieldTypeText)
-	testDefaultFieldNameValidation(t, core.FieldTypeText)
-	testDefaultFieldHelpValidation[core.TextField](t)
+	testDefaultFieldIdValidation(t, kernel.FieldTypeText)
+	testDefaultFieldNameValidation(t, kernel.FieldTypeText)
+	testDefaultFieldHelpValidation[kernel.TextField](t)
 
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
 	scenarios := []struct {
 		name         string
-		field        func() *core.TextField
+		field        func() *kernel.TextField
 		expectErrors []string
 	}{
 		{
 			"zero minimal",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:   "test",
 					Name: "test",
 				}
@@ -403,8 +403,8 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"primaryKey without required",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:         "test",
 					Name:       "id",
 					PrimaryKey: true,
@@ -415,8 +415,8 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"primaryKey without pattern",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:         "test",
 					Name:       "id",
 					PrimaryKey: true,
@@ -427,8 +427,8 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"primaryKey with hidden",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:         "test",
 					Name:       "id",
 					Required:   true,
@@ -441,8 +441,8 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"primaryKey with name != id",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:         "test",
 					Name:       "test",
 					PrimaryKey: true,
@@ -454,8 +454,8 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"multiple primaryKey fields",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:         "test2",
 					Name:       "id",
 					PrimaryKey: true,
@@ -467,8 +467,8 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"invalid pattern",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:      "test2",
 					Name:    "id",
 					Pattern: `(invalid`,
@@ -478,8 +478,8 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"valid pattern",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:      "test2",
 					Name:    "id",
 					Pattern: `\d+`,
@@ -489,8 +489,8 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"invalid autogeneratePattern",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:                  "test2",
 					Name:                "id",
 					AutogeneratePattern: `(invalid`,
@@ -500,8 +500,8 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"valid autogeneratePattern",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:                  "test2",
 					Name:                "id",
 					AutogeneratePattern: `[a-z]+`,
@@ -511,8 +511,8 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"conflicting pattern and autogeneratePattern",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:                  "test2",
 					Name:                "id",
 					Pattern:             `\d+`,
@@ -523,8 +523,8 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"Max > safe json int",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:   "test",
 					Name: "test",
 					Max:  1 << 53,
@@ -534,8 +534,8 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"Max < 0",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:   "test",
 					Name: "test",
 					Max:  -1,
@@ -545,8 +545,8 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"Min > safe json int",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:   "test",
 					Name: "test",
 					Min:  1 << 53,
@@ -556,8 +556,8 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"Min < 0",
-			func() *core.TextField {
-				return &core.TextField{
+			func() *kernel.TextField {
+				return &kernel.TextField{
 					Id:   "test",
 					Name: "test",
 					Min:  -1,
@@ -571,7 +571,7 @@ func TestTextFieldValidateSettings(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			field := s.field()
 
-			collection := core.NewBaseCollection("test_collection")
+			collection := kernel.NewBaseCollection("test_collection")
 			collection.Fields.GetByName("id").SetId("test") // set a dummy known id so that it can be replaced
 			collection.Fields.Add(field)
 
@@ -586,48 +586,48 @@ func TestTextFieldAutogenerate(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name       string
 		actionName string
-		field      *core.TextField
-		record     func() *core.Record
+		field      *kernel.TextField
+		record     func() *kernel.Record
 		expected   string
 	}{
 		{
 			"non-matching action",
-			core.InterceptorActionUpdate,
-			&core.TextField{Name: "test", AutogeneratePattern: "abc"},
-			func() *core.Record {
-				return core.NewRecord(collection)
+			kernel.InterceptorActionUpdate,
+			&kernel.TextField{Name: "test", AutogeneratePattern: "abc"},
+			func() *kernel.Record {
+				return kernel.NewRecord(collection)
 			},
 			"",
 		},
 		{
 			"matching action (create)",
-			core.InterceptorActionCreate,
-			&core.TextField{Name: "test", AutogeneratePattern: "abc"},
-			func() *core.Record {
-				return core.NewRecord(collection)
+			kernel.InterceptorActionCreate,
+			&kernel.TextField{Name: "test", AutogeneratePattern: "abc"},
+			func() *kernel.Record {
+				return kernel.NewRecord(collection)
 			},
 			"abc",
 		},
 		{
 			"matching action (validate)",
-			core.InterceptorActionValidate,
-			&core.TextField{Name: "test", AutogeneratePattern: "abc"},
-			func() *core.Record {
-				return core.NewRecord(collection)
+			kernel.InterceptorActionValidate,
+			&kernel.TextField{Name: "test", AutogeneratePattern: "abc"},
+			func() *kernel.Record {
+				return kernel.NewRecord(collection)
 			},
 			"abc",
 		},
 		{
 			"existing non-zero value",
-			core.InterceptorActionCreate,
-			&core.TextField{Name: "test", AutogeneratePattern: "abc"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			kernel.InterceptorActionCreate,
+			&kernel.TextField{Name: "test", AutogeneratePattern: "abc"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "123")
 				return record
 			},
@@ -635,10 +635,10 @@ func TestTextFieldAutogenerate(t *testing.T) {
 		},
 		{
 			"non-new record",
-			core.InterceptorActionValidate,
-			&core.TextField{Name: "test", AutogeneratePattern: "abc"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			kernel.InterceptorActionValidate,
+			&kernel.TextField{Name: "test", AutogeneratePattern: "abc"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.Id = "test"
 				record.PostScan()
 				return record
@@ -677,7 +677,7 @@ func TestTextFieldFindSetter(t *testing.T) {
 		name      string
 		key       string
 		value     any
-		field     *core.TextField
+		field     *kernel.TextField
 		hasSetter bool
 		expected  string
 	}{
@@ -685,7 +685,7 @@ func TestTextFieldFindSetter(t *testing.T) {
 			"no match",
 			"example",
 			"abc",
-			&core.TextField{Name: "test", AutogeneratePattern: "test"},
+			&kernel.TextField{Name: "test", AutogeneratePattern: "test"},
 			false,
 			"",
 		},
@@ -693,7 +693,7 @@ func TestTextFieldFindSetter(t *testing.T) {
 			"exact match",
 			"test",
 			"abc",
-			&core.TextField{Name: "test", AutogeneratePattern: "test"},
+			&kernel.TextField{Name: "test", AutogeneratePattern: "test"},
 			true,
 			"abc",
 		},
@@ -701,7 +701,7 @@ func TestTextFieldFindSetter(t *testing.T) {
 			"autogenerate modifier",
 			"test:autogenerate",
 			"abc",
-			&core.TextField{Name: "test", AutogeneratePattern: "test"},
+			&kernel.TextField{Name: "test", AutogeneratePattern: "test"},
 			true,
 			"abctest",
 		},
@@ -709,7 +709,7 @@ func TestTextFieldFindSetter(t *testing.T) {
 			"autogenerate modifier without AutogeneratePattern option",
 			"test:autogenerate",
 			"abc",
-			&core.TextField{Name: "test"},
+			&kernel.TextField{Name: "test"},
 			true,
 			"abc",
 		},
@@ -717,7 +717,7 @@ func TestTextFieldFindSetter(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			collection := core.NewBaseCollection("test_collection")
+			collection := kernel.NewBaseCollection("test_collection")
 			collection.Fields.Add(s.field)
 
 			setter := s.field.FindSetter(s.key)
@@ -731,7 +731,7 @@ func TestTextFieldFindSetter(t *testing.T) {
 				return
 			}
 
-			record := core.NewRecord(collection)
+			record := kernel.NewRecord(collection)
 
 			setter(record, s.value)
 

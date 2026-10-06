@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/pocketbase/dbx"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/list"
 	"github.com/tokibase/tokibase/tools/types"
@@ -28,26 +28,26 @@ func TestSyncRecordTableSchema(t *testing.T) {
 	}
 	updatedCollection.Name = "demo_renamed"
 	updatedCollection.Fields.RemoveByName("active")
-	updatedCollection.Fields.Add(&core.EmailField{
+	updatedCollection.Fields.Add(&kernel.EmailField{
 		Name: "new_field",
 	})
-	updatedCollection.Fields.Add(&core.EmailField{
+	updatedCollection.Fields.Add(&kernel.EmailField{
 		Id:   updatedCollection.Fields.GetByName("title").GetId(),
 		Name: "title_renamed",
 	})
 	updatedCollection.Indexes = types.JSONArray[string]{"create index idx_title_renamed on anything (title_renamed)"}
 
-	baseCol := core.NewBaseCollection("new_base")
-	baseCol.Fields.Add(&core.TextField{Name: "test"})
+	baseCol := kernel.NewBaseCollection("new_base")
+	baseCol.Fields.Add(&kernel.TextField{Name: "test"})
 
-	authCol := core.NewAuthCollection("new_auth")
-	authCol.Fields.Add(&core.TextField{Name: "test"})
+	authCol := kernel.NewAuthCollection("new_auth")
+	authCol.Fields.Add(&kernel.TextField{Name: "test"})
 	authCol.AddIndex("idx_auth_test", false, "email, id", "")
 
 	scenarios := []struct {
 		name                 string
-		newCollection        *core.Collection
-		oldCollection        *core.Collection
+		newCollection        *kernel.Collection
+		oldCollection        *kernel.Collection
 		expectedColumns      []string
 		expectedIndexesCount int
 	}{
@@ -115,7 +115,7 @@ func TestSyncRecordTableSchema(t *testing.T) {
 	}
 }
 
-func getTotalViews(app core.App) (int, error) {
+func getTotalViews(app kernel.App) (int, error) {
 	var total int
 
 	err := app.DB().Select("count(*)").
@@ -144,16 +144,16 @@ func TestSingleVsMultipleValuesNormalization(t *testing.T) {
 	}
 
 	// mock field changes
-	collection.Fields.GetByName("select_one").(*core.SelectField).MaxSelect = 2
-	collection.Fields.GetByName("select_many").(*core.SelectField).MaxSelect = 1
-	collection.Fields.GetByName("file_one").(*core.FileField).MaxSelect = 2
-	collection.Fields.GetByName("file_many").(*core.FileField).MaxSelect = 1
-	collection.Fields.GetByName("rel_one").(*core.RelationField).MaxSelect = 2
-	collection.Fields.GetByName("rel_many").(*core.RelationField).MaxSelect = 1
+	collection.Fields.GetByName("select_one").(*kernel.SelectField).MaxSelect = 2
+	collection.Fields.GetByName("select_many").(*kernel.SelectField).MaxSelect = 1
+	collection.Fields.GetByName("file_one").(*kernel.FileField).MaxSelect = 2
+	collection.Fields.GetByName("file_many").(*kernel.FileField).MaxSelect = 1
+	collection.Fields.GetByName("rel_one").(*kernel.RelationField).MaxSelect = 2
+	collection.Fields.GetByName("rel_many").(*kernel.RelationField).MaxSelect = 1
 
 	// new multivaluer field to check whether the array normalization
 	// will be applied for already inserted data
-	collection.Fields.Add(&core.SelectField{
+	collection.Fields.Add(&kernel.SelectField{
 		Name:      "new_multiple",
 		Values:    []string{"a", "b", "c"},
 		MaxSelect: 3,
@@ -190,7 +190,7 @@ func TestSingleVsMultipleValuesNormalization(t *testing.T) {
 	}
 	for col, dflt := range tableInfoExpectations {
 		t.Run("check default for "+col, func(t *testing.T) {
-			var row *core.TableInfoRow
+			var row *kernel.TableInfoRow
 			for _, r := range tableInfo {
 				if r.Name == col {
 					row = r
@@ -304,8 +304,8 @@ func TestDropIndexWithoutTableName(t *testing.T) {
 	properIndex := "CREATE INDEX `new_test_idx2` ON `new_test` (`test`)"
 	indexWithoutTableName := "CREATE INDEX `new_test_idx2` ON `` (`test`)"
 
-	dummyCollection := core.NewBaseCollection("new_test")
-	dummyCollection.Fields.Add(&core.TextField{Name: "test"})
+	dummyCollection := kernel.NewBaseCollection("new_test")
+	dummyCollection.Fields.Add(&kernel.TextField{Name: "test"})
 	dummyCollection.Indexes = []string{properIndex}
 
 	err := app.Save(dummyCollection)

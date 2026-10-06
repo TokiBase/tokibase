@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/pocketbase/dbx"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/dbutils"
 	"github.com/tokibase/tokibase/tools/types"
@@ -42,7 +42,7 @@ func TestRecordQueryWithDifferentCollectionValues(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			var records []*core.Record
+			var records []*kernel.Record
 			err := app.RecordQuery(s.collection).All(&records)
 
 			hasErr := err != nil
@@ -73,14 +73,14 @@ func TestRecordQueryOne(t *testing.T) {
 			"record model",
 			"demo1",
 			"84nmscqy84lsi1t",
-			&core.Record{},
+			&kernel.Record{},
 		},
 		{
 			"record proxy",
 			"demo1",
 			"84nmscqy84lsi1t",
 			&struct {
-				core.BaseRecordProxy
+				kernel.BaseRecordProxy
 			}{},
 		},
 		{
@@ -131,7 +131,7 @@ func TestRecordQueryAll(t *testing.T) {
 	}
 
 	type mockRecordProxy struct {
-		core.BaseRecordProxy
+		kernel.BaseRecordProxy
 	}
 
 	scenarios := []struct {
@@ -144,13 +144,13 @@ func TestRecordQueryAll(t *testing.T) {
 			"slice of Record models",
 			"demo1",
 			[]any{"84nmscqy84lsi1t", "al1h9ijdeojtsjy"},
-			&[]core.Record{},
+			&[]kernel.Record{},
 		},
 		{
 			"slice of pointer Record models",
 			"demo1",
 			[]any{"84nmscqy84lsi1t", "al1h9ijdeojtsjy"},
-			&[]*core.Record{},
+			&[]*kernel.Record{},
 		},
 		{
 			"slice of Record proxies",
@@ -939,13 +939,13 @@ func TestFindAuthRecordByToken(t *testing.T) {
 		{
 			"auth token with file type only check",
 			"eyJhbGciOiJIUzI1NiJ9.eyJpZCI6IjRxMXhsY2xtZmxva3UzMyIsInR5cGUiOiJhdXRoIiwiY29sbGVjdGlvbklkIjoiX3BiX3VzZXJzX2F1dGhfIiwiZXhwIjoyNTI0NjA0NDYxLCJyZWZyZXNoYWJsZSI6dHJ1ZX0.ZT3F0Z3iM-xbGgSG3LEKiEzHrPHr8t8IuHLZGGNuxLo",
-			[]string{core.TokenTypeFile},
+			[]string{kernel.TokenTypeFile},
 			"",
 		},
 		{
 			"auth token with file and auth type check",
 			"eyJhbGciOiJIUzI1NiJ9.eyJpZCI6IjRxMXhsY2xtZmxva3UzMyIsInR5cGUiOiJhdXRoIiwiY29sbGVjdGlvbklkIjoiX3BiX3VzZXJzX2F1dGhfIiwiZXhwIjoyNTI0NjA0NDYxLCJyZWZyZXNoYWJsZSI6dHJ1ZX0.ZT3F0Z3iM-xbGgSG3LEKiEzHrPHr8t8IuHLZGGNuxLo",
-			[]string{core.TokenTypeFile, core.TokenTypeAuth},
+			[]string{kernel.TokenTypeFile, kernel.TokenTypeAuth},
 			"4q1xlclmfloku33",
 		},
 	}
@@ -997,7 +997,7 @@ func TestFindAuthRecordByEmail(t *testing.T) {
 
 			collection, _ := app.FindCollectionByNameOrId(s.collectionIdOrName)
 			if collection != nil {
-				emailIndex, ok := dbutils.FindSingleColumnUniqueIndex(collection.Indexes, core.FieldNameEmail)
+				emailIndex, ok := dbutils.FindSingleColumnUniqueIndex(collection.Indexes, kernel.FieldNameEmail)
 				if ok {
 					if s.nocaseIndex {
 						emailIndex.Columns[0].Collate = "nocase"
@@ -1038,7 +1038,7 @@ func TestCanAccessRecord(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	superuser, err := app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test@example.com")
+	superuser, err := app.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1055,8 +1055,8 @@ func TestCanAccessRecord(t *testing.T) {
 
 	scenarios := []struct {
 		name        string
-		record      *core.Record
-		requestInfo *core.RequestInfo
+		record      *kernel.Record
+		requestInfo *kernel.RequestInfo
 		rule        *string
 		expected    bool
 		expectError bool
@@ -1064,7 +1064,7 @@ func TestCanAccessRecord(t *testing.T) {
 		{
 			"as superuser with nil rule",
 			record,
-			&core.RequestInfo{
+			&kernel.RequestInfo{
 				Auth: superuser,
 			},
 			nil,
@@ -1074,7 +1074,7 @@ func TestCanAccessRecord(t *testing.T) {
 		{
 			"as superuser with non-empty rule",
 			record,
-			&core.RequestInfo{
+			&kernel.RequestInfo{
 				Auth: superuser,
 			},
 			types.Pointer("id = ''"), // the filter rule should be ignored
@@ -1084,7 +1084,7 @@ func TestCanAccessRecord(t *testing.T) {
 		{
 			"as superuser with invalid rule",
 			record,
-			&core.RequestInfo{
+			&kernel.RequestInfo{
 				Auth: superuser,
 			},
 			types.Pointer("id ?!@ 1"), // the filter rule should be ignored
@@ -1094,7 +1094,7 @@ func TestCanAccessRecord(t *testing.T) {
 		{
 			"as guest with nil rule",
 			record,
-			&core.RequestInfo{},
+			&kernel.RequestInfo{},
 			nil,
 			false,
 			false,
@@ -1102,7 +1102,7 @@ func TestCanAccessRecord(t *testing.T) {
 		{
 			"as guest with empty rule",
 			record,
-			&core.RequestInfo{},
+			&kernel.RequestInfo{},
 			types.Pointer(""),
 			true,
 			false,
@@ -1110,7 +1110,7 @@ func TestCanAccessRecord(t *testing.T) {
 		{
 			"as guest with invalid rule",
 			record,
-			&core.RequestInfo{},
+			&kernel.RequestInfo{},
 			types.Pointer("id ?!@ 1"),
 			false,
 			true,
@@ -1118,7 +1118,7 @@ func TestCanAccessRecord(t *testing.T) {
 		{
 			"as guest with mismatched rule",
 			record,
-			&core.RequestInfo{},
+			&kernel.RequestInfo{},
 			types.Pointer("@request.auth.id != ''"),
 			false,
 			false,
@@ -1126,7 +1126,7 @@ func TestCanAccessRecord(t *testing.T) {
 		{
 			"as guest with matched rule",
 			record,
-			&core.RequestInfo{
+			&kernel.RequestInfo{
 				Body: map[string]any{"test": 1},
 			},
 			types.Pointer("@request.auth.id != '' || @request.body.test = 1"),
@@ -1136,7 +1136,7 @@ func TestCanAccessRecord(t *testing.T) {
 		{
 			"as auth record with nil rule",
 			record,
-			&core.RequestInfo{
+			&kernel.RequestInfo{
 				Auth: user,
 			},
 			nil,
@@ -1146,7 +1146,7 @@ func TestCanAccessRecord(t *testing.T) {
 		{
 			"as auth record with empty rule",
 			record,
-			&core.RequestInfo{
+			&kernel.RequestInfo{
 				Auth: user,
 			},
 			types.Pointer(""),
@@ -1156,7 +1156,7 @@ func TestCanAccessRecord(t *testing.T) {
 		{
 			"as auth record with invalid rule",
 			record,
-			&core.RequestInfo{
+			&kernel.RequestInfo{
 				Auth: user,
 			},
 			types.Pointer("id ?!@ 1"),
@@ -1166,7 +1166,7 @@ func TestCanAccessRecord(t *testing.T) {
 		{
 			"as auth record with mismatched rule",
 			record,
-			&core.RequestInfo{
+			&kernel.RequestInfo{
 				Auth: user,
 				Body: map[string]any{"test": 1},
 			},
@@ -1177,7 +1177,7 @@ func TestCanAccessRecord(t *testing.T) {
 		{
 			"as auth record with matched rule",
 			record,
-			&core.RequestInfo{
+			&kernel.RequestInfo{
 				Auth: user,
 				Body: map[string]any{"test": 2},
 			},

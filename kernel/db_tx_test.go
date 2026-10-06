@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
@@ -13,10 +13,10 @@ func TestRunInTransaction(t *testing.T) {
 	defer app.Cleanup()
 
 	t.Run("failed nested transaction", func(t *testing.T) {
-		app.RunInTransaction(func(txApp core.App) error {
-			superuser, _ := txApp.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test@example.com")
+		app.RunInTransaction(func(txApp kernel.App) error {
+			superuser, _ := txApp.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test@example.com")
 
-			return txApp.RunInTransaction(func(tx2Dao core.App) error {
+			return txApp.RunInTransaction(func(tx2Dao kernel.App) error {
 				if err := tx2Dao.Delete(superuser); err != nil {
 					t.Fatal(err)
 				}
@@ -25,23 +25,23 @@ func TestRunInTransaction(t *testing.T) {
 		})
 
 		// superuser should still exist
-		superuser, _ := app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test@example.com")
+		superuser, _ := app.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test@example.com")
 		if superuser == nil {
 			t.Fatal("Expected superuser test@example.com to not be deleted")
 		}
 	})
 
 	t.Run("successful nested transaction", func(t *testing.T) {
-		app.RunInTransaction(func(txApp core.App) error {
-			superuser, _ := txApp.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test@example.com")
+		app.RunInTransaction(func(txApp kernel.App) error {
+			superuser, _ := txApp.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test@example.com")
 
-			return txApp.RunInTransaction(func(tx2Dao core.App) error {
+			return txApp.RunInTransaction(func(tx2Dao kernel.App) error {
 				return tx2Dao.Delete(superuser)
 			})
 		})
 
 		// superuser should have been deleted
-		superuser, _ := app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test@example.com")
+		superuser, _ := app.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test@example.com")
 		if superuser != nil {
 			t.Fatalf("Expected superuser test@example.com to be deleted, found %v", superuser)
 		}
@@ -59,43 +59,43 @@ func TestTransactionHooksCallsOnFailure(t *testing.T) {
 	afterUpdateHookCalls := 0
 	afterDeleteHookCalls := 0
 
-	app.OnModelCreate().BindFunc(func(e *core.ModelEvent) error {
+	app.OnModelCreate().BindFunc(func(e *kernel.ModelEvent) error {
 		createHookCalls++
 		return e.Next()
 	})
 
-	app.OnModelUpdate().BindFunc(func(e *core.ModelEvent) error {
+	app.OnModelUpdate().BindFunc(func(e *kernel.ModelEvent) error {
 		updateHookCalls++
 		return e.Next()
 	})
 
-	app.OnModelDelete().BindFunc(func(e *core.ModelEvent) error {
+	app.OnModelDelete().BindFunc(func(e *kernel.ModelEvent) error {
 		deleteHookCalls++
 		return e.Next()
 	})
 
-	app.OnModelAfterCreateSuccess().BindFunc(func(e *core.ModelEvent) error {
+	app.OnModelAfterCreateSuccess().BindFunc(func(e *kernel.ModelEvent) error {
 		afterCreateHookCalls++
 		return e.Next()
 	})
 
-	app.OnModelAfterUpdateSuccess().BindFunc(func(e *core.ModelEvent) error {
+	app.OnModelAfterUpdateSuccess().BindFunc(func(e *kernel.ModelEvent) error {
 		afterUpdateHookCalls++
 		return e.Next()
 	})
 
-	app.OnModelAfterDeleteSuccess().BindFunc(func(e *core.ModelEvent) error {
+	app.OnModelAfterDeleteSuccess().BindFunc(func(e *kernel.ModelEvent) error {
 		afterDeleteHookCalls++
 		return e.Next()
 	})
 
-	existingModel, _ := app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test@example.com")
+	existingModel, _ := app.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test@example.com")
 
-	app.RunInTransaction(func(txApp1 core.App) error {
-		return txApp1.RunInTransaction(func(txApp2 core.App) error {
+	app.RunInTransaction(func(txApp1 kernel.App) error {
+		return txApp1.RunInTransaction(func(txApp2 kernel.App) error {
 			// test create
 			// ---
-			newModel := core.NewRecord(existingModel.Collection())
+			newModel := kernel.NewRecord(existingModel.Collection())
 			newModel.SetEmail("test_new1@example.com")
 			newModel.SetPassword("1234567890")
 			if err := txApp2.Save(newModel); err != nil {
@@ -152,22 +152,22 @@ func TestTransactionHooksCallsOnSuccess(t *testing.T) {
 	afterUpdateHookCalls := 0
 	afterDeleteHookCalls := 0
 
-	app.OnModelCreate().BindFunc(func(e *core.ModelEvent) error {
+	app.OnModelCreate().BindFunc(func(e *kernel.ModelEvent) error {
 		createHookCalls++
 		return e.Next()
 	})
 
-	app.OnModelUpdate().BindFunc(func(e *core.ModelEvent) error {
+	app.OnModelUpdate().BindFunc(func(e *kernel.ModelEvent) error {
 		updateHookCalls++
 		return e.Next()
 	})
 
-	app.OnModelDelete().BindFunc(func(e *core.ModelEvent) error {
+	app.OnModelDelete().BindFunc(func(e *kernel.ModelEvent) error {
 		deleteHookCalls++
 		return e.Next()
 	})
 
-	app.OnModelAfterCreateSuccess().BindFunc(func(e *core.ModelEvent) error {
+	app.OnModelAfterCreateSuccess().BindFunc(func(e *kernel.ModelEvent) error {
 		if e.App.IsTransactional() {
 			t.Fatal("Expected e.App to be non-transactional")
 		}
@@ -176,7 +176,7 @@ func TestTransactionHooksCallsOnSuccess(t *testing.T) {
 		return e.Next()
 	})
 
-	app.OnModelAfterUpdateSuccess().BindFunc(func(e *core.ModelEvent) error {
+	app.OnModelAfterUpdateSuccess().BindFunc(func(e *kernel.ModelEvent) error {
 		if e.App.IsTransactional() {
 			t.Fatal("Expected e.App to be non-transactional")
 		}
@@ -185,7 +185,7 @@ func TestTransactionHooksCallsOnSuccess(t *testing.T) {
 		return e.Next()
 	})
 
-	app.OnModelAfterDeleteSuccess().BindFunc(func(e *core.ModelEvent) error {
+	app.OnModelAfterDeleteSuccess().BindFunc(func(e *kernel.ModelEvent) error {
 		if e.App.IsTransactional() {
 			t.Fatal("Expected e.App to be non-transactional")
 		}
@@ -194,13 +194,13 @@ func TestTransactionHooksCallsOnSuccess(t *testing.T) {
 		return e.Next()
 	})
 
-	existingModel, _ := app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test@example.com")
+	existingModel, _ := app.FindAuthRecordByEmail(kernel.CollectionNameSuperusers, "test@example.com")
 
-	app.RunInTransaction(func(txApp1 core.App) error {
-		return txApp1.RunInTransaction(func(txApp2 core.App) error {
+	app.RunInTransaction(func(txApp1 kernel.App) error {
+		return txApp1.RunInTransaction(func(txApp2 kernel.App) error {
 			// test create
 			// ---
-			newModel := core.NewRecord(existingModel.Collection())
+			newModel := kernel.NewRecord(existingModel.Collection())
 			newModel.SetEmail("test_new1@example.com")
 			newModel.SetPassword("1234567890")
 			if err := txApp2.Save(newModel); err != nil {
@@ -252,9 +252,9 @@ func TestTransactionFromInnerCreateHook(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	app.OnRecordCreateExecute("demo2").BindFunc(func(e *core.RecordEvent) error {
+	app.OnRecordCreateExecute("demo2").BindFunc(func(e *kernel.RecordEvent) error {
 		originalApp := e.App
-		return e.App.RunInTransaction(func(txApp core.App) error {
+		return e.App.RunInTransaction(func(txApp kernel.App) error {
 			e.App = txApp
 			defer func() {
 				e.App = originalApp
@@ -266,7 +266,7 @@ func TestTransactionFromInnerCreateHook(t *testing.T) {
 		})
 	})
 
-	app.OnRecordAfterCreateSuccess("demo2").BindFunc(func(e *core.RecordEvent) error {
+	app.OnRecordAfterCreateSuccess("demo2").BindFunc(func(e *kernel.RecordEvent) error {
 		if e.App.IsTransactional() {
 			t.Fatal("Expected e.App to be non-transactional")
 		}
@@ -285,7 +285,7 @@ func TestTransactionFromInnerCreateHook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	record := core.NewRecord(collection)
+	record := kernel.NewRecord(collection)
 
 	record.Set("title", "test_inner_tx")
 
@@ -310,9 +310,9 @@ func TestTransactionFromInnerUpdateHook(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	app.OnRecordUpdateExecute("demo2").BindFunc(func(e *core.RecordEvent) error {
+	app.OnRecordUpdateExecute("demo2").BindFunc(func(e *kernel.RecordEvent) error {
 		originalApp := e.App
-		return e.App.RunInTransaction(func(txApp core.App) error {
+		return e.App.RunInTransaction(func(txApp kernel.App) error {
 			e.App = txApp
 			defer func() {
 				e.App = originalApp
@@ -324,7 +324,7 @@ func TestTransactionFromInnerUpdateHook(t *testing.T) {
 		})
 	})
 
-	app.OnRecordAfterUpdateSuccess("demo2").BindFunc(func(e *core.RecordEvent) error {
+	app.OnRecordAfterUpdateSuccess("demo2").BindFunc(func(e *kernel.RecordEvent) error {
 		if e.App.IsTransactional() {
 			t.Fatal("Expected e.App to be non-transactional")
 		}
@@ -364,9 +364,9 @@ func TestTransactionFromInnerDeleteHook(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	app.OnRecordDeleteExecute("demo2").BindFunc(func(e *core.RecordEvent) error {
+	app.OnRecordDeleteExecute("demo2").BindFunc(func(e *kernel.RecordEvent) error {
 		originalApp := e.App
-		return e.App.RunInTransaction(func(txApp core.App) error {
+		return e.App.RunInTransaction(func(txApp kernel.App) error {
 			e.App = txApp
 			defer func() {
 				e.App = originalApp
@@ -378,7 +378,7 @@ func TestTransactionFromInnerDeleteHook(t *testing.T) {
 		})
 	})
 
-	app.OnRecordAfterDeleteSuccess("demo2").BindFunc(func(e *core.RecordEvent) error {
+	app.OnRecordAfterDeleteSuccess("demo2").BindFunc(func(e *kernel.RecordEvent) error {
 		if e.App.IsTransactional() {
 			t.Fatal("Expected e.App to be non-transactional")
 		}

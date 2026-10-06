@@ -8,21 +8,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/types"
 )
 
 func TestAutodateFieldBaseMethods(t *testing.T) {
-	testFieldBaseMethods(t, core.FieldTypeAutodate)
+	testFieldBaseMethods(t, kernel.FieldTypeAutodate)
 }
 
 func TestAutodateFieldColumnType(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.AutodateField{}
+	f := &kernel.AutodateField{}
 
 	expected := "TEXT DEFAULT '' NOT NULL"
 
@@ -35,8 +35,8 @@ func TestAutodateFieldPrepareValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.AutodateField{}
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	f := &kernel.AutodateField{}
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 
 	scenarios := []struct {
 		raw      any
@@ -71,19 +71,19 @@ func TestAutodateFieldValidateValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name        string
-		field       *core.AutodateField
-		record      func() *core.Record
+		field       *kernel.AutodateField
+		record      func() *kernel.Record
 		expectError bool
 	}{
 		{
 			"invalid raw value",
-			&core.AutodateField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.AutodateField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 123)
 				return record
 			},
@@ -91,9 +91,9 @@ func TestAutodateFieldValidateValue(t *testing.T) {
 		},
 		{
 			"missing field value",
-			&core.AutodateField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.AutodateField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("abc", true)
 				return record
 			},
@@ -101,9 +101,9 @@ func TestAutodateFieldValidateValue(t *testing.T) {
 		},
 		{
 			"existing field value",
-			&core.AutodateField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.AutodateField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.NowDateTime())
 				return record
 			},
@@ -124,26 +124,26 @@ func TestAutodateFieldValidateValue(t *testing.T) {
 }
 
 func TestAutodateFieldValidateSettings(t *testing.T) {
-	testDefaultFieldIdValidation(t, core.FieldTypeAutodate)
-	testDefaultFieldNameValidation(t, core.FieldTypeAutodate)
+	testDefaultFieldIdValidation(t, kernel.FieldTypeAutodate)
+	testDefaultFieldNameValidation(t, kernel.FieldTypeAutodate)
 
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	superusers, err := app.FindCollectionByNameOrId(core.CollectionNameSuperusers)
+	superusers, err := app.FindCollectionByNameOrId(kernel.CollectionNameSuperusers)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	scenarios := []struct {
 		name         string
-		field        func() *core.AutodateField
+		field        func() *kernel.AutodateField
 		expectErrors []string
 	}{
 		{
 			"empty onCreate and onUpdate",
-			func() *core.AutodateField {
-				return &core.AutodateField{
+			func() *kernel.AutodateField {
+				return &kernel.AutodateField{
 					Id:   "test",
 					Name: "test",
 				}
@@ -152,8 +152,8 @@ func TestAutodateFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"with onCreate",
-			func() *core.AutodateField {
-				return &core.AutodateField{
+			func() *kernel.AutodateField {
+				return &kernel.AutodateField{
 					Id:       "test",
 					Name:     "test",
 					OnCreate: true,
@@ -163,8 +163,8 @@ func TestAutodateFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"with onUpdate",
-			func() *core.AutodateField {
-				return &core.AutodateField{
+			func() *kernel.AutodateField {
+				return &kernel.AutodateField{
 					Id:       "test",
 					Name:     "test",
 					OnUpdate: true,
@@ -174,8 +174,8 @@ func TestAutodateFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"change of a system autodate field",
-			func() *core.AutodateField {
-				created := superusers.Fields.GetByName("created").(*core.AutodateField)
+			func() *kernel.AutodateField {
+				created := superusers.Fields.GetByName("created").(*kernel.AutodateField)
 				created.OnCreate = !created.OnCreate
 				created.OnUpdate = !created.OnUpdate
 				return created
@@ -194,9 +194,9 @@ func TestAutodateFieldValidateSettings(t *testing.T) {
 }
 
 func TestAutodateFieldFindSetter(t *testing.T) {
-	field := &core.AutodateField{Name: "test"}
+	field := &kernel.AutodateField{Name: "test"}
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 	collection.Fields.Add(field)
 
 	initialDate, err := types.ParseDateTime("2024-01-02 03:04:05.789Z")
@@ -204,7 +204,7 @@ func TestAutodateFieldFindSetter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	record := core.NewRecord(collection)
+	record := kernel.NewRecord(collection)
 	record.SetRaw("test", initialDate)
 
 	t.Run("no matching setter", func(t *testing.T) {
@@ -244,48 +244,48 @@ func TestAutodateFieldIntercept(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name       string
 		actionName string
-		field      *core.AutodateField
-		record     func() *core.Record
+		field      *kernel.AutodateField
+		record     func() *kernel.Record
 		expected   string
 	}{
 		{
 			"non-matching action",
 			"test",
-			&core.AutodateField{Name: "test", OnCreate: true, OnUpdate: true},
-			func() *core.Record {
-				return core.NewRecord(collection)
+			&kernel.AutodateField{Name: "test", OnCreate: true, OnUpdate: true},
+			func() *kernel.Record {
+				return kernel.NewRecord(collection)
 			},
 			"",
 		},
 		{
 			"create with zero value (disabled onCreate)",
-			core.InterceptorActionCreateExecute,
-			&core.AutodateField{Name: "test", OnCreate: false, OnUpdate: true},
-			func() *core.Record {
-				return core.NewRecord(collection)
+			kernel.InterceptorActionCreateExecute,
+			&kernel.AutodateField{Name: "test", OnCreate: false, OnUpdate: true},
+			func() *kernel.Record {
+				return kernel.NewRecord(collection)
 			},
 			"",
 		},
 		{
 			"create with zero value",
-			core.InterceptorActionCreateExecute,
-			&core.AutodateField{Name: "test", OnCreate: true, OnUpdate: true},
-			func() *core.Record {
-				return core.NewRecord(collection)
+			kernel.InterceptorActionCreateExecute,
+			&kernel.AutodateField{Name: "test", OnCreate: true, OnUpdate: true},
+			func() *kernel.Record {
+				return kernel.NewRecord(collection)
 			},
 			"{NOW}",
 		},
 		{
 			"create with non-zero value",
-			core.InterceptorActionCreateExecute,
-			&core.AutodateField{Name: "test", OnCreate: true, OnUpdate: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			kernel.InterceptorActionCreateExecute,
+			&kernel.AutodateField{Name: "test", OnCreate: true, OnUpdate: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", initialDate)
 				return record
 			},
@@ -293,28 +293,28 @@ func TestAutodateFieldIntercept(t *testing.T) {
 		},
 		{
 			"update with zero value (disabled onUpdate)",
-			core.InterceptorActionUpdateExecute,
-			&core.AutodateField{Name: "test", OnCreate: true, OnUpdate: false},
-			func() *core.Record {
-				return core.NewRecord(collection)
+			kernel.InterceptorActionUpdateExecute,
+			&kernel.AutodateField{Name: "test", OnCreate: true, OnUpdate: false},
+			func() *kernel.Record {
+				return kernel.NewRecord(collection)
 			},
 			"",
 		},
 		{
 			"update with zero value",
-			core.InterceptorActionUpdateExecute,
-			&core.AutodateField{Name: "test", OnCreate: true, OnUpdate: true},
-			func() *core.Record {
-				return core.NewRecord(collection)
+			kernel.InterceptorActionUpdateExecute,
+			&kernel.AutodateField{Name: "test", OnCreate: true, OnUpdate: true},
+			func() *kernel.Record {
+				return kernel.NewRecord(collection)
 			},
 			"{NOW}",
 		},
 		{
 			"update with non-zero value",
-			core.InterceptorActionUpdateExecute,
-			&core.AutodateField{Name: "test", OnCreate: true, OnUpdate: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			kernel.InterceptorActionUpdateExecute,
+			&kernel.AutodateField{Name: "test", OnCreate: true, OnUpdate: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", initialDate)
 				return record
 			},
@@ -405,9 +405,9 @@ func TestAutodateRecordResave(t *testing.T) {
 	lastUpdated = newUpdated
 
 	// simulate save failure
-	app.OnRecordUpdateExecute(collection.Id).Bind(&hook.Handler[*core.RecordEvent]{
+	app.OnRecordUpdateExecute(collection.Id).Bind(&hook.Handler[*kernel.RecordEvent]{
 		Id: "test_failure",
-		Func: func(*core.RecordEvent) error {
+		Func: func(*kernel.RecordEvent) error {
 			return errors.New("test")
 		},
 		Priority: 9999999999, // as latest as possible

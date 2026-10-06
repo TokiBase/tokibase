@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/types"
 )
@@ -36,7 +36,7 @@ func TestReloadSettings(t *testing.T) {
 		"OnSettingsReload":          1,
 	})
 
-	param := &core.Param{}
+	param := &kernel.Param{}
 	err := app.ModelQuery(param).Model("settings", param)
 	if err != nil {
 		t.Fatalf("Expected new settings to be persisted, got %v", err)
@@ -104,7 +104,7 @@ func TestReloadSettingsWithEncryption(t *testing.T) {
 		"OnSettingsReload":          1,
 	})
 
-	param := &core.Param{}
+	param := &kernel.Param{}
 	err := app.ModelQuery(param).Model("settings", param)
 	if err != nil {
 		t.Fatalf("Expected new settings to be persisted, got %v", err)

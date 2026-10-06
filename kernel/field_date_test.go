@@ -6,20 +6,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/types"
 )
 
 func TestDateFieldBaseMethods(t *testing.T) {
-	testFieldBaseMethods(t, core.FieldTypeDate)
+	testFieldBaseMethods(t, kernel.FieldTypeDate)
 }
 
 func TestDateFieldColumnType(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.DateField{}
+	f := &kernel.DateField{}
 
 	expected := "TEXT DEFAULT '' NOT NULL"
 
@@ -32,8 +32,8 @@ func TestDateFieldPrepareValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.DateField{}
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	f := &kernel.DateField{}
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 
 	scenarios := []struct {
 		raw      any
@@ -68,19 +68,19 @@ func TestDateFieldValidateValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name        string
-		field       *core.DateField
-		record      func() *core.Record
+		field       *kernel.DateField
+		record      func() *kernel.Record
 		expectError bool
 	}{
 		{
 			"invalid raw value",
-			&core.DateField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.DateField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 123)
 				return record
 			},
@@ -88,9 +88,9 @@ func TestDateFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (not required)",
-			&core.DateField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.DateField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.DateTime{})
 				return record
 			},
@@ -98,9 +98,9 @@ func TestDateFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (required)",
-			&core.DateField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.DateField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.DateTime{})
 				return record
 			},
@@ -108,9 +108,9 @@ func TestDateFieldValidateValue(t *testing.T) {
 		},
 		{
 			"non-zero field value (required)",
-			&core.DateField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.DateField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", types.NowDateTime())
 				return record
 			},
@@ -131,24 +131,24 @@ func TestDateFieldValidateValue(t *testing.T) {
 }
 
 func TestDateFieldValidateSettings(t *testing.T) {
-	testDefaultFieldIdValidation(t, core.FieldTypeDate)
-	testDefaultFieldNameValidation(t, core.FieldTypeDate)
-	testDefaultFieldHelpValidation[core.DateField](t)
+	testDefaultFieldIdValidation(t, kernel.FieldTypeDate)
+	testDefaultFieldNameValidation(t, kernel.FieldTypeDate)
+	testDefaultFieldHelpValidation[kernel.DateField](t)
 
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name         string
-		field        func() *core.DateField
+		field        func() *kernel.DateField
 		expectErrors []string
 	}{
 		{
 			"zero Min/Max",
-			func() *core.DateField {
-				return &core.DateField{
+			func() *kernel.DateField {
+				return &kernel.DateField{
 					Id:   "test",
 					Name: "test",
 				}
@@ -157,8 +157,8 @@ func TestDateFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"non-empty Min with empty Max",
-			func() *core.DateField {
-				return &core.DateField{
+			func() *kernel.DateField {
+				return &kernel.DateField{
 					Id:   "test",
 					Name: "test",
 					Min:  types.NowDateTime(),
@@ -168,8 +168,8 @@ func TestDateFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"empty Min non-empty Max",
-			func() *core.DateField {
-				return &core.DateField{
+			func() *kernel.DateField {
+				return &kernel.DateField{
 					Id:   "test",
 					Name: "test",
 					Max:  types.NowDateTime(),
@@ -179,9 +179,9 @@ func TestDateFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"Min = Max",
-			func() *core.DateField {
+			func() *kernel.DateField {
 				date := types.NowDateTime()
-				return &core.DateField{
+				return &kernel.DateField{
 					Id:   "test",
 					Name: "test",
 					Min:  date,
@@ -192,10 +192,10 @@ func TestDateFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"Min > Max",
-			func() *core.DateField {
+			func() *kernel.DateField {
 				min := types.NowDateTime()
 				max := min.Add(-5 * time.Second)
-				return &core.DateField{
+				return &kernel.DateField{
 					Id:   "test",
 					Name: "test",
 					Min:  min,
@@ -206,10 +206,10 @@ func TestDateFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"Min < Max",
-			func() *core.DateField {
+			func() *kernel.DateField {
 				max := types.NowDateTime()
 				min := max.Add(-5 * time.Second)
-				return &core.DateField{
+				return &kernel.DateField{
 					Id:   "test",
 					Name: "test",
 					Min:  min,

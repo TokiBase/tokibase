@@ -4,13 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/security"
 )
 
 func TestRecordEmail(t *testing.T) {
-	record := core.NewRecord(core.NewAuthCollection("test"))
+	record := kernel.NewRecord(kernel.NewAuthCollection("test"))
 
 	if record.Email() != "" {
 		t.Fatalf("Expected email %q, got %q", "", record.Email())
@@ -25,7 +25,7 @@ func TestRecordEmail(t *testing.T) {
 }
 
 func TestRecordEmailVisibility(t *testing.T) {
-	record := core.NewRecord(core.NewAuthCollection("test"))
+	record := kernel.NewRecord(kernel.NewAuthCollection("test"))
 
 	if record.EmailVisibility() != false {
 		t.Fatalf("Expected emailVisibility %v, got %v", false, record.EmailVisibility())
@@ -39,7 +39,7 @@ func TestRecordEmailVisibility(t *testing.T) {
 }
 
 func TestRecordVerified(t *testing.T) {
-	record := core.NewRecord(core.NewAuthCollection("test"))
+	record := kernel.NewRecord(kernel.NewAuthCollection("test"))
 
 	if record.Verified() != false {
 		t.Fatalf("Expected verified %v, got %v", false, record.Verified())
@@ -53,7 +53,7 @@ func TestRecordVerified(t *testing.T) {
 }
 
 func TestRecordTokenKey(t *testing.T) {
-	record := core.NewRecord(core.NewAuthCollection("test"))
+	record := kernel.NewRecord(kernel.NewAuthCollection("test"))
 
 	if record.TokenKey() != "" {
 		t.Fatalf("Expected tokenKey %q, got %q", "", record.TokenKey())
@@ -98,7 +98,7 @@ func TestRecordPassword(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			record := core.NewRecord(core.NewAuthCollection("test"))
+			record := kernel.NewRecord(kernel.NewAuthCollection("test"))
 
 			if record.ValidatePassword(s.password) {
 				t.Fatal("[before set] Expected password to be invalid")
@@ -127,7 +127,7 @@ func TestRecordSetRandomPassword(t *testing.T) {
 	defer app.Cleanup()
 
 	oldTokenKey := "old_tokenKey"
-	record := core.NewRecord(core.NewAuthCollection("test"))
+	record := kernel.NewRecord(kernel.NewAuthCollection("test"))
 	record.SetTokenKey(oldTokenKey)
 
 	pass := record.SetRandomPassword()
@@ -144,9 +144,9 @@ func TestRecordSetRandomPassword(t *testing.T) {
 		t.Fatal("Expected token key to change")
 	}
 
-	f, ok := record.Collection().Fields.GetByName(core.FieldNamePassword).(*core.PasswordField)
+	f, ok := record.Collection().Fields.GetByName(kernel.FieldNamePassword).(*kernel.PasswordField)
 	if !ok {
-		t.Fatal("Expected *core.PasswordField")
+		t.Fatal("Expected *kernel.PasswordField")
 	}
 
 	// ensure that the field validators will be ignored

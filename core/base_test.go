@@ -10,6 +10,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/mailer/clients"
 
 	_ "unsafe"
@@ -158,7 +159,7 @@ func TestNewBaseAppTx(t *testing.T) {
 		}
 	}
 
-	mustHaveTx := func(app core.App) {
+	mustHaveTx := func(app kernel.App) {
 		if !app.IsTransactional() {
 			t.Fatalf("Expected the app to be transactional")
 		}
@@ -170,7 +171,7 @@ func TestNewBaseAppTx(t *testing.T) {
 
 	mustNotHaveTx(app)
 
-	app.RunInTransaction(func(txApp core.App) error {
+	app.RunInTransaction(func(txApp kernel.App) error {
 		mustHaveTx(txApp)
 		return nil
 	})
@@ -412,7 +413,7 @@ func TestBaseAppLoggerWritesAwaited(t *testing.T) {
 		})
 		defer logsHook.Unbind(hookId)
 
-		app.AuxRunInTransaction(func(txApp core.App) error {
+		app.AuxRunInTransaction(func(txApp kernel.App) error {
 			for range logsThreshold {
 				txApp.Logger().Error("test")
 			}
@@ -558,7 +559,7 @@ func TestBaseAppDBDualBuilder(t *testing.T) {
 		}
 	}
 
-	app.RunInTransaction(func(txApp core.App) error {
+	app.RunInTransaction(func(txApp kernel.App) error {
 		for _, item := range txTests {
 			_, err := txApp.DB().NewQuery(item.query).Execute()
 			if err != nil {
@@ -634,7 +635,7 @@ func TestBaseAppAuxDBDualBuilder(t *testing.T) {
 		}
 	}
 
-	app.AuxRunInTransaction(func(txApp core.App) error {
+	app.AuxRunInTransaction(func(txApp kernel.App) error {
 		for _, item := range txTests {
 			_, err := txApp.AuxDB().NewQuery(item.query).Execute()
 			if err != nil {

@@ -5,19 +5,19 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
 func TestBoolFieldBaseMethods(t *testing.T) {
-	testFieldBaseMethods(t, core.FieldTypeBool)
+	testFieldBaseMethods(t, kernel.FieldTypeBool)
 }
 
 func TestBoolFieldColumnType(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.BoolField{}
+	f := &kernel.BoolField{}
 
 	expected := "BOOLEAN DEFAULT FALSE NOT NULL"
 
@@ -30,8 +30,8 @@ func TestBoolFieldPrepareValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.BoolField{}
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	f := &kernel.BoolField{}
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 
 	scenarios := []struct {
 		raw      any
@@ -62,19 +62,19 @@ func TestBoolFieldValidateValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name        string
-		field       *core.BoolField
-		record      func() *core.Record
+		field       *kernel.BoolField
+		record      func() *kernel.Record
 		expectError bool
 	}{
 		{
 			"invalid raw value",
-			&core.BoolField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.BoolField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 123)
 				return record
 			},
@@ -82,9 +82,9 @@ func TestBoolFieldValidateValue(t *testing.T) {
 		},
 		{
 			"missing field value (non-required)",
-			&core.BoolField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.BoolField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("abc", true)
 				return record
 			},
@@ -92,9 +92,9 @@ func TestBoolFieldValidateValue(t *testing.T) {
 		},
 		{
 			"missing field value (required)",
-			&core.BoolField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.BoolField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("abc", true)
 				return record
 			},
@@ -102,9 +102,9 @@ func TestBoolFieldValidateValue(t *testing.T) {
 		},
 		{
 			"false field value (non-required)",
-			&core.BoolField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.BoolField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", false)
 				return record
 			},
@@ -112,9 +112,9 @@ func TestBoolFieldValidateValue(t *testing.T) {
 		},
 		{
 			"false field value (required)",
-			&core.BoolField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.BoolField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", false)
 				return record
 			},
@@ -122,9 +122,9 @@ func TestBoolFieldValidateValue(t *testing.T) {
 		},
 		{
 			"true field value (required)",
-			&core.BoolField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.BoolField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", true)
 				return record
 			},
@@ -145,7 +145,7 @@ func TestBoolFieldValidateValue(t *testing.T) {
 }
 
 func TestBoolFieldValidateSettings(t *testing.T) {
-	testDefaultFieldIdValidation(t, core.FieldTypeBool)
-	testDefaultFieldNameValidation(t, core.FieldTypeBool)
-	testDefaultFieldHelpValidation[core.BoolField](t)
+	testDefaultFieldIdValidation(t, kernel.FieldTypeBool)
+	testDefaultFieldNameValidation(t, kernel.FieldTypeBool)
+	testDefaultFieldHelpValidation[kernel.BoolField](t)
 }

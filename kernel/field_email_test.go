@@ -5,19 +5,19 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
 func TestEmailFieldBaseMethods(t *testing.T) {
-	testFieldBaseMethods(t, core.FieldTypeEmail)
+	testFieldBaseMethods(t, kernel.FieldTypeEmail)
 }
 
 func TestEmailFieldColumnType(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.EmailField{}
+	f := &kernel.EmailField{}
 
 	expected := "TEXT DEFAULT '' NOT NULL"
 
@@ -30,8 +30,8 @@ func TestEmailFieldPrepareValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	f := &core.EmailField{}
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	f := &kernel.EmailField{}
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 
 	scenarios := []struct {
 		raw      any
@@ -67,19 +67,19 @@ func TestEmailFieldValidateValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name        string
-		field       *core.EmailField
-		record      func() *core.Record
+		field       *kernel.EmailField
+		record      func() *kernel.Record
 		expectError bool
 	}{
 		{
 			"invalid raw value",
-			&core.EmailField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EmailField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", 123)
 				return record
 			},
@@ -87,9 +87,9 @@ func TestEmailFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (not required)",
-			&core.EmailField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EmailField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "")
 				return record
 			},
@@ -97,9 +97,9 @@ func TestEmailFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (required)",
-			&core.EmailField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EmailField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "")
 				return record
 			},
@@ -107,9 +107,9 @@ func TestEmailFieldValidateValue(t *testing.T) {
 		},
 		{
 			"non-zero field value (required)",
-			&core.EmailField{Name: "test", Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EmailField{Name: "test", Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "test@example.com")
 				return record
 			},
@@ -117,9 +117,9 @@ func TestEmailFieldValidateValue(t *testing.T) {
 		},
 		{
 			"invalid email",
-			&core.EmailField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EmailField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "invalid")
 				return record
 			},
@@ -127,9 +127,9 @@ func TestEmailFieldValidateValue(t *testing.T) {
 		},
 		{
 			"failed onlyDomains",
-			&core.EmailField{Name: "test", OnlyDomains: []string{"example.org", "example.net"}},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EmailField{Name: "test", OnlyDomains: []string{"example.org", "example.net"}},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "test@example.com")
 				return record
 			},
@@ -137,9 +137,9 @@ func TestEmailFieldValidateValue(t *testing.T) {
 		},
 		{
 			"success onlyDomains",
-			&core.EmailField{Name: "test", OnlyDomains: []string{"example.org", "example.com"}},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EmailField{Name: "test", OnlyDomains: []string{"example.org", "example.com"}},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "test@example.com")
 				return record
 			},
@@ -147,9 +147,9 @@ func TestEmailFieldValidateValue(t *testing.T) {
 		},
 		{
 			"failed exceptDomains",
-			&core.EmailField{Name: "test", ExceptDomains: []string{"example.org", "example.com"}},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EmailField{Name: "test", ExceptDomains: []string{"example.org", "example.com"}},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "test@example.com")
 				return record
 			},
@@ -157,9 +157,9 @@ func TestEmailFieldValidateValue(t *testing.T) {
 		},
 		{
 			"success exceptDomains",
-			&core.EmailField{Name: "test", ExceptDomains: []string{"example.org", "example.net"}},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.EmailField{Name: "test", ExceptDomains: []string{"example.org", "example.net"}},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "test@example.com")
 				return record
 			},
@@ -180,24 +180,24 @@ func TestEmailFieldValidateValue(t *testing.T) {
 }
 
 func TestEmailFieldValidateSettings(t *testing.T) {
-	testDefaultFieldIdValidation(t, core.FieldTypeEmail)
-	testDefaultFieldNameValidation(t, core.FieldTypeEmail)
-	testDefaultFieldHelpValidation[core.EmailField](t)
+	testDefaultFieldIdValidation(t, kernel.FieldTypeEmail)
+	testDefaultFieldNameValidation(t, kernel.FieldTypeEmail)
+	testDefaultFieldHelpValidation[kernel.EmailField](t)
 
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	scenarios := []struct {
 		name         string
-		field        func() *core.EmailField
+		field        func() *kernel.EmailField
 		expectErrors []string
 	}{
 		{
 			"zero minimal",
-			func() *core.EmailField {
-				return &core.EmailField{
+			func() *kernel.EmailField {
+				return &kernel.EmailField{
 					Id:   "test",
 					Name: "test",
 				}
@@ -206,8 +206,8 @@ func TestEmailFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"both onlyDomains and exceptDomains",
-			func() *core.EmailField {
-				return &core.EmailField{
+			func() *kernel.EmailField {
+				return &kernel.EmailField{
 					Id:            "test",
 					Name:          "test",
 					OnlyDomains:   []string{"example.com"},
@@ -218,8 +218,8 @@ func TestEmailFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"invalid onlyDomains",
-			func() *core.EmailField {
-				return &core.EmailField{
+			func() *kernel.EmailField {
+				return &kernel.EmailField{
 					Id:          "test",
 					Name:        "test",
 					OnlyDomains: []string{"example.com", "invalid"},
@@ -229,8 +229,8 @@ func TestEmailFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"valid onlyDomains",
-			func() *core.EmailField {
-				return &core.EmailField{
+			func() *kernel.EmailField {
+				return &kernel.EmailField{
 					Id:          "test",
 					Name:        "test",
 					OnlyDomains: []string{"example.com", "example.org"},
@@ -240,8 +240,8 @@ func TestEmailFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"invalid exceptDomains",
-			func() *core.EmailField {
-				return &core.EmailField{
+			func() *kernel.EmailField {
+				return &kernel.EmailField{
 					Id:            "test",
 					Name:          "test",
 					ExceptDomains: []string{"example.com", "invalid"},
@@ -251,8 +251,8 @@ func TestEmailFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"valid exceptDomains",
-			func() *core.EmailField {
-				return &core.EmailField{
+			func() *kernel.EmailField {
+				return &kernel.EmailField{
 					Id:            "test",
 					Name:          "test",
 					ExceptDomains: []string{"example.com", "example.org"},

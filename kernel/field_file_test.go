@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/filesystem"
 	"github.com/tokibase/tokibase/tools/list"
@@ -18,7 +18,7 @@ import (
 )
 
 func TestFileFieldBaseMethods(t *testing.T) {
-	testFieldBaseMethods(t, core.FieldTypeFile)
+	testFieldBaseMethods(t, kernel.FieldTypeFile)
 }
 
 func TestFileFieldColumnType(t *testing.T) {
@@ -27,22 +27,22 @@ func TestFileFieldColumnType(t *testing.T) {
 
 	scenarios := []struct {
 		name     string
-		field    *core.FileField
+		field    *kernel.FileField
 		expected string
 	}{
 		{
 			"single (zero)",
-			&core.FileField{},
+			&kernel.FileField{},
 			"TEXT DEFAULT '' NOT NULL",
 		},
 		{
 			"single",
-			&core.FileField{MaxSelect: 1},
+			&kernel.FileField{MaxSelect: 1},
 			"TEXT DEFAULT '' NOT NULL",
 		},
 		{
 			"multiple",
-			&core.FileField{MaxSelect: 2},
+			&kernel.FileField{MaxSelect: 2},
 			"JSON DEFAULT '[]' NOT NULL",
 		},
 	}
@@ -59,22 +59,22 @@ func TestFileFieldColumnType(t *testing.T) {
 func TestFileFieldIsMultiple(t *testing.T) {
 	scenarios := []struct {
 		name     string
-		field    *core.FileField
+		field    *kernel.FileField
 		expected bool
 	}{
 		{
 			"zero",
-			&core.FileField{},
+			&kernel.FileField{},
 			false,
 		},
 		{
 			"single",
-			&core.FileField{MaxSelect: 1},
+			&kernel.FileField{MaxSelect: 1},
 			false,
 		},
 		{
 			"multiple",
-			&core.FileField{MaxSelect: 2},
+			&kernel.FileField{MaxSelect: 2},
 			true,
 		},
 	}
@@ -92,7 +92,7 @@ func TestFileFieldPrepareValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 
 	f1, err := filesystem.NewFileFromBytes([]byte("test"), "test1.txt")
 	if err != nil {
@@ -107,33 +107,33 @@ func TestFileFieldPrepareValue(t *testing.T) {
 
 	scenarios := []struct {
 		raw      any
-		field    *core.FileField
+		field    *kernel.FileField
 		expected string
 	}{
 		// single
-		{nil, &core.FileField{MaxSelect: 1}, `""`},
-		{"", &core.FileField{MaxSelect: 1}, `""`},
-		{123, &core.FileField{MaxSelect: 1}, `"123"`},
-		{"a", &core.FileField{MaxSelect: 1}, `"a"`},
-		{`["a"]`, &core.FileField{MaxSelect: 1}, `"a"`},
-		{f1, &core.FileField{MaxSelect: 1}, string(f1Raw)},
-		{*f1, &core.FileField{MaxSelect: 1}, string(f1Raw)},
-		{nilFile, &core.FileField{MaxSelect: 1}, `""`},
-		{[]string{}, &core.FileField{MaxSelect: 1}, `""`},
-		{[]string{"a", "b"}, &core.FileField{MaxSelect: 1}, `"b"`},
+		{nil, &kernel.FileField{MaxSelect: 1}, `""`},
+		{"", &kernel.FileField{MaxSelect: 1}, `""`},
+		{123, &kernel.FileField{MaxSelect: 1}, `"123"`},
+		{"a", &kernel.FileField{MaxSelect: 1}, `"a"`},
+		{`["a"]`, &kernel.FileField{MaxSelect: 1}, `"a"`},
+		{f1, &kernel.FileField{MaxSelect: 1}, string(f1Raw)},
+		{*f1, &kernel.FileField{MaxSelect: 1}, string(f1Raw)},
+		{nilFile, &kernel.FileField{MaxSelect: 1}, `""`},
+		{[]string{}, &kernel.FileField{MaxSelect: 1}, `""`},
+		{[]string{"a", "b"}, &kernel.FileField{MaxSelect: 1}, `"b"`},
 
 		// multiple
-		{nil, &core.FileField{MaxSelect: 2}, `[]`},
-		{"", &core.FileField{MaxSelect: 2}, `[]`},
-		{123, &core.FileField{MaxSelect: 2}, `["123"]`},
-		{"a", &core.FileField{MaxSelect: 2}, `["a"]`},
-		{`["a"]`, &core.FileField{MaxSelect: 2}, `["a"]`},
-		{[]any{f1}, &core.FileField{MaxSelect: 2}, `[` + string(f1Raw) + `]`},
-		{[]filesystem.File{*f1}, &core.FileField{MaxSelect: 2}, `[` + string(f1Raw) + `]`},
-		{[]*filesystem.File{f1}, &core.FileField{MaxSelect: 2}, `[` + string(f1Raw) + `]`},
-		{[]any{nilFile, f1}, &core.FileField{MaxSelect: 2}, `[` + string(f1Raw) + `]`},
-		{[]string{}, &core.FileField{MaxSelect: 2}, `[]`},
-		{[]string{"a", "b", "c"}, &core.FileField{MaxSelect: 2}, `["a","b","c"]`},
+		{nil, &kernel.FileField{MaxSelect: 2}, `[]`},
+		{"", &kernel.FileField{MaxSelect: 2}, `[]`},
+		{123, &kernel.FileField{MaxSelect: 2}, `["123"]`},
+		{"a", &kernel.FileField{MaxSelect: 2}, `["a"]`},
+		{`["a"]`, &kernel.FileField{MaxSelect: 2}, `["a"]`},
+		{[]any{f1}, &kernel.FileField{MaxSelect: 2}, `[` + string(f1Raw) + `]`},
+		{[]filesystem.File{*f1}, &kernel.FileField{MaxSelect: 2}, `[` + string(f1Raw) + `]`},
+		{[]*filesystem.File{f1}, &kernel.FileField{MaxSelect: 2}, `[` + string(f1Raw) + `]`},
+		{[]any{nilFile, f1}, &kernel.FileField{MaxSelect: 2}, `[` + string(f1Raw) + `]`},
+		{[]string{}, &kernel.FileField{MaxSelect: 2}, `[]`},
+		{[]string{"a", "b", "c"}, &kernel.FileField{MaxSelect: 2}, `["a","b","c"]`},
 	}
 
 	for i, s := range scenarios {
@@ -166,33 +166,33 @@ func TestFileFieldDriverValue(t *testing.T) {
 
 	scenarios := []struct {
 		raw      any
-		field    *core.FileField
+		field    *kernel.FileField
 		expected string
 	}{
 		// single
-		{nil, &core.FileField{MaxSelect: 1}, `""`},
-		{"", &core.FileField{MaxSelect: 1}, `""`},
-		{123, &core.FileField{MaxSelect: 1}, `"123"`},
-		{"a", &core.FileField{MaxSelect: 1}, `"a"`},
-		{`["a"]`, &core.FileField{MaxSelect: 1}, `"a"`},
-		{f1, &core.FileField{MaxSelect: 1}, `"` + f1.Name + `"`},
-		{[]string{}, &core.FileField{MaxSelect: 1}, `""`},
-		{[]string{"a", "b"}, &core.FileField{MaxSelect: 1}, `"b"`},
+		{nil, &kernel.FileField{MaxSelect: 1}, `""`},
+		{"", &kernel.FileField{MaxSelect: 1}, `""`},
+		{123, &kernel.FileField{MaxSelect: 1}, `"123"`},
+		{"a", &kernel.FileField{MaxSelect: 1}, `"a"`},
+		{`["a"]`, &kernel.FileField{MaxSelect: 1}, `"a"`},
+		{f1, &kernel.FileField{MaxSelect: 1}, `"` + f1.Name + `"`},
+		{[]string{}, &kernel.FileField{MaxSelect: 1}, `""`},
+		{[]string{"a", "b"}, &kernel.FileField{MaxSelect: 1}, `"b"`},
 
 		// multiple
-		{nil, &core.FileField{MaxSelect: 2}, `[]`},
-		{"", &core.FileField{MaxSelect: 2}, `[]`},
-		{123, &core.FileField{MaxSelect: 2}, `["123"]`},
-		{"a", &core.FileField{MaxSelect: 2}, `["a"]`},
-		{`["a"]`, &core.FileField{MaxSelect: 2}, `["a"]`},
-		{[]any{"a", f1}, &core.FileField{MaxSelect: 2}, `["a","` + f1.Name + `"]`},
-		{[]string{}, &core.FileField{MaxSelect: 2}, `[]`},
-		{[]string{"a", "b", "c"}, &core.FileField{MaxSelect: 2}, `["a","b","c"]`},
+		{nil, &kernel.FileField{MaxSelect: 2}, `[]`},
+		{"", &kernel.FileField{MaxSelect: 2}, `[]`},
+		{123, &kernel.FileField{MaxSelect: 2}, `["123"]`},
+		{"a", &kernel.FileField{MaxSelect: 2}, `["a"]`},
+		{`["a"]`, &kernel.FileField{MaxSelect: 2}, `["a"]`},
+		{[]any{"a", f1}, &kernel.FileField{MaxSelect: 2}, `["a","` + f1.Name + `"]`},
+		{[]string{}, &kernel.FileField{MaxSelect: 2}, `[]`},
+		{[]string{"a", "b", "c"}, &kernel.FileField{MaxSelect: 2}, `["a","b","c"]`},
 	}
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%#v_%v", i, s.raw, s.field.IsMultiple()), func(t *testing.T) {
-			record := core.NewRecord(core.NewBaseCollection("test"))
+			record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 			record.SetRaw(s.field.GetName(), s.raw)
 
 			v, err := s.field.DriverValue(record)
@@ -228,7 +228,7 @@ func TestFileFieldValidateValue(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection := core.NewBaseCollection("test_collection")
+	collection := kernel.NewBaseCollection("test_collection")
 
 	f1, err := filesystem.NewFileFromBytes([]byte("test"), "test1.txt")
 	if err != nil {
@@ -245,28 +245,28 @@ func TestFileFieldValidateValue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f4, err := filesystem.NewFileFromBytes(make([]byte, core.DefaultFileFieldMaxSize+1), "test4.txt")
+	f4, err := filesystem.NewFileFromBytes(make([]byte, kernel.DefaultFileFieldMaxSize+1), "test4.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	f5, err := filesystem.NewFileFromBytes(make([]byte, core.DefaultFileFieldMaxSize), "test5.txt")
+	f5, err := filesystem.NewFileFromBytes(make([]byte, kernel.DefaultFileFieldMaxSize), "test5.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	scenarios := []struct {
 		name        string
-		field       *core.FileField
-		record      func() *core.Record
+		field       *kernel.FileField
+		record      func() *kernel.Record
 		expectError bool
 	}{
 		// single
 		{
 			"zero field value (not required)",
-			&core.FileField{Name: "test", MaxSize: 9999, MaxSelect: 1},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.FileField{Name: "test", MaxSize: 9999, MaxSelect: 1},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "")
 				return record
 			},
@@ -274,9 +274,9 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"zero field value (required)",
-			&core.FileField{Name: "test", MaxSize: 9999, MaxSelect: 1, Required: true},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.FileField{Name: "test", MaxSize: 9999, MaxSelect: 1, Required: true},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "")
 				return record
 			},
@@ -284,9 +284,9 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"new plain filename", // new files must be *filesystem.File
-			&core.FileField{Name: "test", MaxSize: 9999, MaxSelect: 1},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.FileField{Name: "test", MaxSize: 9999, MaxSelect: 1},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", "a")
 				return record
 			},
@@ -294,9 +294,9 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"new file",
-			&core.FileField{Name: "test", MaxSize: 9999, MaxSelect: 1},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.FileField{Name: "test", MaxSize: 9999, MaxSelect: 1},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", f1)
 				return record
 			},
@@ -304,9 +304,9 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"new files > MaxSelect",
-			&core.FileField{Name: "test", MaxSize: 9999, MaxSelect: 1},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.FileField{Name: "test", MaxSize: 9999, MaxSelect: 1},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", []any{f1, f2})
 				return record
 			},
@@ -314,9 +314,9 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"new files <= MaxSelect",
-			&core.FileField{Name: "test", MaxSize: 9999, MaxSelect: 2},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.FileField{Name: "test", MaxSize: 9999, MaxSelect: 2},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", []any{f1, f2})
 				return record
 			},
@@ -324,9 +324,9 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"> default MaxSize",
-			&core.FileField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.FileField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", f4)
 				return record
 			},
@@ -334,9 +334,9 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"<= default MaxSize",
-			&core.FileField{Name: "test"},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.FileField{Name: "test"},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", f5)
 				return record
 			},
@@ -344,9 +344,9 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"> MaxSize",
-			&core.FileField{Name: "test", MaxSize: 4, MaxSelect: 3},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.FileField{Name: "test", MaxSize: 4, MaxSelect: 3},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", []any{f1, f2, f3}) // f3=8
 				return record
 			},
@@ -354,9 +354,9 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"<= MaxSize",
-			&core.FileField{Name: "test", MaxSize: 8, MaxSelect: 3},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.FileField{Name: "test", MaxSize: 8, MaxSelect: 3},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", []any{f1, f2, f3})
 				return record
 			},
@@ -364,9 +364,9 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"non-matching MimeType",
-			&core.FileField{Name: "test", MaxSize: 999, MaxSelect: 3, MimeTypes: []string{"a", "b"}},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.FileField{Name: "test", MaxSize: 999, MaxSelect: 3, MimeTypes: []string{"a", "b"}},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", []any{f1, f2})
 				return record
 			},
@@ -374,9 +374,9 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"matching MimeType",
-			&core.FileField{Name: "test", MaxSize: 999, MaxSelect: 3, MimeTypes: []string{"text/plain", "b"}},
-			func() *core.Record {
-				record := core.NewRecord(collection)
+			&kernel.FileField{Name: "test", MaxSize: 999, MaxSelect: 3, MimeTypes: []string{"text/plain", "b"}},
+			func() *kernel.Record {
+				record := kernel.NewRecord(collection)
 				record.SetRaw("test", []any{f1, f2})
 				return record
 			},
@@ -384,8 +384,8 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"existing files > MaxSelect",
-			&core.FileField{Name: "file_many", MaxSize: 999, MaxSelect: 2},
-			func() *core.Record {
+			&kernel.FileField{Name: "file_many", MaxSize: 999, MaxSelect: 2},
+			func() *kernel.Record {
 				record, _ := app.FindRecordById("demo1", "84nmscqy84lsi1t") // 5 files
 				return record
 			},
@@ -393,8 +393,8 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"existing files should ignore the MaxSize and Mimetypes checks",
-			&core.FileField{Name: "file_many", MaxSize: 1, MaxSelect: 5, MimeTypes: []string{"a", "b"}},
-			func() *core.Record {
+			&kernel.FileField{Name: "file_many", MaxSize: 1, MaxSelect: 5, MimeTypes: []string{"a", "b"}},
+			func() *kernel.Record {
 				record, _ := app.FindRecordById("demo1", "84nmscqy84lsi1t")
 				return record
 			},
@@ -402,8 +402,8 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"existing + new file > MaxSelect (5+2)",
-			&core.FileField{Name: "file_many", MaxSize: 999, MaxSelect: 6},
-			func() *core.Record {
+			&kernel.FileField{Name: "file_many", MaxSize: 999, MaxSelect: 6},
+			func() *kernel.Record {
 				record, _ := app.FindRecordById("demo1", "84nmscqy84lsi1t")
 				record.Set("file_many+", []any{f1, f2})
 				return record
@@ -412,8 +412,8 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"existing + new file <= MaxSelect (5+2)",
-			&core.FileField{Name: "file_many", MaxSize: 999, MaxSelect: 7},
-			func() *core.Record {
+			&kernel.FileField{Name: "file_many", MaxSize: 999, MaxSelect: 7},
+			func() *kernel.Record {
 				record, _ := app.FindRecordById("demo1", "84nmscqy84lsi1t")
 				record.Set("file_many+", []any{f1, f2})
 				return record
@@ -422,8 +422,8 @@ func TestFileFieldValidateValue(t *testing.T) {
 		},
 		{
 			"existing + new filename",
-			&core.FileField{Name: "file_many", MaxSize: 999, MaxSelect: 99},
-			func() *core.Record {
+			&kernel.FileField{Name: "file_many", MaxSize: 999, MaxSelect: 99},
+			func() *kernel.Record {
 				record, _ := app.FindRecordById("demo1", "84nmscqy84lsi1t")
 				record.Set("file_many+", "test123.png")
 				return record
@@ -445,22 +445,22 @@ func TestFileFieldValidateValue(t *testing.T) {
 }
 
 func TestFileFieldValidateSettings(t *testing.T) {
-	testDefaultFieldIdValidation(t, core.FieldTypeFile)
-	testDefaultFieldNameValidation(t, core.FieldTypeFile)
-	testDefaultFieldHelpValidation[core.FileField](t)
+	testDefaultFieldIdValidation(t, kernel.FieldTypeFile)
+	testDefaultFieldNameValidation(t, kernel.FieldTypeFile)
+	testDefaultFieldHelpValidation[kernel.FileField](t)
 
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
 	scenarios := []struct {
 		name         string
-		field        func() *core.FileField
+		field        func() *kernel.FileField
 		expectErrors []string
 	}{
 		{
 			"zero minimal",
-			func() *core.FileField {
-				return &core.FileField{
+			func() *kernel.FileField {
+				return &kernel.FileField{
 					Id:   "test",
 					Name: "test",
 				}
@@ -469,8 +469,8 @@ func TestFileFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"0x0 thumb",
-			func() *core.FileField {
-				return &core.FileField{
+			func() *kernel.FileField {
+				return &kernel.FileField{
 					Id:        "test",
 					Name:      "test",
 					MaxSelect: 1,
@@ -481,8 +481,8 @@ func TestFileFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"0x0t thumb",
-			func() *core.FileField {
-				return &core.FileField{
+			func() *kernel.FileField {
+				return &kernel.FileField{
 					Id:        "test",
 					Name:      "test",
 					MaxSize:   1,
@@ -494,8 +494,8 @@ func TestFileFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"0x0b thumb",
-			func() *core.FileField {
-				return &core.FileField{
+			func() *kernel.FileField {
+				return &kernel.FileField{
 					Id:        "test",
 					Name:      "test",
 					MaxSize:   1,
@@ -507,8 +507,8 @@ func TestFileFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"0x0f thumb",
-			func() *core.FileField {
-				return &core.FileField{
+			func() *kernel.FileField {
+				return &kernel.FileField{
 					Id:        "test",
 					Name:      "test",
 					MaxSize:   1,
@@ -520,8 +520,8 @@ func TestFileFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"invalid format",
-			func() *core.FileField {
-				return &core.FileField{
+			func() *kernel.FileField {
+				return &kernel.FileField{
 					Id:        "test",
 					Name:      "test",
 					MaxSize:   1,
@@ -533,8 +533,8 @@ func TestFileFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"valid thumbs",
-			func() *core.FileField {
-				return &core.FileField{
+			func() *kernel.FileField {
+				return &kernel.FileField{
 					Id:        "test",
 					Name:      "test",
 					MaxSize:   1,
@@ -546,8 +546,8 @@ func TestFileFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"MaxSize > safe json int",
-			func() *core.FileField {
-				return &core.FileField{
+			func() *kernel.FileField {
+				return &kernel.FileField{
 					Id:      "test",
 					Name:    "test",
 					MaxSize: 1 << 53,
@@ -557,8 +557,8 @@ func TestFileFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"MaxSize < 0",
-			func() *core.FileField {
-				return &core.FileField{
+			func() *kernel.FileField {
+				return &kernel.FileField{
 					Id:      "test",
 					Name:    "test",
 					MaxSize: -1,
@@ -568,8 +568,8 @@ func TestFileFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"MaxSelect > safe json int",
-			func() *core.FileField {
-				return &core.FileField{
+			func() *kernel.FileField {
+				return &kernel.FileField{
 					Id:        "test",
 					Name:      "test",
 					MaxSelect: 1 << 53,
@@ -579,8 +579,8 @@ func TestFileFieldValidateSettings(t *testing.T) {
 		},
 		{
 			"MaxSelect < 0",
-			func() *core.FileField {
-				return &core.FileField{
+			func() *kernel.FileField {
+				return &kernel.FileField{
 					Id:        "test",
 					Name:      "test",
 					MaxSelect: -1,
@@ -594,7 +594,7 @@ func TestFileFieldValidateSettings(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			field := s.field()
 
-			collection := core.NewBaseCollection("test_collection")
+			collection := kernel.NewBaseCollection("test_collection")
 			collection.Fields.Add(field)
 
 			errs := field.ValidateSettings(context.Background(), app, collection)
@@ -609,14 +609,14 @@ func TestFileFieldCalculateMaxBodySize(t *testing.T) {
 	defer testApp.Cleanup()
 
 	scenarios := []struct {
-		field    *core.FileField
+		field    *kernel.FileField
 		expected int64
 	}{
-		{&core.FileField{}, core.DefaultFileFieldMaxSize},
-		{&core.FileField{MaxSelect: 2}, 2 * core.DefaultFileFieldMaxSize},
-		{&core.FileField{MaxSize: 10}, 10},
-		{&core.FileField{MaxSize: 10, MaxSelect: 1}, 10},
-		{&core.FileField{MaxSize: 10, MaxSelect: 2}, 20},
+		{&kernel.FileField{}, kernel.DefaultFileFieldMaxSize},
+		{&kernel.FileField{MaxSelect: 2}, 2 * kernel.DefaultFileFieldMaxSize},
+		{&kernel.FileField{MaxSize: 10}, 10},
+		{&kernel.FileField{MaxSize: 10, MaxSelect: 1}, 10},
+		{&kernel.FileField{MaxSize: 10, MaxSelect: 2}, 20},
 	}
 
 	for i, s := range scenarios {
@@ -653,9 +653,9 @@ func TestFileFieldFindGetter(t *testing.T) {
 	record.Set("files+", []any{f1, f2})
 	record.Set("files-", "test_FLurQTgrY8.txt")
 
-	field, ok := record.Collection().Fields.GetByName("files").(*core.FileField)
+	field, ok := record.Collection().Fields.GetByName("files").(*kernel.FileField)
 	if !ok {
-		t.Fatalf("Expected *core.FileField, got %T", record.Collection().Fields.GetByName("files"))
+		t.Fatalf("Expected *kernel.FileField, got %T", record.Collection().Fields.GetByName("files"))
 	}
 
 	scenarios := []struct {
@@ -717,7 +717,7 @@ func TestFileFieldFindSetter(t *testing.T) {
 		name      string
 		key       string
 		value     any
-		field     *core.FileField
+		field     *kernel.FileField
 		hasSetter bool
 		expected  string
 	}{
@@ -725,7 +725,7 @@ func TestFileFieldFindSetter(t *testing.T) {
 			"no match",
 			"example",
 			"b",
-			&core.FileField{Name: "test", MaxSelect: 1},
+			&kernel.FileField{Name: "test", MaxSelect: 1},
 			false,
 			"",
 		},
@@ -733,7 +733,7 @@ func TestFileFieldFindSetter(t *testing.T) {
 			"exact match (single)",
 			"test",
 			"b",
-			&core.FileField{Name: "test", MaxSelect: 1},
+			&kernel.FileField{Name: "test", MaxSelect: 1},
 			true,
 			`"b"`,
 		},
@@ -741,7 +741,7 @@ func TestFileFieldFindSetter(t *testing.T) {
 			"exact match (multiple)",
 			"test",
 			[]string{"a", "b", "b"},
-			&core.FileField{Name: "test", MaxSelect: 2},
+			&kernel.FileField{Name: "test", MaxSelect: 2},
 			true,
 			`["a","b"]`,
 		},
@@ -749,7 +749,7 @@ func TestFileFieldFindSetter(t *testing.T) {
 			"append (single)",
 			"test+",
 			"b",
-			&core.FileField{Name: "test", MaxSelect: 1},
+			&kernel.FileField{Name: "test", MaxSelect: 1},
 			true,
 			`"b"`,
 		},
@@ -757,7 +757,7 @@ func TestFileFieldFindSetter(t *testing.T) {
 			"append (multiple)",
 			"test+",
 			[]string{"a"},
-			&core.FileField{Name: "test", MaxSelect: 2},
+			&kernel.FileField{Name: "test", MaxSelect: 2},
 			true,
 			`["c","d","a"]`,
 		},
@@ -765,7 +765,7 @@ func TestFileFieldFindSetter(t *testing.T) {
 			"prepend (single)",
 			"+test",
 			"b",
-			&core.FileField{Name: "test", MaxSelect: 1},
+			&kernel.FileField{Name: "test", MaxSelect: 1},
 			true,
 			`"d"`, // the last of the existing values
 		},
@@ -773,7 +773,7 @@ func TestFileFieldFindSetter(t *testing.T) {
 			"prepend (multiple)",
 			"+test",
 			[]string{"a"},
-			&core.FileField{Name: "test", MaxSelect: 2},
+			&kernel.FileField{Name: "test", MaxSelect: 2},
 			true,
 			`["a","c","d"]`,
 		},
@@ -781,7 +781,7 @@ func TestFileFieldFindSetter(t *testing.T) {
 			"subtract (single)",
 			"test-",
 			"d",
-			&core.FileField{Name: "test", MaxSelect: 1},
+			&kernel.FileField{Name: "test", MaxSelect: 1},
 			true,
 			`"c"`,
 		},
@@ -789,7 +789,7 @@ func TestFileFieldFindSetter(t *testing.T) {
 			"subtract (multiple)",
 			"test-",
 			[]string{"unknown", "c"},
-			&core.FileField{Name: "test", MaxSelect: 2},
+			&kernel.FileField{Name: "test", MaxSelect: 2},
 			true,
 			`["d"]`,
 		},
@@ -797,7 +797,7 @@ func TestFileFieldFindSetter(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			collection := core.NewBaseCollection("test_collection")
+			collection := kernel.NewBaseCollection("test_collection")
 			collection.Fields.Add(s.field)
 
 			setter := s.field.FindSetter(s.key)
@@ -811,7 +811,7 @@ func TestFileFieldFindSetter(t *testing.T) {
 				return
 			}
 
-			record := core.NewRecord(collection)
+			record := kernel.NewRecord(collection)
 			record.SetRaw(s.field.GetName(), []string{"c", "d"})
 
 			setter(record, s.value)
@@ -837,7 +837,7 @@ func TestFileFieldIntercept(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	demo1.Fields.GetByName("text").(*core.TextField).Required = true // trigger validation error
+	demo1.Fields.GetByName("text").(*kernel.TextField).Required = true // trigger validation error
 
 	f1, err := filesystem.NewFileFromBytes([]byte("test"), "new1.txt")
 	if err != nil {
@@ -859,7 +859,7 @@ func TestFileFieldIntercept(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	record := core.NewRecord(demo1)
+	record := kernel.NewRecord(demo1)
 
 	ok := t.Run("1. create - with validation error", func(t *testing.T) {
 		record.Set("file_many", []any{f1, f2})
@@ -974,7 +974,7 @@ func TestFileFieldInterceptTx(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	demo1.Fields.GetByName("text").(*core.TextField).Required = true // trigger validation error
+	demo1.Fields.GetByName("text").(*kernel.TextField).Required = true // trigger validation error
 
 	f1, err := filesystem.NewFileFromBytes([]byte("test"), "new1.txt")
 	if err != nil {
@@ -996,16 +996,16 @@ func TestFileFieldInterceptTx(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var record *core.Record
+	var record *kernel.Record
 
-	tx := func(succeed bool) func(txApp core.App) error {
+	tx := func(succeed bool) func(txApp kernel.App) error {
 		var txErr error
 		if !succeed {
 			txErr = errors.New("tx error")
 		}
 
-		return func(txApp core.App) error {
-			record = core.NewRecord(demo1)
+		return func(txApp kernel.App) error {
+			record = kernel.NewRecord(demo1)
 			ok := t.Run(fmt.Sprintf("[tx_%v] create with validation error", succeed), func(t *testing.T) {
 				record.Set("text", "")
 				record.Set("file_many", []any{f1, f2})
@@ -1126,7 +1126,7 @@ func TestFileFieldInterceptTx(t *testing.T) {
 
 // -------------------------------------------------------------------
 
-func checkRecordFiles(t *testing.T, testApp core.App, record *core.Record, expectedKeys []string) {
+func checkRecordFiles(t *testing.T, testApp kernel.App, record *kernel.Record, expectedKeys []string) {
 	fsys, err := testApp.NewFilesystem()
 	if err != nil {
 		t.Fatal(err)

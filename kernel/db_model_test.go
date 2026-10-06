@@ -3,13 +3,13 @@ package kernel_test
 import (
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 func TestBaseModel(t *testing.T) {
 	id := "test_id"
 
-	m := core.BaseModel{Id: id}
+	m := kernel.BaseModel{Id: id}
 
 	if m.PK() != id {
 		t.Fatalf("[before PostScan] Expected PK %q, got %q", "", m.PK())

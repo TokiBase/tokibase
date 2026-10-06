@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/pocketbase/dbx"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/store"
 	"golang.org/x/sync/semaphore"
 )
@@ -16,7 +16,7 @@ import (
 func TestNotifyWatcher_SettingsUpdate(t *testing.T) {
 	t.Parallel()
 
-	testEvents := store.New[core.App, int](nil)
+	testEvents := store.New[kernel.App, int](nil)
 
 	tmpDir, err := os.MkdirTemp("", "pb_notify_test*")
 	if err != nil {
@@ -24,14 +24,14 @@ func TestNotifyWatcher_SettingsUpdate(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	app1 := core.NewBaseApp(core.BaseAppConfig{
+	app1 := kernel.NewBaseApp(kernel.BaseAppConfig{
 		DataDir: tmpDir,
 	})
 	if err := app1.Bootstrap(); err != nil {
 		t.Fatal(err)
 	}
 
-	app2 := core.NewBaseApp(core.BaseAppConfig{
+	app2 := kernel.NewBaseApp(kernel.BaseAppConfig{
 		DataDir: tmpDir,
 	})
 	if err := app2.Bootstrap(); err != nil {
@@ -41,14 +41,14 @@ func TestNotifyWatcher_SettingsUpdate(t *testing.T) {
 	timeout := time.After(3 * time.Second)
 	done := make(chan struct{})
 
-	app1.OnSettingsReload().BindFunc(func(e *core.SettingsReloadEvent) error {
+	app1.OnSettingsReload().BindFunc(func(e *kernel.SettingsReloadEvent) error {
 		testEvents.SetFunc(app1, func(old int) int {
 			return old + 1
 		})
 		return e.Next()
 	})
 
-	app2.OnSettingsReload().BindFunc(func(e *core.SettingsReloadEvent) error {
+	app2.OnSettingsReload().BindFunc(func(e *kernel.SettingsReloadEvent) error {
 		testEvents.SetFunc(app2, func(old int) int {
 			defer func() {
 				done <- struct{}{}
@@ -96,14 +96,14 @@ func TestNotifyWatcher_CollectionsUpdate(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	app1 := core.NewBaseApp(core.BaseAppConfig{
+	app1 := kernel.NewBaseApp(kernel.BaseAppConfig{
 		DataDir: tmpDir,
 	})
 	if err := app1.Bootstrap(); err != nil {
 		t.Fatal(err)
 	}
 
-	app2 := core.NewBaseApp(core.BaseAppConfig{
+	app2 := kernel.NewBaseApp(kernel.BaseAppConfig{
 		DataDir: tmpDir,
 	})
 	if err := app2.Bootstrap(); err != nil {
@@ -156,11 +156,11 @@ func TestNotifyWatcher_CollectionsUpdate(t *testing.T) {
 	}()
 
 	// create/update/delete app1 collections should trigger a reload in app2
-	dummyCollection := core.NewBaseCollection("test")
+	dummyCollection := kernel.NewBaseCollection("test")
 	if err := app1.Save(dummyCollection); err != nil {
 		t.Fatal(err)
 	}
-	dummyCollection.Fields.Add(&core.TextField{Name: "test"})
+	dummyCollection.Fields.Add(&kernel.TextField{Name: "test"})
 	if err := app1.Save(dummyCollection); err != nil {
 		t.Fatal(err)
 	}

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/types"
 )
@@ -16,20 +16,20 @@ func TestNewMFA(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	mfa := core.NewMFA(app)
+	mfa := kernel.NewMFA(app)
 
-	if mfa.Collection().Name != core.CollectionNameMFAs {
-		t.Fatalf("Expected record with %q collection, got %q", core.CollectionNameMFAs, mfa.Collection().Name)
+	if mfa.Collection().Name != kernel.CollectionNameMFAs {
+		t.Fatalf("Expected record with %q collection, got %q", kernel.CollectionNameMFAs, mfa.Collection().Name)
 	}
 }
 
 func TestMFAProxyRecord(t *testing.T) {
 	t.Parallel()
 
-	record := core.NewRecord(core.NewBaseCollection("test"))
+	record := kernel.NewRecord(kernel.NewBaseCollection("test"))
 	record.Id = "test_id"
 
-	mfa := core.MFA{}
+	mfa := kernel.MFA{}
 	mfa.SetProxyRecord(record)
 
 	if mfa.ProxyRecord() == nil || mfa.ProxyRecord().Id != record.Id {
@@ -43,7 +43,7 @@ func TestMFARecordRef(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	mfa := core.NewMFA(app)
+	mfa := kernel.NewMFA(app)
 
 	testValues := []string{"test_1", "test2", ""}
 	for i, testValue := range testValues {
@@ -67,7 +67,7 @@ func TestMFACollectionRef(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	mfa := core.NewMFA(app)
+	mfa := kernel.NewMFA(app)
 
 	testValues := []string{"test_1", "test2", ""}
 	for i, testValue := range testValues {
@@ -91,7 +91,7 @@ func TestMFAMethod(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	mfa := core.NewMFA(app)
+	mfa := kernel.NewMFA(app)
 
 	testValues := []string{"test_1", "test2", ""}
 	for i, testValue := range testValues {
@@ -115,7 +115,7 @@ func TestMFACreated(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	mfa := core.NewMFA(app)
+	mfa := kernel.NewMFA(app)
 
 	if v := mfa.Created().String(); v != "" {
 		t.Fatalf("Expected empty created, got %q", v)
@@ -135,7 +135,7 @@ func TestMFAUpdated(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	mfa := core.NewMFA(app)
+	mfa := kernel.NewMFA(app)
 
 	if v := mfa.Updated().String(); v != "" {
 		t.Fatalf("Expected empty updated, got %q", v)
@@ -157,7 +157,7 @@ func TestMFAHasExpired(t *testing.T) {
 
 	now := types.NowDateTime()
 
-	mfa := core.NewMFA(app)
+	mfa := kernel.NewMFA(app)
 	mfa.SetRaw("created", now.Add(-5*time.Minute))
 
 	scenarios := []struct {
@@ -187,7 +187,7 @@ func TestMFAPreValidate(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	mfasCol, err := app.FindCollectionByNameOrId(core.CollectionNameMFAs)
+	mfasCol, err := app.FindCollectionByNameOrId(kernel.CollectionNameMFAs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestMFAPreValidate(t *testing.T) {
 	}
 
 	t.Run("no proxy record", func(t *testing.T) {
-		mfa := &core.MFA{}
+		mfa := &kernel.MFA{}
 
 		if err := app.Validate(mfa); err == nil {
 			t.Fatal("Expected collection validation error")
@@ -206,8 +206,8 @@ func TestMFAPreValidate(t *testing.T) {
 	})
 
 	t.Run("non-MFA collection", func(t *testing.T) {
-		mfa := &core.MFA{}
-		mfa.SetProxyRecord(core.NewRecord(core.NewBaseCollection("invalid")))
+		mfa := &kernel.MFA{}
+		mfa.SetProxyRecord(kernel.NewRecord(kernel.NewBaseCollection("invalid")))
 		mfa.SetRecordRef(user.Id)
 		mfa.SetCollectionRef(user.Collection().Id)
 		mfa.SetMethod("test123")
@@ -218,8 +218,8 @@ func TestMFAPreValidate(t *testing.T) {
 	})
 
 	t.Run("MFA collection", func(t *testing.T) {
-		mfa := &core.MFA{}
-		mfa.SetProxyRecord(core.NewRecord(mfasCol))
+		mfa := &kernel.MFA{}
+		mfa.SetProxyRecord(kernel.NewRecord(mfasCol))
 		mfa.SetRecordRef(user.Id)
 		mfa.SetCollectionRef(user.Collection().Id)
 		mfa.SetMethod("test123")
@@ -248,20 +248,20 @@ func TestMFAValidateHook(t *testing.T) {
 
 	scenarios := []struct {
 		name         string
-		mfa          func() *core.MFA
+		mfa          func() *kernel.MFA
 		expectErrors []string
 	}{
 		{
 			"empty",
-			func() *core.MFA {
-				return core.NewMFA(app)
+			func() *kernel.MFA {
+				return kernel.NewMFA(app)
 			},
 			[]string{"collectionRef", "recordRef", "method"},
 		},
 		{
 			"non-auth collection",
-			func() *core.MFA {
-				mfa := core.NewMFA(app)
+			func() *kernel.MFA {
+				mfa := kernel.NewMFA(app)
 				mfa.SetCollectionRef(demo1.Collection().Id)
 				mfa.SetRecordRef(demo1.Id)
 				mfa.SetMethod("test123")
@@ -271,8 +271,8 @@ func TestMFAValidateHook(t *testing.T) {
 		},
 		{
 			"missing record id",
-			func() *core.MFA {
-				mfa := core.NewMFA(app)
+			func() *kernel.MFA {
+				mfa := kernel.NewMFA(app)
 				mfa.SetCollectionRef(user.Collection().Id)
 				mfa.SetRecordRef("missing")
 				mfa.SetMethod("test123")
@@ -282,8 +282,8 @@ func TestMFAValidateHook(t *testing.T) {
 		},
 		{
 			"valid ref",
-			func() *core.MFA {
-				mfa := core.NewMFA(app)
+			func() *kernel.MFA {
+				mfa := kernel.NewMFA(app)
 				mfa.SetCollectionRef(user.Collection().Id)
 				mfa.SetRecordRef(user.Id)
 				mfa.SetMethod("test123")
@@ -317,16 +317,16 @@ func TestMFAClearOnPasswordChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mfasToCreate := map[*core.Record]int{
+	mfasToCreate := map[*kernel.Record]int{
 		user1: 3,
 		user2: 2,
 	}
 	for user, total := range mfasToCreate {
 		for range total {
-			mfa := core.NewMFA(app)
+			mfa := kernel.NewMFA(app)
 			mfa.SetCollectionRef(user.Collection().Id)
 			mfa.SetRecordRef(user.Id)
-			mfa.SetMethod(core.MFAMethodPassword)
+			mfa.SetMethod(kernel.MFAMethodPassword)
 			if err := app.Save(mfa); err != nil {
 				t.Fatal(err)
 			}
@@ -345,7 +345,7 @@ func TestMFAClearOnPasswordChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expectedMFAs := map[*core.Record]int{
+	expectedMFAs := map[*kernel.Record]int{
 		user1: 3,
 		user2: 0,
 	}

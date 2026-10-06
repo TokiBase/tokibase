@@ -278,7 +278,7 @@ func TestRecordConfirmVerification(t *testing.T) {
 				app.OnRecordConfirmVerificationRequest().BindFunc(func(e *core.RecordConfirmVerificationRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {

@@ -3,19 +3,19 @@ package kernel_test
 import (
 	"testing"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 func TestMigrationsList(t *testing.T) {
-	l1 := core.MigrationsList{}
-	l1.Add(&core.Migration{File: "5_test.go"})
-	l1.Add(&core.Migration{ /* auto detect file name */ })
+	l1 := kernel.MigrationsList{}
+	l1.Add(&kernel.Migration{File: "5_test.go"})
+	l1.Add(&kernel.Migration{ /* auto detect file name */ })
 	l1.Register(nil, nil, "3_test.go")
 	l1.Register(nil, nil, "1_test.go")
 	l1.Register(nil, nil, "2_test.go")
 	l1.Register(nil, nil /* auto detect file name */)
 
-	l2 := core.MigrationsList{}
+	l2 := kernel.MigrationsList{}
 	l2.Register(nil, nil, "4_test.go")
 	l2.Copy(l1)
 

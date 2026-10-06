@@ -141,7 +141,7 @@ func TestCollectionsList(t *testing.T) {
 				app.OnCollectionsListRequest().BindFunc(func(e *core.CollectionsListRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -242,7 +242,7 @@ func TestCollectionView(t *testing.T) {
 				app.OnCollectionViewRequest().BindFunc(func(e *core.CollectionRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -423,7 +423,7 @@ func TestCollectionDelete(t *testing.T) {
 				app.OnCollectionDeleteRequest().BindFunc(func(e *core.CollectionRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -726,7 +726,7 @@ func TestCollectionCreate(t *testing.T) {
 				app.OnCollectionCreateRequest().BindFunc(func(e *core.CollectionRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -1055,7 +1055,7 @@ func TestCollectionUpdate(t *testing.T) {
 				app.OnCollectionUpdateRequest().BindFunc(func(e *core.CollectionRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {

@@ -455,7 +455,7 @@ func TestRecordCrudList(t *testing.T) {
 				app.OnRecordsListRequest().BindFunc(func(e *core.RecordsListRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -925,7 +925,7 @@ func TestRecordCrudView(t *testing.T) {
 				app.OnRecordViewRequest().BindFunc(func(e *core.RecordRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -1297,7 +1297,7 @@ func TestRecordCrudDelete(t *testing.T) {
 				app.OnRecordDeleteRequest().BindFunc(func(e *core.RecordRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -1888,7 +1888,7 @@ func TestRecordCrudCreate(t *testing.T) {
 				app.OnRecordCreateRequest().BindFunc(func(e *core.RecordRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -2905,7 +2905,7 @@ func TestRecordCrudUpdate(t *testing.T) {
 				app.OnRecordUpdateRequest().BindFunc(func(e *core.RecordRequestEvent) error {
 					original := e.App
 					return e.App.RunInTransaction(func(txApp kernel.App) error {
-						e.App = txApp
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {

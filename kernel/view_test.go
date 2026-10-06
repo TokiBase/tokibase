@@ -7,11 +7,11 @@ import (
 	"testing"
 
 	"github.com/pocketbase/dbx"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
-func ensureNoTempViews(app core.App, t *testing.T) {
+func ensureNoTempViews(app kernel.App, t *testing.T) {
 	var total int
 
 	err := app.DB().Select("count(*)").
@@ -81,7 +81,7 @@ func TestSaveView(t *testing.T) {
 		{
 			"empty name",
 			"",
-			"select * from " + core.CollectionNameSuperusers,
+			"select * from " + kernel.CollectionNameSuperusers,
 			true,
 			nil,
 		},
@@ -109,28 +109,28 @@ func TestSaveView(t *testing.T) {
 		{
 			"non select query",
 			"123Test",
-			"drop table " + core.CollectionNameSuperusers,
+			"drop table " + kernel.CollectionNameSuperusers,
 			true,
 			nil,
 		},
 		{
 			"multiple select queries",
 			"123Test",
-			"select *, count(id) as c  from " + core.CollectionNameSuperusers + "; select * from demo1;",
+			"select *, count(id) as c  from " + kernel.CollectionNameSuperusers + "; select * from demo1;",
 			true,
 			nil,
 		},
 		{
 			"try to break the parent parenthesis",
 			"123Test",
-			"select *, count(id) as c  from `" + core.CollectionNameSuperusers + "`)",
+			"select *, count(id) as c  from `" + kernel.CollectionNameSuperusers + "`)",
 			true,
 			nil,
 		},
 		{
 			"simple select query (+ trimmed semicolon)",
 			"123Test",
-			";select *, count(id) as c  from " + core.CollectionNameSuperusers + ";",
+			";select *, count(id) as c  from " + kernel.CollectionNameSuperusers + ";",
 			false,
 			[]string{
 				"id", "created", "updated",
@@ -142,7 +142,7 @@ func TestSaveView(t *testing.T) {
 		{
 			"update old view with new query",
 			"123Test",
-			"select 1 as test from " + core.CollectionNameSuperusers,
+			"select 1 as test from " + kernel.CollectionNameSuperusers,
 			false,
 			[]string{"test"},
 		},
@@ -187,7 +187,7 @@ func TestCreateViewFieldsWithDiscardedNestedTransaction(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	app.RunInTransaction(func(txApp core.App) error {
+	app.RunInTransaction(func(txApp kernel.App) error {
 		_, err := txApp.CreateViewFields("select id from missing")
 		if err == nil {
 			t.Fatal("Expected error, got nil")
@@ -270,11 +270,11 @@ func TestCreateViewFields(t *testing.T) {
 			`,
 			false,
 			map[string]string{
-				"id":      core.FieldTypeText,
-				"text":    core.FieldTypeText,
-				"url":     core.FieldTypeURL,
-				"created": core.FieldTypeAutodate,
-				"updated": core.FieldTypeAutodate,
+				"id":      kernel.FieldTypeText,
+				"text":    kernel.FieldTypeText,
+				"url":     kernel.FieldTypeURL,
+				"created": kernel.FieldTypeAutodate,
+				"updated": kernel.FieldTypeAutodate,
 			},
 		},
 		{
@@ -302,23 +302,23 @@ func TestCreateViewFields(t *testing.T) {
 			`,
 			false,
 			map[string]string{
-				"id":                   core.FieldTypeText,
-				"created":              core.FieldTypeAutodate,
-				"updated":              core.FieldTypeAutodate,
-				"text":                 core.FieldTypeText,
-				"bool":                 core.FieldTypeBool,
-				"url":                  core.FieldTypeURL,
-				"select_one":           core.FieldTypeSelect,
-				"select_many":          core.FieldTypeSelect,
-				"file_one":             core.FieldTypeFile,
-				"file_many":            core.FieldTypeFile,
-				"number_alias":         core.FieldTypeNumber,
-				"email":                core.FieldTypeEmail,
-				"datetime":             core.FieldTypeDate,
-				"json":                 core.FieldTypeJSON,
-				"rel_one":              core.FieldTypeRelation,
-				"rel_many":             core.FieldTypeRelation,
-				"single_quoted_column": core.FieldTypeJSON,
+				"id":                   kernel.FieldTypeText,
+				"created":              kernel.FieldTypeAutodate,
+				"updated":              kernel.FieldTypeAutodate,
+				"text":                 kernel.FieldTypeText,
+				"bool":                 kernel.FieldTypeBool,
+				"url":                  kernel.FieldTypeURL,
+				"select_one":           kernel.FieldTypeSelect,
+				"select_many":          kernel.FieldTypeSelect,
+				"file_one":             kernel.FieldTypeFile,
+				"file_many":            kernel.FieldTypeFile,
+				"number_alias":         kernel.FieldTypeNumber,
+				"email":                kernel.FieldTypeEmail,
+				"datetime":             kernel.FieldTypeDate,
+				"json":                 kernel.FieldTypeJSON,
+				"rel_one":              kernel.FieldTypeRelation,
+				"rel_many":             kernel.FieldTypeRelation,
+				"single_quoted_column": kernel.FieldTypeJSON,
 			},
 		},
 		{
@@ -326,9 +326,9 @@ func TestCreateViewFields(t *testing.T) {
 			"select a.id, b.id as bid, b.created from demo1 as a left join demo2 b",
 			false,
 			map[string]string{
-				"id":      core.FieldTypeText,
-				"bid":     core.FieldTypeRelation,
-				"created": core.FieldTypeAutodate,
+				"id":      kernel.FieldTypeText,
+				"bid":     kernel.FieldTypeRelation,
+				"created": kernel.FieldTypeAutodate,
 			},
 		},
 		{
@@ -340,25 +340,25 @@ func TestCreateViewFields(t *testing.T) {
 					lj.id cid,
 					ij.id as did,
 					a.bool,
-					` + core.CollectionNameSuperusers + `.id as eid,
-					` + core.CollectionNameSuperusers + `.email
+					` + kernel.CollectionNameSuperusers + `.id as eid,
+					` + kernel.CollectionNameSuperusers + `.email
 				from demo1 a, demo2 as b
 				left join demo3 lj on lj.id = 123
 				inner join demo4 as ij on ij.id = 123
-				join ` + core.CollectionNameSuperusers + `
+				join ` + kernel.CollectionNameSuperusers + `
 				where 1=1
 				group by a.id
 				limit 10
 			`,
 			false,
 			map[string]string{
-				"id":    core.FieldTypeText,
-				"bid":   core.FieldTypeRelation,
-				"cid":   core.FieldTypeRelation,
-				"did":   core.FieldTypeRelation,
-				"bool":  core.FieldTypeBool,
-				"eid":   core.FieldTypeRelation,
-				"email": core.FieldTypeEmail,
+				"id":    kernel.FieldTypeText,
+				"bid":   kernel.FieldTypeRelation,
+				"cid":   kernel.FieldTypeRelation,
+				"did":   kernel.FieldTypeRelation,
+				"bool":  kernel.FieldTypeBool,
+				"eid":   kernel.FieldTypeRelation,
+				"email": kernel.FieldTypeEmail,
 			},
 		},
 		{
@@ -382,22 +382,22 @@ func TestCreateViewFields(t *testing.T) {
 			from demo1 a`,
 			false,
 			map[string]string{
-				"id":           core.FieldTypeText,
-				"count":        core.FieldTypeNumber,
-				"total":        core.FieldTypeNumber,
-				"cast_int":     core.FieldTypeNumber,
-				"cast_integer": core.FieldTypeNumber,
-				"cast_real":    core.FieldTypeNumber,
-				"cast_decimal": core.FieldTypeNumber,
-				"cast_numeric": core.FieldTypeNumber,
-				"cast_text":    core.FieldTypeText,
-				"cast_bool":    core.FieldTypeBool,
-				"cast_boolean": core.FieldTypeBool,
+				"id":           kernel.FieldTypeText,
+				"count":        kernel.FieldTypeNumber,
+				"total":        kernel.FieldTypeNumber,
+				"cast_int":     kernel.FieldTypeNumber,
+				"cast_integer": kernel.FieldTypeNumber,
+				"cast_real":    kernel.FieldTypeNumber,
+				"cast_decimal": kernel.FieldTypeNumber,
+				"cast_numeric": kernel.FieldTypeNumber,
+				"cast_text":    kernel.FieldTypeText,
+				"cast_bool":    kernel.FieldTypeBool,
+				"cast_boolean": kernel.FieldTypeBool,
 				// json because they are nullable
-				"sum": core.FieldTypeJSON,
-				"avg": core.FieldTypeJSON,
-				"min": core.FieldTypeJSON,
-				"max": core.FieldTypeJSON,
+				"sum": kernel.FieldTypeJSON,
+				"avg": kernel.FieldTypeJSON,
+				"min": kernel.FieldTypeJSON,
+				"max": kernel.FieldTypeJSON,
 			},
 		},
 		{
@@ -416,8 +416,8 @@ func TestCreateViewFields(t *testing.T) {
 			from demo1 a`,
 			false,
 			map[string]string{
-				"id":       core.FieldTypeText,
-				"cast_int": core.FieldTypeNumber,
+				"id":       kernel.FieldTypeText,
+				"cast_int": kernel.FieldTypeNumber,
 			},
 		},
 		{
@@ -428,8 +428,8 @@ func TestCreateViewFields(t *testing.T) {
 			from demo1 a`,
 			false,
 			map[string]string{
-				"id":       core.FieldTypeText,
-				"cast_int": core.FieldTypeNumber,
+				"id":       kernel.FieldTypeText,
+				"cast_int": kernel.FieldTypeNumber,
 			},
 		},
 		{
@@ -447,12 +447,12 @@ func TestCreateViewFields(t *testing.T) {
 			`,
 			false,
 			map[string]string{
-				"id":              core.FieldTypeText,
-				"username":        core.FieldTypeText,
-				"email":           core.FieldTypeEmail,
-				"emailVisibility": core.FieldTypeBool,
-				"verified":        core.FieldTypeBool,
-				"relid":           core.FieldTypeRelation,
+				"id":              kernel.FieldTypeText,
+				"username":        kernel.FieldTypeText,
+				"email":           kernel.FieldTypeEmail,
+				"emailVisibility": kernel.FieldTypeBool,
+				"verified":        kernel.FieldTypeBool,
+				"relid":           kernel.FieldTypeRelation,
 			},
 		},
 		{
@@ -470,15 +470,15 @@ func TestCreateViewFields(t *testing.T) {
 			from demo1`,
 			false,
 			map[string]string{
-				"id":            core.FieldTypeText,
-				"id2":           core.FieldTypeRelation,
-				"text_alias":    core.FieldTypeText,
-				"url_alias":     core.FieldTypeURL,
-				"bool_alias":    core.FieldTypeBool,
-				"number_alias":  core.FieldTypeNumber,
-				"created_alias": core.FieldTypeAutodate,
-				"updated_alias": core.FieldTypeAutodate,
-				"custom":        core.FieldTypeJSON,
+				"id":            kernel.FieldTypeText,
+				"id2":           kernel.FieldTypeRelation,
+				"text_alias":    kernel.FieldTypeText,
+				"url_alias":     kernel.FieldTypeURL,
+				"bool_alias":    kernel.FieldTypeBool,
+				"number_alias":  kernel.FieldTypeNumber,
+				"created_alias": kernel.FieldTypeAutodate,
+				"updated_alias": kernel.FieldTypeAutodate,
+				"custom":        kernel.FieldTypeJSON,
 			},
 		},
 		{
@@ -490,9 +490,9 @@ func TestCreateViewFields(t *testing.T) {
 			from demo1`,
 			false,
 			map[string]string{
-				"id2":    core.FieldTypeRelation,
-				"id":     core.FieldTypeText,
-				"custom": core.FieldTypeJSON,
+				"id2":    kernel.FieldTypeRelation,
+				"id":     kernel.FieldTypeText,
+				"custom": kernel.FieldTypeJSON,
 			},
 		},
 		{
@@ -507,11 +507,11 @@ func TestCreateViewFields(t *testing.T) {
 			left join demo1 as b`,
 			false,
 			map[string]string{
-				"id":     core.FieldTypeText,
-				"alias1": core.FieldTypeText,
-				"alias2": core.FieldTypeText,
-				"alias3": core.FieldTypeText,
-				"alias4": core.FieldTypeText,
+				"id":     kernel.FieldTypeText,
+				"alias1": kernel.FieldTypeText,
+				"alias2": kernel.FieldTypeText,
+				"alias3": kernel.FieldTypeText,
+				"alias4": kernel.FieldTypeText,
 			},
 		},
 	}
@@ -594,9 +594,9 @@ func TestCreateViewFieldsWithNumberOnlyInt(t *testing.T) {
 		}
 
 		t.Run(f.GetName(), func(t *testing.T) {
-			nf, ok := f.(*core.NumberField)
+			nf, ok := f.(*kernel.NumberField)
 			if !ok {
-				t.Fatalf("Expected *core.NumberField, got %v", f)
+				t.Fatalf("Expected *kernel.NumberField, got %v", f)
 			}
 
 			if nf.OnlyInt != onlyInts[nf.Name] {
@@ -622,10 +622,10 @@ func TestFindRecordByViewFile(t *testing.T) {
 	// create collection view mocks
 	fileOneAlias := "file_one one0"
 	fileManyAlias := "file_many many0"
-	mockCollections := make([]*core.Collection, 0, totalLevels)
+	mockCollections := make([]*kernel.Collection, 0, totalLevels)
 	for i := 0; i <= totalLevels; i++ {
-		view := new(core.Collection)
-		view.Type = core.CollectionTypeView
+		view := new(kernel.Collection)
+		view.Type = kernel.CollectionTypeView
 		view.Name = fmt.Sprintf("_test_view%d", i)
 		view.ViewQuery = fmt.Sprintf(
 			"select id, %s, %s from %s",

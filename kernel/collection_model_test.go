@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/pocketbase/dbx"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/dbutils"
 	"github.com/tokibase/tokibase/tools/hook"
@@ -131,7 +131,7 @@ func TestNewCollection(t *testing.T) {
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%s_%s", i, s.typ, s.name), func(t *testing.T) {
-			result := core.NewCollection(s.typ, s.name).String()
+			result := kernel.NewCollection(s.typ, s.name).String()
 
 			for _, part := range s.expected {
 				if !strings.Contains(result, part) {
@@ -189,7 +189,7 @@ func TestNewBaseCollection(t *testing.T) {
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%s", i, s.name), func(t *testing.T) {
-			result := core.NewBaseCollection(s.name).String()
+			result := kernel.NewBaseCollection(s.name).String()
 
 			for _, part := range s.expected {
 				if !strings.Contains(result, part) {
@@ -243,7 +243,7 @@ func TestNewViewCollection(t *testing.T) {
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%s", i, s.name), func(t *testing.T) {
-			result := core.NewViewCollection(s.name).String()
+			result := kernel.NewViewCollection(s.name).String()
 
 			for _, part := range s.expected {
 				if !strings.Contains(result, part) {
@@ -317,7 +317,7 @@ func TestNewAuthCollection(t *testing.T) {
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%s", i, s.name), func(t *testing.T) {
-			result := core.NewAuthCollection(s.name).String()
+			result := kernel.NewAuthCollection(s.name).String()
 
 			for _, part := range s.expected {
 				if !strings.Contains(result, part) {
@@ -331,7 +331,7 @@ func TestNewAuthCollection(t *testing.T) {
 func TestCollectionTableName(t *testing.T) {
 	t.Parallel()
 
-	c := core.NewBaseCollection("test")
+	c := kernel.NewBaseCollection("test")
 	if c.TableName() != "_collections" {
 		t.Fatalf("Expected tableName %q, got %q", "_collections", c.TableName())
 	}
@@ -340,7 +340,7 @@ func TestCollectionTableName(t *testing.T) {
 func TestCollectionBaseFilesPath(t *testing.T) {
 	t.Parallel()
 
-	c := core.Collection{}
+	c := kernel.Collection{}
 
 	if c.BaseFilesPath() != "" {
 		t.Fatalf("Expected empty string, got %q", c.BaseFilesPath())
@@ -361,14 +361,14 @@ func TestCollectionIsBase(t *testing.T) {
 		expected bool
 	}{
 		{"unknown", false},
-		{core.CollectionTypeBase, true},
-		{core.CollectionTypeView, false},
-		{core.CollectionTypeAuth, false},
+		{kernel.CollectionTypeBase, true},
+		{kernel.CollectionTypeView, false},
+		{kernel.CollectionTypeAuth, false},
 	}
 
 	for _, s := range scenarios {
 		t.Run(s.typ, func(t *testing.T) {
-			c := core.Collection{}
+			c := kernel.Collection{}
 			c.Type = s.typ
 
 			if v := c.IsBase(); v != s.expected {
@@ -386,14 +386,14 @@ func TestCollectionIsView(t *testing.T) {
 		expected bool
 	}{
 		{"unknown", false},
-		{core.CollectionTypeBase, false},
-		{core.CollectionTypeView, true},
-		{core.CollectionTypeAuth, false},
+		{kernel.CollectionTypeBase, false},
+		{kernel.CollectionTypeView, true},
+		{kernel.CollectionTypeAuth, false},
 	}
 
 	for _, s := range scenarios {
 		t.Run(s.typ, func(t *testing.T) {
-			c := core.Collection{}
+			c := kernel.Collection{}
 			c.Type = s.typ
 
 			if v := c.IsView(); v != s.expected {
@@ -411,14 +411,14 @@ func TestCollectionIsAuth(t *testing.T) {
 		expected bool
 	}{
 		{"unknown", false},
-		{core.CollectionTypeBase, false},
-		{core.CollectionTypeView, false},
-		{core.CollectionTypeAuth, true},
+		{kernel.CollectionTypeBase, false},
+		{kernel.CollectionTypeView, false},
+		{kernel.CollectionTypeAuth, true},
 	}
 
 	for _, s := range scenarios {
 		t.Run(s.typ, func(t *testing.T) {
-			c := core.Collection{}
+			c := kernel.Collection{}
 			c.Type = s.typ
 
 			if v := c.IsAuth(); v != s.expected {
@@ -442,7 +442,7 @@ func TestCollectionPostScan(t *testing.T) {
 		expected   []string
 	}{
 		{
-			core.CollectionTypeBase,
+			kernel.CollectionTypeBase,
 			rawOptions,
 			[]string{
 				`lastSavedPK:"test"`,
@@ -451,7 +451,7 @@ func TestCollectionPostScan(t *testing.T) {
 			},
 		},
 		{
-			core.CollectionTypeView,
+			kernel.CollectionTypeView,
 			rawOptions,
 			[]string{
 				`lastSavedPK:"test"`,
@@ -460,7 +460,7 @@ func TestCollectionPostScan(t *testing.T) {
 			},
 		},
 		{
-			core.CollectionTypeAuth,
+			kernel.CollectionTypeAuth,
 			rawOptions,
 			[]string{
 				`lastSavedPK:"test"`,
@@ -472,7 +472,7 @@ func TestCollectionPostScan(t *testing.T) {
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%s", i, s.typ), func(t *testing.T) {
-			c := core.Collection{}
+			c := kernel.Collection{}
 			c.Id = "test"
 			c.Type = s.typ
 			c.RawOptions = s.rawOptions
@@ -504,15 +504,15 @@ func TestCollectionUnmarshalJSON(t *testing.T) {
 	scenarios := []struct {
 		name        string
 		raw         string
-		collection  func() *core.Collection
+		collection  func() *kernel.Collection
 		expected    []string
 		notExpected []string
 	}{
 		{
 			"base new empty",
 			`{"type":"base","name":"test","listRule":"1=2","authRule":"1=3","viewQuery":"abc"}`,
-			func() *core.Collection {
-				return &core.Collection{}
+			func() *kernel.Collection {
+				return &kernel.Collection{}
 			},
 			[]string{
 				`"type":"base"`,
@@ -531,8 +531,8 @@ func TestCollectionUnmarshalJSON(t *testing.T) {
 		{
 			"view new empty",
 			`{"type":"view","name":"test","listRule":"1=2","authRule":"1=3","viewQuery":"abc"}`,
-			func() *core.Collection {
-				return &core.Collection{}
+			func() *kernel.Collection {
+				return &kernel.Collection{}
 			},
 			[]string{
 				`"type":"view"`,
@@ -550,8 +550,8 @@ func TestCollectionUnmarshalJSON(t *testing.T) {
 		{
 			"auth new empty",
 			`{"type":"auth","name":"test","listRule":"1=2","authRule":"1=3","viewQuery":"abc"}`,
-			func() *core.Collection {
-				return &core.Collection{}
+			func() *kernel.Collection {
+				return &kernel.Collection{}
 			},
 			[]string{
 				`"type":"auth"`,
@@ -570,9 +570,9 @@ func TestCollectionUnmarshalJSON(t *testing.T) {
 		{
 			"new but with set type (no default fields load)",
 			`{"type":"base","name":"test","listRule":"1=2","authRule":"1=3","viewQuery":"abc"}`,
-			func() *core.Collection {
-				c := &core.Collection{}
-				c.Type = core.CollectionTypeBase
+			func() *kernel.Collection {
+				c := &kernel.Collection{}
+				c.Type = kernel.CollectionTypeBase
 				return c
 			},
 			[]string{
@@ -590,7 +590,7 @@ func TestCollectionUnmarshalJSON(t *testing.T) {
 		{
 			"existing (no default fields load)",
 			`{"type":"auth","name":"test","listRule":"1=2","authRule":"1=3","viewQuery":"abc"}`,
-			func() *core.Collection {
+			func() *kernel.Collection {
 				c, _ := app.FindCollectionByNameOrId("demo1")
 				return c
 			},
@@ -642,16 +642,16 @@ func TestCollectionUnmarshalJSON(t *testing.T) {
 func TestCollectionSerialize(t *testing.T) {
 	scenarios := []struct {
 		name        string
-		collection  func() *core.Collection
+		collection  func() *kernel.Collection
 		expected    []string
 		notExpected []string
 	}{
 		{
 			"base",
-			func() *core.Collection {
-				c := core.NewCollection(core.CollectionTypeBase, "test")
+			func() *kernel.Collection {
+				c := kernel.NewCollection(kernel.CollectionTypeBase, "test")
 				c.ViewQuery = "1=1"
-				c.OAuth2.Providers = []core.OAuth2ProviderConfig{
+				c.OAuth2.Providers = []kernel.OAuth2ProviderConfig{
 					{Name: "test1", ClientId: "test_client_id1", ClientSecret: "test_client_secret1"},
 					{Name: "test2", ClientId: "test_client_id2", ClientSecret: "test_client_secret2"},
 				}
@@ -676,10 +676,10 @@ func TestCollectionSerialize(t *testing.T) {
 		},
 		{
 			"view",
-			func() *core.Collection {
-				c := core.NewCollection(core.CollectionTypeView, "test")
+			func() *kernel.Collection {
+				c := kernel.NewCollection(kernel.CollectionTypeView, "test")
 				c.ViewQuery = "1=1"
-				c.OAuth2.Providers = []core.OAuth2ProviderConfig{
+				c.OAuth2.Providers = []kernel.OAuth2ProviderConfig{
 					{Name: "test1", ClientId: "test_client_id1", ClientSecret: "test_client_secret1"},
 					{Name: "test2", ClientId: "test_client_id2", ClientSecret: "test_client_secret2"},
 				}
@@ -704,10 +704,10 @@ func TestCollectionSerialize(t *testing.T) {
 		},
 		{
 			"auth",
-			func() *core.Collection {
-				c := core.NewCollection(core.CollectionTypeAuth, "test")
+			func() *kernel.Collection {
+				c := kernel.NewCollection(kernel.CollectionTypeAuth, "test")
 				c.ViewQuery = "1=1"
-				c.OAuth2.Providers = []core.OAuth2ProviderConfig{
+				c.OAuth2.Providers = []kernel.OAuth2ProviderConfig{
 					{Name: "test1", ClientId: "test_client_id1", ClientSecret: "test_client_secret1"},
 					{Name: "test2", ClientId: "test_client_id2", ClientSecret: "test_client_secret2"},
 				}
@@ -820,22 +820,22 @@ func TestCollectionDBExport(t *testing.T) {
 			`{"createRule":"1=3","created":"2024-07-01 01:02:03.456Z","deleteRule":"1=5","fields":[{"help":"","hidden":false,"id":"f1_id","name":"f1","presentable":false,"required":false,"system":true,"type":"bool"},{"help":"","hidden":false,"id":"f2_id","name":"f2","presentable":false,"required":true,"system":false,"type":"bool"}],"id":"test_id","indexes":["CREATE INDEX idx1 on test_name(id)","CREATE INDEX idx2 on test_name(id)"],"listRule":"1=1","name":"test_name","options":"{}","system":true,"type":"unknown","updateRule":"1=4","updated":"2024-07-01 01:02:03.456Z","viewRule":"1=7"}`,
 		},
 		{
-			core.CollectionTypeBase,
+			kernel.CollectionTypeBase,
 			`{"createRule":"1=3","created":"2024-07-01 01:02:03.456Z","deleteRule":"1=5","fields":[{"help":"","hidden":false,"id":"f1_id","name":"f1","presentable":false,"required":false,"system":true,"type":"bool"},{"help":"","hidden":false,"id":"f2_id","name":"f2","presentable":false,"required":true,"system":false,"type":"bool"}],"id":"test_id","indexes":["CREATE INDEX idx1 on test_name(id)","CREATE INDEX idx2 on test_name(id)"],"listRule":"1=1","name":"test_name","options":"{}","system":true,"type":"base","updateRule":"1=4","updated":"2024-07-01 01:02:03.456Z","viewRule":"1=7"}`,
 		},
 		{
-			core.CollectionTypeView,
+			kernel.CollectionTypeView,
 			`{"createRule":"1=3","created":"2024-07-01 01:02:03.456Z","deleteRule":"1=5","fields":[{"help":"","hidden":false,"id":"f1_id","name":"f1","presentable":false,"required":false,"system":true,"type":"bool"},{"help":"","hidden":false,"id":"f2_id","name":"f2","presentable":false,"required":true,"system":false,"type":"bool"}],"id":"test_id","indexes":["CREATE INDEX idx1 on test_name(id)","CREATE INDEX idx2 on test_name(id)"],"listRule":"1=1","name":"test_name","options":{"viewQuery":"select 1"},"system":true,"type":"view","updateRule":"1=4","updated":"2024-07-01 01:02:03.456Z","viewRule":"1=7"}`,
 		},
 		{
-			core.CollectionTypeAuth,
+			kernel.CollectionTypeAuth,
 			`{"createRule":"1=3","created":"2024-07-01 01:02:03.456Z","deleteRule":"1=5","fields":[{"help":"","hidden":false,"id":"f1_id","name":"f1","presentable":false,"required":false,"system":true,"type":"bool"},{"help":"","hidden":false,"id":"f2_id","name":"f2","presentable":false,"required":true,"system":false,"type":"bool"}],"id":"test_id","indexes":["CREATE INDEX idx1 on test_name(id)","CREATE INDEX idx2 on test_name(id)"],"listRule":"1=1","name":"test_name","options":{"authRule":null,"manageRule":"1=6","authAlert":{"enabled":false,"emailTemplate":{"subject":"","body":""}},"oauth2":{"providers":[],"mappedFields":{"id":"","name":"","username":"","avatarURL":""},"enabled":false},"passwordAuth":{"enabled":false,"identityFields":[]},"mfa":{"enabled":false,"duration":0,"rule":""},"otp":{"enabled":false,"duration":0,"length":0,"emailTemplate":{"subject":"","body":""}},"authToken":{"duration":0},"passwordResetToken":{"duration":0},"emailChangeToken":{"duration":0},"verificationToken":{"duration":0},"fileToken":{"duration":0},"verificationTemplate":{"subject":"","body":""},"resetPasswordTemplate":{"subject":"","body":""},"confirmEmailChangeTemplate":{"subject":"","body":""}},"system":true,"type":"auth","updateRule":"1=4","updated":"2024-07-01 01:02:03.456Z","viewRule":"1=7"}`,
 		},
 	}
 
 	for i, s := range scenarios {
 		t.Run(fmt.Sprintf("%d_%s", i, s.typ), func(t *testing.T) {
-			c := core.Collection{}
+			c := kernel.Collection{}
 			c.Type = s.typ
 			c.Id = "test_id"
 			c.Name = "test_name"
@@ -851,8 +851,8 @@ func TestCollectionDBExport(t *testing.T) {
 			c.Updated = date
 			c.Indexes = types.JSONArray[string]{"CREATE INDEX idx1 on test_name(id)", "CREATE INDEX idx2 on test_name(id)"}
 			c.ViewQuery = "select 1"
-			c.Fields.Add(&core.BoolField{Id: "f1_id", Name: "f1", System: true})
-			c.Fields.Add(&core.BoolField{Id: "f2_id", Name: "f2", Required: true})
+			c.Fields.Add(&kernel.BoolField{Id: "f1_id", Name: "f1", System: true})
+			c.Fields.Add(&kernel.BoolField{Id: "f2_id", Name: "f2", Required: true})
 			c.RawOptions = types.JSONRaw(`{"viewQuery": "select 2"}`) // should be ignored
 
 			result, err := c.DBExport(app)
@@ -887,7 +887,7 @@ func TestCollectionIndexHelpers(t *testing.T) {
 		}
 	}
 
-	c := core.NewBaseCollection("test")
+	c := kernel.NewBaseCollection("test")
 	checkIndexes(t, c.Indexes, nil)
 
 	c.AddIndex("idx1", false, "colA,colB", "colA != 1")
@@ -938,7 +938,7 @@ func TestCollectionDelete(t *testing.T) {
 		},
 		{
 			name:        "system",
-			collection:  core.CollectionNameSuperusers,
+			collection:  kernel.CollectionNameSuperusers,
 			expectError: true,
 		},
 		{
@@ -981,10 +981,10 @@ func TestCollectionDelete(t *testing.T) {
 			app, _ := tests.NewTestApp()
 			defer app.Cleanup()
 
-			var col *core.Collection
+			var col *kernel.Collection
 
 			if s.collection == "" {
-				col = core.NewBaseCollection("test")
+				col = kernel.NewBaseCollection("test")
 			} else {
 				var err error
 				col, err = app.FindCollectionByNameOrId(s.collection)
@@ -1026,16 +1026,16 @@ func TestCollectionModelEventSync(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	testCollections := make([]*core.Collection, 4)
+	testCollections := make([]*kernel.Collection, 4)
 	for i := 0; i < 4; i++ {
-		testCollections[i] = core.NewBaseCollection("sync_test_" + strconv.Itoa(i))
+		testCollections[i] = kernel.NewBaseCollection("sync_test_" + strconv.Itoa(i))
 		if err := app.Save(testCollections[i]); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	createModelEvent := func() *core.ModelEvent {
-		event := new(core.ModelEvent)
+	createModelEvent := func() *kernel.ModelEvent {
+		event := new(kernel.ModelEvent)
 		event.App = app
 		event.Context = context.Background()
 		event.Type = "test_a"
@@ -1043,35 +1043,35 @@ func TestCollectionModelEventSync(t *testing.T) {
 		return event
 	}
 
-	createModelErrorEvent := func() *core.ModelErrorEvent {
-		event := new(core.ModelErrorEvent)
+	createModelErrorEvent := func() *kernel.ModelErrorEvent {
+		event := new(kernel.ModelErrorEvent)
 		event.ModelEvent = *createModelEvent()
 		event.Error = errors.New("error_a")
 		return event
 	}
 
-	changeCollectionEventBefore := func(e *core.CollectionEvent) {
+	changeCollectionEventBefore := func(e *kernel.CollectionEvent) {
 		e.Type = "test_b"
 		//nolint:staticcheck
 		e.Context = context.WithValue(context.Background(), "test", 123)
 		e.Collection = testCollections[1]
 	}
 
-	modelEventFinalizerChange := func(e *core.ModelEvent) {
+	modelEventFinalizerChange := func(e *kernel.ModelEvent) {
 		e.Type = "test_c"
 		//nolint:staticcheck
 		e.Context = context.WithValue(context.Background(), "test", 456)
 		e.Model = testCollections[2]
 	}
 
-	changeCollectionEventAfter := func(e *core.CollectionEvent) {
+	changeCollectionEventAfter := func(e *kernel.CollectionEvent) {
 		e.Type = "test_d"
 		//nolint:staticcheck
 		e.Context = context.WithValue(context.Background(), "test", 789)
 		e.Collection = testCollections[3]
 	}
 
-	expectedBeforeModelEventHandlerChecks := func(t *testing.T, e *core.ModelEvent) {
+	expectedBeforeModelEventHandlerChecks := func(t *testing.T, e *kernel.ModelEvent) {
 		if e.Type != "test_a" {
 			t.Fatalf("Expected type %q, got %q", "test_a", e.Type)
 		}
@@ -1085,7 +1085,7 @@ func TestCollectionModelEventSync(t *testing.T) {
 		}
 	}
 
-	expectedAfterModelEventHandlerChecks := func(t *testing.T, e *core.ModelEvent) {
+	expectedAfterModelEventHandlerChecks := func(t *testing.T, e *kernel.ModelEvent) {
 		if e.Type != "test_d" {
 			t.Fatalf("Expected type %q, got %q", "test_d", e.Type)
 		}
@@ -1099,7 +1099,7 @@ func TestCollectionModelEventSync(t *testing.T) {
 		}
 	}
 
-	expectedBeforeCollectionEventHandlerChecks := func(t *testing.T, e *core.CollectionEvent) {
+	expectedBeforeCollectionEventHandlerChecks := func(t *testing.T, e *kernel.CollectionEvent) {
 		if e.Type != "test_a" {
 			t.Fatalf("Expected type %q, got %q", "test_a", e.Type)
 		}
@@ -1113,7 +1113,7 @@ func TestCollectionModelEventSync(t *testing.T) {
 		}
 	}
 
-	expectedAfterCollectionEventHandlerChecks := func(t *testing.T, e *core.CollectionEvent) {
+	expectedAfterCollectionEventHandlerChecks := func(t *testing.T, e *kernel.CollectionEvent) {
 		if e.Type != "test_c" {
 			t.Fatalf("Expected type %q, got %q", "test_c", e.Type)
 		}
@@ -1127,20 +1127,20 @@ func TestCollectionModelEventSync(t *testing.T) {
 		}
 	}
 
-	modelEventFinalizer := func(e *core.ModelEvent) error {
+	modelEventFinalizer := func(e *kernel.ModelEvent) error {
 		modelEventFinalizerChange(e)
 		return nil
 	}
 
-	modelErrorEventFinalizer := func(e *core.ModelErrorEvent) error {
+	modelErrorEventFinalizer := func(e *kernel.ModelErrorEvent) error {
 		modelEventFinalizerChange(&e.ModelEvent)
 		e.Error = errors.New("error_c")
 		return nil
 	}
 
-	modelEventHandler := &hook.Handler[*core.ModelEvent]{
+	modelEventHandler := &hook.Handler[*kernel.ModelEvent]{
 		Priority: -999,
-		Func: func(e *core.ModelEvent) error {
+		Func: func(e *kernel.ModelEvent) error {
 			t.Run("before model", func(t *testing.T) {
 				expectedBeforeModelEventHandlerChecks(t, e)
 			})
@@ -1155,9 +1155,9 @@ func TestCollectionModelEventSync(t *testing.T) {
 		},
 	}
 
-	modelErrorEventHandler := &hook.Handler[*core.ModelErrorEvent]{
+	modelErrorEventHandler := &hook.Handler[*kernel.ModelErrorEvent]{
 		Priority: -999,
-		Func: func(e *core.ModelErrorEvent) error {
+		Func: func(e *kernel.ModelErrorEvent) error {
 			t.Run("before model error", func(t *testing.T) {
 				expectedBeforeModelEventHandlerChecks(t, &e.ModelEvent)
 				if v := e.Error.Error(); v != "error_a" {
@@ -1178,9 +1178,9 @@ func TestCollectionModelEventSync(t *testing.T) {
 		},
 	}
 
-	recordEventHandler := &hook.Handler[*core.CollectionEvent]{
+	recordEventHandler := &hook.Handler[*kernel.CollectionEvent]{
 		Priority: -999,
-		Func: func(e *core.CollectionEvent) error {
+		Func: func(e *kernel.CollectionEvent) error {
 			t.Run("before collection", func(t *testing.T) {
 				expectedBeforeCollectionEventHandlerChecks(t, e)
 			})
@@ -1199,9 +1199,9 @@ func TestCollectionModelEventSync(t *testing.T) {
 		},
 	}
 
-	collectionErrorEventHandler := &hook.Handler[*core.CollectionErrorEvent]{
+	collectionErrorEventHandler := &hook.Handler[*kernel.CollectionErrorEvent]{
 		Priority: -999,
-		Func: func(e *core.CollectionErrorEvent) error {
+		Func: func(e *kernel.CollectionErrorEvent) error {
 			t.Run("before collection error", func(t *testing.T) {
 				expectedBeforeCollectionEventHandlerChecks(t, &e.CollectionEvent)
 				if v := e.Error.Error(); v != "error_a" {
@@ -1299,16 +1299,16 @@ func TestCollectionSaveModel(t *testing.T) {
 
 	scenarios := []struct {
 		name          string
-		collection    func(app core.App) (*core.Collection, error)
+		collection    func(app kernel.App) (*kernel.Collection, error)
 		expectError   bool
 		expectColumns []string
 	}{
 		// trigger validators
 		{
 			name: "create - trigger validators",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewBaseCollection("!invalid")
-				c.Fields.Add(&core.TextField{Name: "example"})
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewBaseCollection("!invalid")
+				c.Fields.Add(&kernel.TextField{Name: "example"})
 				c.AddIndex("test_save_idx", false, "example", "")
 				return c, nil
 			},
@@ -1316,10 +1316,10 @@ func TestCollectionSaveModel(t *testing.T) {
 		},
 		{
 			name: "update - trigger validators",
-			collection: func(app core.App) (*core.Collection, error) {
+			collection: func(app kernel.App) (*kernel.Collection, error) {
 				c, _ := app.FindCollectionByNameOrId("demo5")
 				c.Name = "demo1"
-				c.Fields.Add(&core.TextField{Name: "example"})
+				c.Fields.Add(&kernel.TextField{Name: "example"})
 				c.Fields.RemoveByName("file")
 				c.AddIndex("test_save_idx", false, "example", "")
 				return c, nil
@@ -1330,11 +1330,11 @@ func TestCollectionSaveModel(t *testing.T) {
 		// create
 		{
 			name: "create base collection",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewBaseCollection("new")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewBaseCollection("new")
 				c.Type = ""                 // should be auto set to "base"
 				c.Fields.RemoveByName("id") // ensure that the default fields will be loaded
-				c.Fields.Add(&core.TextField{Name: "example"})
+				c.Fields.Add(&kernel.TextField{Name: "example"})
 				c.AddIndex("test_save_idx", false, "example", "")
 				return c, nil
 			},
@@ -1345,11 +1345,11 @@ func TestCollectionSaveModel(t *testing.T) {
 		},
 		{
 			name: "create auth collection",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new")
 				c.Fields.RemoveByName("id")    // ensure that the default fields will be loaded
 				c.Fields.RemoveByName("email") // ensure that the default fields will be loaded
-				c.Fields.Add(&core.TextField{Name: "example"})
+				c.Fields.Add(&kernel.TextField{Name: "example"})
 				c.AddIndex("test_save_idx", false, "example", "")
 				return c, nil
 			},
@@ -1361,9 +1361,9 @@ func TestCollectionSaveModel(t *testing.T) {
 		},
 		{
 			name: "create view collection",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewViewCollection("new")
-				c.Fields.Add(&core.TextField{Name: "ignored"}) // should be ignored
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewViewCollection("new")
+				c.Fields.Add(&kernel.TextField{Name: "ignored"}) // should be ignored
 				c.ViewQuery = "select 1 as id, 2 as example"
 				return c, nil
 			},
@@ -1376,9 +1376,9 @@ func TestCollectionSaveModel(t *testing.T) {
 		// update
 		{
 			name: "update base collection",
-			collection: func(app core.App) (*core.Collection, error) {
+			collection: func(app kernel.App) (*kernel.Collection, error) {
 				c, _ := app.FindCollectionByNameOrId("demo5")
-				c.Fields.Add(&core.TextField{Name: "example"})
+				c.Fields.Add(&kernel.TextField{Name: "example"})
 				c.Fields.RemoveByName("file")
 				c.Fields.GetByName("total").SetName("total_updated")
 				c.AddIndex("test_save_idx", false, "example", "")
@@ -1392,9 +1392,9 @@ func TestCollectionSaveModel(t *testing.T) {
 		},
 		{
 			name: "update auth collection",
-			collection: func(app core.App) (*core.Collection, error) {
+			collection: func(app kernel.App) (*kernel.Collection, error) {
 				c, _ := app.FindCollectionByNameOrId("clients")
-				c.Fields.Add(&core.TextField{Name: "example"})
+				c.Fields.Add(&kernel.TextField{Name: "example"})
 				c.Fields.RemoveByName("file")
 				c.Fields.GetByName("name").SetName("name_updated")
 				c.AddIndex("test_save_idx", false, "example", "")
@@ -1408,9 +1408,9 @@ func TestCollectionSaveModel(t *testing.T) {
 		},
 		{
 			name: "update view collection",
-			collection: func(app core.App) (*core.Collection, error) {
+			collection: func(app kernel.App) (*kernel.Collection, error) {
 				c, _ := app.FindCollectionByNameOrId("view2")
-				c.Fields.Add(&core.TextField{Name: "example"}) // should be ignored
+				c.Fields.Add(&kernel.TextField{Name: "example"}) // should be ignored
 				c.ViewQuery = "select 1 as id, 2 as example"
 				return c, nil
 			},
@@ -1423,11 +1423,11 @@ func TestCollectionSaveModel(t *testing.T) {
 		// auth normalization
 		{
 			name: "unset missing oauth2 mapped fields",
-			collection: func(app core.App) (*core.Collection, error) {
-				c := core.NewAuthCollection("new")
+			collection: func(app kernel.App) (*kernel.Collection, error) {
+				c := kernel.NewAuthCollection("new")
 				c.OAuth2.Enabled = true
 				// shouldn't fail
-				c.OAuth2.MappedFields = core.OAuth2KnownFields{
+				c.OAuth2.MappedFields = kernel.OAuth2KnownFields{
 					Id:        "missing",
 					Name:      "missing",
 					Username:  "missing",
@@ -1528,10 +1528,10 @@ func TestCollectionSaveIndirectViewsUpdate(t *testing.T) {
 
 	// update MaxSelect fields
 	{
-		relMany := collection.Fields.GetByName("rel_many").(*core.RelationField)
+		relMany := collection.Fields.GetByName("rel_many").(*kernel.RelationField)
 		relMany.MaxSelect = 1
 
-		fileOne := collection.Fields.GetByName("file_one").(*core.FileField)
+		fileOne := collection.Fields.GetByName("file_one").(*kernel.FileField)
 		fileOne.MaxSelect = 10
 
 		if err := app.Save(collection); err != nil {
@@ -1546,12 +1546,12 @@ func TestCollectionSaveIndirectViewsUpdate(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		relMany := view1.Fields.GetByName("rel_many").(*core.RelationField)
+		relMany := view1.Fields.GetByName("rel_many").(*kernel.RelationField)
 		if relMany.MaxSelect != 1 {
 			t.Fatalf("Expected view1.rel_many MaxSelect to be %d, got %v", 1, relMany.MaxSelect)
 		}
 
-		fileOne := view1.Fields.GetByName("file_one").(*core.FileField)
+		fileOne := view1.Fields.GetByName("file_one").(*kernel.FileField)
 		if fileOne.MaxSelect != 10 {
 			t.Fatalf("Expected view1.file_one MaxSelect to be %d, got %v", 10, fileOne.MaxSelect)
 		}
@@ -1564,7 +1564,7 @@ func TestCollectionSaveIndirectViewsUpdate(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		relMany := view2.Fields.GetByName("rel_many").(*core.RelationField)
+		relMany := view2.Fields.GetByName("rel_many").(*kernel.RelationField)
 		if relMany.MaxSelect != 1 {
 			t.Fatalf("Expected view2.rel_many MaxSelect to be %d, got %v", 1, relMany.MaxSelect)
 		}
@@ -1655,7 +1655,7 @@ func TestCollectionSaveViewWrapping(t *testing.T) {
 			app, _ := tests.NewTestApp()
 			defer app.Cleanup()
 
-			collection := core.NewViewCollection(viewName)
+			collection := kernel.NewViewCollection(viewName)
 			collection.ViewQuery = s.query
 
 			err := app.Save(collection)
@@ -1685,8 +1685,8 @@ func TestCollectionSaveIndexesTableNameNormalization(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	dummyCollection := core.NewBaseCollection("new_test")
-	dummyCollection.Fields.Add(&core.TextField{Name: "test"})
+	dummyCollection := kernel.NewBaseCollection("new_test")
+	dummyCollection.Fields.Add(&kernel.TextField{Name: "test"})
 	dummyCollection.Indexes = []string{
 		"create index `new_test_idx1` on `` (`test`) where 1=1",
 		"create index `new_test_idx2` on `test` (`test`) where 1=2",

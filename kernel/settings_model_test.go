@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/mailer"
 	"github.com/tokibase/tokibase/tools/security"
@@ -47,7 +47,7 @@ func TestSettings_DBExport(t *testing.T) {
 				os.Setenv(app.EncryptionEnv(), originalEnv)
 			}()
 
-			settings := &core.Settings{}
+			settings := &kernel.Settings{}
 			settings.Meta.AppName = "test_app_name"
 			settings.Logs.MaxDays = 123
 			settings.SMTP.Host = "smtp_host"
@@ -95,10 +95,10 @@ func TestSettings_DBExport(t *testing.T) {
 func TestSettingsMerge(t *testing.T) {
 	t.Parallel()
 
-	s1 := &core.Settings{}
+	s1 := &kernel.Settings{}
 	s1.Meta.AppURL = "app_url" // should be unset
 
-	s2 := &core.Settings{}
+	s2 := &kernel.Settings{}
 	s2.Meta.AppName = "test"
 	s2.Logs.MaxDays = 123
 	s2.SMTP.Host = "test"
@@ -130,7 +130,7 @@ func TestSettingsMerge(t *testing.T) {
 func TestSettingsClone(t *testing.T) {
 	t.Parallel()
 
-	s1 := &core.Settings{}
+	s1 := &kernel.Settings{}
 	s1.Meta.AppName = "test_name"
 
 	s2, err := s1.Clone()
@@ -162,7 +162,7 @@ func TestSettingsClone(t *testing.T) {
 func TestSettingsMarshalJSON(t *testing.T) {
 	t.Parallel()
 
-	settings := &core.Settings{}
+	settings := &kernel.Settings{}
 
 	// control fields
 	settings.Meta.AppName = "test123"
@@ -242,12 +242,12 @@ func TestMetaConfigValidate(t *testing.T) {
 
 	scenarios := []struct {
 		name           string
-		config         core.MetaConfig
+		config         kernel.MetaConfig
 		expectedErrors []string
 	}{
 		{
 			"zero values",
-			core.MetaConfig{},
+			kernel.MetaConfig{},
 			[]string{
 				"appName",
 				"appURL",
@@ -257,7 +257,7 @@ func TestMetaConfigValidate(t *testing.T) {
 		},
 		{
 			"invalid data",
-			core.MetaConfig{
+			kernel.MetaConfig{
 				AccentColor:   "#fff",
 				AppName:       strings.Repeat("a", 300),
 				AppURL:        "test",
@@ -274,7 +274,7 @@ func TestMetaConfigValidate(t *testing.T) {
 		},
 		{
 			"valid data",
-			core.MetaConfig{
+			kernel.MetaConfig{
 				AccentColor:   "#ffffff",
 				AppName:       "test",
 				AppURL:        "https://example.com",
@@ -299,17 +299,17 @@ func TestLogsConfigValidate(t *testing.T) {
 
 	scenarios := []struct {
 		name           string
-		config         core.LogsConfig
+		config         kernel.LogsConfig
 		expectedErrors []string
 	}{
 		{
 			"zero values",
-			core.LogsConfig{},
+			kernel.LogsConfig{},
 			[]string{},
 		},
 		{
 			"invalid data",
-			core.LogsConfig{
+			kernel.LogsConfig{
 				MaxDays:     -1,
 				MaxDataSize: -1,
 			},
@@ -317,7 +317,7 @@ func TestLogsConfigValidate(t *testing.T) {
 		},
 		{
 			"valid data",
-			core.LogsConfig{MaxDays: 2},
+			kernel.LogsConfig{MaxDays: 2},
 			[]string{},
 		},
 	}
@@ -336,22 +336,22 @@ func TestSMTPConfigValidate(t *testing.T) {
 
 	scenarios := []struct {
 		name           string
-		config         core.SMTPConfig
+		config         kernel.SMTPConfig
 		expectedErrors []string
 	}{
 		{
 			"zero values (disabled)",
-			core.SMTPConfig{},
+			kernel.SMTPConfig{},
 			[]string{},
 		},
 		{
 			"zero values (enabled)",
-			core.SMTPConfig{Enabled: true},
+			kernel.SMTPConfig{Enabled: true},
 			[]string{"host", "port"},
 		},
 		{
 			"invalid data",
-			core.SMTPConfig{
+			kernel.SMTPConfig{
 				Enabled:    true,
 				Host:       "test:test:test",
 				Port:       -10,
@@ -362,7 +362,7 @@ func TestSMTPConfigValidate(t *testing.T) {
 		},
 		{
 			"valid data (no explicit auth method and localName)",
-			core.SMTPConfig{
+			kernel.SMTPConfig{
 				Enabled: true,
 				Host:    "example.com",
 				Port:    100,
@@ -372,7 +372,7 @@ func TestSMTPConfigValidate(t *testing.T) {
 		},
 		{
 			"valid data (explicit auth method and localName)",
-			core.SMTPConfig{
+			kernel.SMTPConfig{
 				Enabled:    true,
 				Host:       "example.com",
 				Port:       100,
@@ -397,17 +397,17 @@ func TestS3ConfigValidate(t *testing.T) {
 
 	scenarios := []struct {
 		name           string
-		config         core.S3Config
+		config         kernel.S3Config
 		expectedErrors []string
 	}{
 		{
 			"zero values (disabled)",
-			core.S3Config{},
+			kernel.S3Config{},
 			[]string{},
 		},
 		{
 			"zero values (enabled)",
-			core.S3Config{Enabled: true},
+			kernel.S3Config{Enabled: true},
 			[]string{
 				"bucket",
 				"region",
@@ -418,7 +418,7 @@ func TestS3ConfigValidate(t *testing.T) {
 		},
 		{
 			"invalid data",
-			core.S3Config{
+			kernel.S3Config{
 				Enabled:  true,
 				Endpoint: "test:test:test",
 			},
@@ -432,7 +432,7 @@ func TestS3ConfigValidate(t *testing.T) {
 		},
 		{
 			"valid data (url endpoint)",
-			core.S3Config{
+			kernel.S3Config{
 				Enabled:   true,
 				Endpoint:  "https://localhost:8090",
 				Bucket:    "test",
@@ -444,7 +444,7 @@ func TestS3ConfigValidate(t *testing.T) {
 		},
 		{
 			"valid data (hostname endpoint)",
-			core.S3Config{
+			kernel.S3Config{
 				Enabled:   true,
 				Endpoint:  "example.com",
 				Bucket:    "test",
@@ -470,17 +470,17 @@ func TestBackupsConfigValidate(t *testing.T) {
 
 	scenarios := []struct {
 		name           string
-		config         core.BackupsConfig
+		config         kernel.BackupsConfig
 		expectedErrors []string
 	}{
 		{
 			"zero value",
-			core.BackupsConfig{},
+			kernel.BackupsConfig{},
 			[]string{},
 		},
 		{
 			"invalid cron",
-			core.BackupsConfig{
+			kernel.BackupsConfig{
 				Cron:        "invalid",
 				CronMaxKeep: 0,
 			},
@@ -488,8 +488,8 @@ func TestBackupsConfigValidate(t *testing.T) {
 		},
 		{
 			"invalid enabled S3",
-			core.BackupsConfig{
-				S3: core.S3Config{
+			kernel.BackupsConfig{
+				S3: kernel.S3Config{
 					Enabled: true,
 				},
 			},
@@ -497,8 +497,8 @@ func TestBackupsConfigValidate(t *testing.T) {
 		},
 		{
 			"valid data",
-			core.BackupsConfig{
-				S3: core.S3Config{
+			kernel.BackupsConfig{
+				S3: kernel.S3Config{
 					Enabled:   true,
 					Endpoint:  "example.com",
 					Bucket:    "test",
@@ -527,22 +527,22 @@ func TestBatchConfigValidate(t *testing.T) {
 
 	scenarios := []struct {
 		name           string
-		config         core.BatchConfig
+		config         kernel.BatchConfig
 		expectedErrors []string
 	}{
 		{
 			"zero value",
-			core.BatchConfig{},
+			kernel.BatchConfig{},
 			[]string{},
 		},
 		{
 			"zero value (enabled)",
-			core.BatchConfig{Enabled: true},
+			kernel.BatchConfig{Enabled: true},
 			[]string{"maxRequests", "timeout"},
 		},
 		{
 			"invalid data (negative values)",
-			core.BatchConfig{
+			kernel.BatchConfig{
 				MaxRequests: -1,
 				Timeout:     -1,
 				MaxBodySize: -1,
@@ -551,7 +551,7 @@ func TestBatchConfigValidate(t *testing.T) {
 		},
 		{
 			"min fields valid data",
-			core.BatchConfig{
+			kernel.BatchConfig{
 				Enabled:     true,
 				MaxRequests: 1,
 				Timeout:     1,
@@ -560,7 +560,7 @@ func TestBatchConfigValidate(t *testing.T) {
 		},
 		{
 			"all fields valid data",
-			core.BatchConfig{
+			kernel.BatchConfig{
 				Enabled:     true,
 				MaxRequests: 10,
 				Timeout:     1,
@@ -584,25 +584,25 @@ func TestRateLimitsConfigValidate(t *testing.T) {
 
 	scenarios := []struct {
 		name           string
-		config         core.RateLimitsConfig
+		config         kernel.RateLimitsConfig
 		expectedErrors []string
 	}{
 		{
 			"zero value (disabled)",
-			core.RateLimitsConfig{},
+			kernel.RateLimitsConfig{},
 			[]string{},
 		},
 		{
 			"zero value (enabled)",
-			core.RateLimitsConfig{Enabled: true},
+			kernel.RateLimitsConfig{Enabled: true},
 			[]string{"rules"},
 		},
 		{
 			"invalid data",
-			core.RateLimitsConfig{
+			kernel.RateLimitsConfig{
 				Enabled:     true,
 				ExcludedIPs: []string{"", "127.0.0.1"},
-				Rules: []core.RateLimitRule{
+				Rules: []kernel.RateLimitRule{
 					{
 						Label:       "/123abc/",
 						Duration:    1,
@@ -619,10 +619,10 @@ func TestRateLimitsConfigValidate(t *testing.T) {
 		},
 		{
 			"valid data",
-			core.RateLimitsConfig{
+			kernel.RateLimitsConfig{
 				Enabled:     true,
 				ExcludedIPs: []string{"127.0.0.1", "10.0.0.1/20"},
-				Rules: []core.RateLimitRule{
+				Rules: []kernel.RateLimitRule{
 					{
 						Label:       "123_abc",
 						Duration:    1,
@@ -639,9 +639,9 @@ func TestRateLimitsConfigValidate(t *testing.T) {
 		},
 		{
 			"duplicated rules with the same audience",
-			core.RateLimitsConfig{
+			kernel.RateLimitsConfig{
 				Enabled: true,
-				Rules: []core.RateLimitRule{
+				Rules: []kernel.RateLimitRule{
 					{
 						Label:       "/a",
 						Duration:    1,
@@ -658,9 +658,9 @@ func TestRateLimitsConfigValidate(t *testing.T) {
 		},
 		{
 			"duplicated rule with conflicting audience (A)",
-			core.RateLimitsConfig{
+			kernel.RateLimitsConfig{
 				Enabled: true,
-				Rules: []core.RateLimitRule{
+				Rules: []kernel.RateLimitRule{
 					{
 						Label:       "/a",
 						Duration:    1,
@@ -670,7 +670,7 @@ func TestRateLimitsConfigValidate(t *testing.T) {
 						Label:       "/a",
 						Duration:    1,
 						MaxRequests: 2,
-						Audience:    core.RateLimitRuleAudienceGuest,
+						Audience:    kernel.RateLimitRuleAudienceGuest,
 					},
 				},
 			},
@@ -678,14 +678,14 @@ func TestRateLimitsConfigValidate(t *testing.T) {
 		},
 		{
 			"duplicated rule with conflicting audience (B)",
-			core.RateLimitsConfig{
+			kernel.RateLimitsConfig{
 				Enabled: true,
-				Rules: []core.RateLimitRule{
+				Rules: []kernel.RateLimitRule{
 					{
 						Label:       "/a",
 						Duration:    1,
 						MaxRequests: 2,
-						Audience:    core.RateLimitRuleAudienceAuth,
+						Audience:    kernel.RateLimitRuleAudienceAuth,
 					},
 					{
 						Label:       "/a",
@@ -698,20 +698,20 @@ func TestRateLimitsConfigValidate(t *testing.T) {
 		},
 		{
 			"duplicated rule with non-conflicting audience",
-			core.RateLimitsConfig{
+			kernel.RateLimitsConfig{
 				Enabled: true,
-				Rules: []core.RateLimitRule{
+				Rules: []kernel.RateLimitRule{
 					{
 						Label:       "/a",
 						Duration:    1,
 						MaxRequests: 2,
-						Audience:    core.RateLimitRuleAudienceAuth,
+						Audience:    kernel.RateLimitRuleAudienceAuth,
 					},
 					{
 						Label:       "/a",
 						Duration:    1,
 						MaxRequests: 2,
-						Audience:    core.RateLimitRuleAudienceGuest,
+						Audience:    kernel.RateLimitRuleAudienceGuest,
 					},
 				},
 			},
@@ -731,13 +731,13 @@ func TestRateLimitsConfigValidate(t *testing.T) {
 func TestRateLimitsFindRateLimitRule(t *testing.T) {
 	t.Parallel()
 
-	limits := core.RateLimitsConfig{
-		Rules: []core.RateLimitRule{
+	limits := kernel.RateLimitsConfig{
+		Rules: []kernel.RateLimitRule{
 			{Label: "abc"},
-			{Label: "def", Audience: core.RateLimitRuleAudienceGuest},
-			{Label: "/test/a", Audience: core.RateLimitRuleAudienceGuest},
+			{Label: "def", Audience: kernel.RateLimitRuleAudienceGuest},
+			{Label: "/test/a", Audience: kernel.RateLimitRuleAudienceGuest},
 			{Label: "POST /test/a"},
-			{Label: "/test/a/", Audience: core.RateLimitRuleAudienceAuth},
+			{Label: "/test/a/", Audience: kernel.RateLimitRuleAudienceAuth},
 			{Label: "POST /test/a/"},
 		},
 	}
@@ -750,19 +750,19 @@ func TestRateLimitsFindRateLimitRule(t *testing.T) {
 		{[]string{}, []string{}, ""},
 		{[]string{"missing"}, []string{}, ""},
 		{[]string{"abc"}, []string{}, "abc"},
-		{[]string{"abc"}, []string{core.RateLimitRuleAudienceGuest}, ""},
-		{[]string{"abc"}, []string{core.RateLimitRuleAudienceAuth}, ""},
-		{[]string{"def"}, []string{core.RateLimitRuleAudienceGuest}, "def"},
-		{[]string{"def"}, []string{core.RateLimitRuleAudienceAuth}, ""},
+		{[]string{"abc"}, []string{kernel.RateLimitRuleAudienceGuest}, ""},
+		{[]string{"abc"}, []string{kernel.RateLimitRuleAudienceAuth}, ""},
+		{[]string{"def"}, []string{kernel.RateLimitRuleAudienceGuest}, "def"},
+		{[]string{"def"}, []string{kernel.RateLimitRuleAudienceAuth}, ""},
 		{[]string{"/test"}, []string{}, ""},
 		{[]string{"/test/a"}, []string{}, "/test/a"},
-		{[]string{"/test/a"}, []string{core.RateLimitRuleAudienceAuth}, "/test/a/"},
-		{[]string{"/test/a"}, []string{core.RateLimitRuleAudienceGuest}, "/test/a"},
+		{[]string{"/test/a"}, []string{kernel.RateLimitRuleAudienceAuth}, "/test/a/"},
+		{[]string{"/test/a"}, []string{kernel.RateLimitRuleAudienceGuest}, "/test/a"},
 		{[]string{"GET /test/a"}, []string{}, ""},
 		{[]string{"POST /test/a"}, []string{}, "POST /test/a"},
 		{[]string{"/test/a/b/c"}, []string{}, "/test/a/"},
-		{[]string{"/test/a/b/c"}, []string{core.RateLimitRuleAudienceAuth}, "/test/a/"},
-		{[]string{"/test/a/b/c"}, []string{core.RateLimitRuleAudienceGuest}, ""},
+		{[]string{"/test/a/b/c"}, []string{kernel.RateLimitRuleAudienceAuth}, "/test/a/"},
+		{[]string{"/test/a/b/c"}, []string{kernel.RateLimitRuleAudienceGuest}, ""},
 		{[]string{"GET /test/a/b/c"}, []string{}, ""},
 		{[]string{"POST /test/a/b/c"}, []string{}, "POST /test/a/"},
 		{[]string{"/test/a", "abc"}, []string{}, "/test/a"}, // priority checks
@@ -789,17 +789,17 @@ func TestRateLimitRuleValidate(t *testing.T) {
 
 	scenarios := []struct {
 		name           string
-		rule           core.RateLimitRule
+		rule           kernel.RateLimitRule
 		expectedErrors []string
 	}{
 		{
 			"zero value",
-			core.RateLimitRule{},
+			kernel.RateLimitRule{},
 			[]string{"label", "duration", "maxRequests"},
 		},
 		{
 			"invalid data",
-			core.RateLimitRule{
+			kernel.RateLimitRule{
 				Label:       "@abc",
 				Duration:    -1,
 				MaxRequests: -1,
@@ -809,7 +809,7 @@ func TestRateLimitRuleValidate(t *testing.T) {
 		},
 		{
 			"valid data (name)",
-			core.RateLimitRule{
+			kernel.RateLimitRule{
 				Label:       "abc:123",
 				Duration:    1,
 				MaxRequests: 1,
@@ -818,7 +818,7 @@ func TestRateLimitRuleValidate(t *testing.T) {
 		},
 		{
 			"valid data (name:action)",
-			core.RateLimitRule{
+			kernel.RateLimitRule{
 				Label:       "abc:123",
 				Duration:    1,
 				MaxRequests: 1,
@@ -827,7 +827,7 @@ func TestRateLimitRuleValidate(t *testing.T) {
 		},
 		{
 			"valid data (*:action)",
-			core.RateLimitRule{
+			kernel.RateLimitRule{
 				Label:       "*:123",
 				Duration:    1,
 				MaxRequests: 1,
@@ -836,7 +836,7 @@ func TestRateLimitRuleValidate(t *testing.T) {
 		},
 		{
 			"valid data (path /a/b)",
-			core.RateLimitRule{
+			kernel.RateLimitRule{
 				Label:       "/a/b",
 				Duration:    1,
 				MaxRequests: 1,
@@ -845,7 +845,7 @@ func TestRateLimitRuleValidate(t *testing.T) {
 		},
 		{
 			"valid data (path POST /a/b)",
-			core.RateLimitRule{
+			kernel.RateLimitRule{
 				Label:       "POST /a/b/",
 				Duration:    1,
 				MaxRequests: 1,
@@ -854,7 +854,7 @@ func TestRateLimitRuleValidate(t *testing.T) {
 		},
 		{
 			"invalid audience",
-			core.RateLimitRule{
+			kernel.RateLimitRule{
 				Label:       "/a/b/",
 				Duration:    1,
 				MaxRequests: 1,
@@ -863,22 +863,22 @@ func TestRateLimitRuleValidate(t *testing.T) {
 			[]string{"audience"},
 		},
 		{
-			"valid audience - " + core.RateLimitRuleAudienceGuest,
-			core.RateLimitRule{
+			"valid audience - " + kernel.RateLimitRuleAudienceGuest,
+			kernel.RateLimitRule{
 				Label:       "POST /a/b/",
 				Duration:    1,
 				MaxRequests: 1,
-				Audience:    core.RateLimitRuleAudienceGuest,
+				Audience:    kernel.RateLimitRuleAudienceGuest,
 			},
 			[]string{},
 		},
 		{
-			"valid audience - " + core.RateLimitRuleAudienceAuth,
-			core.RateLimitRule{
+			"valid audience - " + kernel.RateLimitRuleAudienceAuth,
+			kernel.RateLimitRule{
 				Label:       "POST /a/b/",
 				Duration:    1,
 				MaxRequests: 1,
-				Audience:    core.RateLimitRuleAudienceAuth,
+				Audience:    kernel.RateLimitRuleAudienceAuth,
 			},
 			[]string{},
 		},
@@ -897,11 +897,11 @@ func TestRateLimitRuleDurationTime(t *testing.T) {
 	t.Parallel()
 
 	scenarios := []struct {
-		rule     core.RateLimitRule
+		rule     kernel.RateLimitRule
 		expected time.Duration
 	}{
-		{core.RateLimitRule{}, 0 * time.Second},
-		{core.RateLimitRule{Duration: 1234}, 1234 * time.Second},
+		{kernel.RateLimitRule{}, 0 * time.Second},
+		{kernel.RateLimitRule{Duration: 1234}, 1234 * time.Second},
 	}
 
 	for i, s := range scenarios {
@@ -920,21 +920,21 @@ func TestRateLimitRuleString(t *testing.T) {
 
 	scenarios := []struct {
 		name     string
-		rule     core.RateLimitRule
+		rule     kernel.RateLimitRule
 		expected string
 	}{
 		{
 			"empty",
-			core.RateLimitRule{},
+			kernel.RateLimitRule{},
 			`{"label":"","audience":"","duration":0,"maxRequests":0}`,
 		},
 		{
 			"all fields",
-			core.RateLimitRule{
+			kernel.RateLimitRule{
 				Label:       "POST /a/b/",
 				Duration:    1,
 				MaxRequests: 2,
-				Audience:    core.RateLimitRuleAudienceAuth,
+				Audience:    kernel.RateLimitRuleAudienceAuth,
 			},
 			`{"label":"POST /a/b/","audience":"@auth","duration":1,"maxRequests":2}`,
 		},
