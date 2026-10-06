@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"net/http"
 
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/modules/adminlock"
 	"github.com/spf13/cobra"
 )
 
@@ -34,6 +37,10 @@ func NewServeCommand(app core.App, showStartBanner bool) *cobra.Command {
 				if httpAddr == "" {
 					httpAddr = "127.0.0.1:8090"
 				}
+			}
+
+			if m := adminlock.ModeFromEnv(); m != adminlock.ModeOn {
+				fmt.Fprintf(os.Stderr, "Admin UI mode: %s (TOKI_ADMIN_UI)\n", m)
 			}
 
 			err := apis.Serve(app, apis.ServeConfig{
