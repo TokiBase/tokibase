@@ -49,6 +49,12 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: tamper-evident trail of superuser, impersonated, schema and settings changes.
 - Migration path: none needed; an upstream `pb_data` gains the table on first start, and removing it (or running upstream) simply ignores it. See `docs/modules/audit.md`.
 
+### Backup verification after create, `toki backup` CLI (phase 1, backupcheck)
+
+- What: `modules/backupcheck` verifies every created backup asynchronously (restore to a temp dir, `PRAGMA integrity_check`, counts, sampled files) and logs the result. New `toki backup create|list|verify|verify-all` commands (no `backup` CLI existed). Nothing changes in REST endpoints, backup file format or settings.
+- Why: an untested backup is not a backup.
+- Migration: nothing needed. `TOKI_BACKUP_VERIFY=off` disables the hook.
+
 ## Not promised
 
 - Go package API (`core`, `apis`, ...) may change between TokiBase minor versions.
