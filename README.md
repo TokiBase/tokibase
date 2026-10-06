@@ -13,12 +13,13 @@ rebuilt around a small HTTP-free kernel plus removable modules, shipped as five 
 | `team` | Primary + read nodes + workers | Production teams |
 | `cluster` | N stateless nodes + PostgreSQL + NATS | Multi-tenant SaaS |
 
-Status: **phase 0** (fork, rename, kernel/server split, compatibility CI). Not ready for use.
+Status: **phase 1** (phase 0 done: kernel/server split, sqlite store module, compatibility e2e). Not ready for production use.
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/COMPAT.md](docs/COMPAT.md).
 
-## Features
+## Modules
 
-- Rule guard: public (`""`) API rules must be allowlisted in `pb_data/ruleguard.json`, otherwise they are warned about at boot and in `toki rule lint` ([docs/modules/ruleguard.md](docs/modules/ruleguard.md)).
+- `modules/ruleguard`: public (`""`) API rules must be allowlisted in `pb_data/ruleguard.json`, otherwise they are warned about at boot and in `toki rule lint` ([docs/modules/ruleguard.md](docs/modules/ruleguard.md)).
+- `modules/audit`: append-only, hash-chained audit log of privileged and schema-changing actions, `toki audit tail|verify|export` ([docs/modules/audit.md](docs/modules/audit.md)). Disable with `TOKI_AUDIT=off`.
 
 ## Build
 
