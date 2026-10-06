@@ -12,6 +12,8 @@ TokiBase keeps the PocketBase public contract so existing apps and SDKs keep wor
 - Collection schema JSON and migrations format.
 - `pb_hooks` JavaScript (goja) hooks, kept as the `js-compat` module.
 
+Verified by: `tests/e2e` (an unchanged `pb_data` created by upstream v0.40.4 served by the TokiBase binary, exercised with the official `pocketbase` JS SDK; CI job `e2e`).
+
 ## Pinned upstream
 
 | | |
