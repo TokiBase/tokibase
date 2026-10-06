@@ -19,6 +19,7 @@ import (
 	"github.com/tokibase/tokibase/modules/backupcheck"
 	"github.com/tokibase/tokibase/modules/ruleguard"
 	"github.com/tokibase/tokibase/modules/store/sqlite"
+	"github.com/tokibase/tokibase/modules/walreplica"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/list"
 	"github.com/tokibase/tokibase/tools/osutils"
@@ -176,6 +177,9 @@ func NewWithConfig(config Config) *PocketBase {
 		}
 	}
 
+	// continuous WAL replication of data.db/auxiliary.db (inactive unless TOKI_REPLICA_URL is set)
+	walreplica.Register(pb.App.(core.App))
+
 	// hide the default help command (allow only `--help` flag)
 	pb.RootCmd.SetHelpCommand(&cobra.Command{Hidden: true})
 
@@ -207,6 +211,7 @@ func (pb *PocketBase) Start() error {
 	pb.RootCmd.AddCommand(cmd.NewSuperuserCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewRuleCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewBackupCommand(pb))
+	pb.RootCmd.AddCommand(cmd.NewReplicaCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewServeCommand(pb, !pb.hideStartBanner))
 	if audit.Enabled() {
 		pb.RootCmd.AddCommand(audit.NewCommand(pb))
@@ -311,9 +316,14 @@ func (pb *PocketBase) skipBootstrap() bool {
 		return true // already bootstrapped
 	}
 
-	cmd, _, err := pb.RootCmd.Find(os.Args[1:])
+	found, _, err := pb.RootCmd.Find(os.Args[1:])
 	if err != nil {
 		return true // unknown command
+	}
+
+	// commands that work on a replica or a not yet existing data dir
+	if found.Annotations[cmd.AnnotationSkipBootstrap] == "true" {
+		return true
 	}
 
 	for _, arg := range os.Args {
@@ -323,10 +333,10 @@ func (pb *PocketBase) skipBootstrap() bool {
 
 		// ensure that there is no user defined flag with the same name/shorthand
 		trimmed := strings.TrimLeft(arg, "-")
-		if len(trimmed) > 1 && cmd.Flags().Lookup(trimmed) == nil {
+		if len(trimmed) > 1 && found.Flags().Lookup(trimmed) == nil {
 			return true
 		}
-		if len(trimmed) == 1 && cmd.Flags().ShorthandLookup(trimmed) == nil {
+		if len(trimmed) == 1 && found.Flags().ShorthandLookup(trimmed) == nil {
 			return true
 		}
 	}

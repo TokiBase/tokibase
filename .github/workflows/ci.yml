@@ -31,12 +31,15 @@ jobs:
         run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags "-s -w" -o out/toki-solo ./examples/base
       - name: build no_ui
         run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -tags no_ui -ldflags "-s -w" -o out/toki-noui ./examples/base
+      - name: build solo with s3 replica backend
+        run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -tags replica_s3 -ldflags "-s -w" -o out/toki-solo-s3 ./examples/base
       - name: size budget
         run: |
-          s=$(stat -c %s out/toki-solo); n=$(stat -c %s out/toki-noui)
-          echo "solo=$((s/1024/1024))MB noui=$((n/1024/1024))MB"
-          test $s -le $((45*1024*1024)) || { echo "solo over 45MB budget"; exit 1; }
-          test $n -le $((40*1024*1024)) || { echo "no_ui over 40MB budget"; exit 1; }
+          s=$(stat -c %s out/toki-solo); n=$(stat -c %s out/toki-noui); x=$(stat -c %s out/toki-solo-s3)
+          echo "solo=$((s/1024/1024))MB noui=$((n/1024/1024))MB solo+s3=$((x/1024/1024))MB"
+          test $s -le $((36*1024*1024)) || { echo "solo over 36MB budget"; exit 1; }
+          test $n -le $((33*1024*1024)) || { echo "no_ui over 33MB budget"; exit 1; }
+          test $x -le $((45*1024*1024)) || { echo "solo+s3 over 45MB budget"; exit 1; }
   lint:
     runs-on: ubuntu-latest
     steps:
