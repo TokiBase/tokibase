@@ -43,6 +43,11 @@ Every deviation must be listed here with: what changed, why, migration path.
 - What: `modules/ruleguard` logs a warning at boot and after collection saves when an API rule is `""` (public) and not allowlisted in `pb_data/ruleguard.json`; a `strict` policy makes the app refuse to start. New `toki rule lint|allow` commands. REST endpoints, collection JSON and rule semantics are unchanged; collection saves are never blocked.
 - Why: an empty rule silently means public (a real incident exposed health data).
 - Migration: nothing needed (default policy `warn`). Set `{"policy":"off"}` to silence, or allowlist with `toki rule allow <collection> <kind>...`.
+### New `_audit` table in auxiliary.db (phase 1, `modules/audit`)
+
+- What: new `_audit` table in `auxiliary.db` (append-only, hash-chained) and a new `audit` CLI command. No REST/SDK/API change; `data.db` untouched. `TOKI_AUDIT=off` skips registration (the table is then never created, an existing one is left as is).
+- Why: tamper-evident trail of superuser, impersonated, schema and settings changes.
+- Migration path: none needed; an upstream `pb_data` gains the table on first start, and removing it (or running upstream) simply ignores it. See `docs/modules/audit.md`.
 
 ## Not promised
 

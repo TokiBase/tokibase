@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tokibase/tokibase/cmd"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/modules/audit"
 	"github.com/tokibase/tokibase/modules/ruleguard"
 	"github.com/tokibase/tokibase/modules/store/sqlite"
 	"github.com/tokibase/tokibase/tools/hook"
@@ -142,6 +143,10 @@ func NewWithConfig(config Config) *PocketBase {
 
 	// make public ("") API rules explicit (policy file: pb_data/ruleguard.json)
 	ruleguard.Register(pb.App.(core.App))
+	// audit log (disable with TOKI_AUDIT=off)
+	if audit.Enabled() {
+		audit.Register(pb.App)
+	}
 
 	// hide the default help command (allow only `--help` flag)
 	pb.RootCmd.SetHelpCommand(&cobra.Command{Hidden: true})
@@ -174,6 +179,9 @@ func (pb *PocketBase) Start() error {
 	pb.RootCmd.AddCommand(cmd.NewSuperuserCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewRuleCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewServeCommand(pb, !pb.hideStartBanner))
+	if audit.Enabled() {
+		pb.RootCmd.AddCommand(audit.NewCommand(pb))
+	}
 
 	return pb.Execute()
 }
