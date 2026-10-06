@@ -1,0 +1,8 @@
+{
+  "name": "tokibase-e2e-sdk",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test" },
+  "dependencies": { "eventsource": "^3.0.0",
+    "pocketbase": "^0.28.1" }
+}

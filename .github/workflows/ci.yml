@@ -47,3 +47,12 @@ jobs:
         with:
           version: latest
           args: -c ./golangci.yml ./kernel/... ./core/...
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: tests/e2e/run.sh

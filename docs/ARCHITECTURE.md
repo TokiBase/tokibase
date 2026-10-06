@@ -31,8 +31,8 @@ Goal: profile `solo` behaves identically to PocketBase v0.40.4.
 - [x] Move the SQLite driver, connection setup, pragmas, maintenance, lock retry and error classification to `modules/store/sqlite` behind `kernel.DBOpener`/`kernel.DBConn` (`docs/PHASE0_SQLITE_STORE.md`). Typed record CRUD on the store is still to come.
 - [x] CI job that runs `golangci-lint` (kernel and core).
 - [x] CI: build matrix (linux/darwin/windows x amd64/arm64), `-s -w`, size budgets.
-- [ ] CI: official JS SDK and Dart SDK test suites against the binary.
-- [ ] `toki import pb_data/` smoke test with a real PocketBase data directory.
+- [x] CI: official JS SDK suite against the binary (`tests/e2e/sdk`, job `e2e`). Dart SDK suite still to come.
+- [x] Serve an unchanged `pb_data` created by upstream v0.40.4 (`tests/e2e/seed.sh` + `run.sh`).
 
 Exit gate: 100% SDK suite pass, kernel has no `net/http` import, all builds under budget.
 
