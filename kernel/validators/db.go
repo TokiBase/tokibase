@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"sync/atomic"
 
 	"github.com/pocketbase/dbx"
 	validation "github.com/pocketbase/ozzo-validation/v4"
@@ -38,6 +39,29 @@ func UniqueId(db dbx.Builder, tableName string) validation.RuleFunc {
 	}
 }
 
+var uniqueErrorDetector atomic.Pointer[func(error) bool]
+
+// SetUniqueErrorDetector registers the store specific function that reports
+// whether an error is a unique constraint violation (it is set by the store
+// module, e.g. modules/store/sqlite, so that the kernel stays driver agnostic).
+//
+// Until a detector is registered NormalizeUniqueIndexError returns the error unchanged.
+func SetUniqueErrorDetector(fn func(error) bool) {
+	if fn == nil {
+		uniqueErrorDetector.Store(nil)
+		return
+	}
+	uniqueErrorDetector.Store(&fn)
+}
+
+func isUniqueError(err error) bool {
+	if fn := uniqueErrorDetector.Load(); fn != nil {
+		return (*fn)(err)
+	}
+
+	return false
+}
+
 // NormalizeUniqueIndexError attempts to convert a
 // "unique constraint failed" error into a validation.Errors.
 //
@@ -57,7 +81,7 @@ func NormalizeUniqueIndexError(err error, tableOrAlias string, fieldNames []stri
 	msg := strings.ToLower(err.Error())
 
 	// check for unique constraint failure
-	if strings.Contains(msg, "unique constraint failed") {
+	if isUniqueError(err) {
 		// note: extra space to unify multi-columns lookup
 		msg = strings.ReplaceAll(strings.TrimSpace(msg), ",", " ") + " "
 

@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -122,16 +123,10 @@ func (app *BaseApp) hasTable(db dbx.Builder, tableName string) bool {
 
 // Vacuum executes VACUUM on the data.db in order to reclaim unused data db disk space.
 func (app *BaseApp) Vacuum() error {
-	return app.vacuum(app.NonconcurrentDB())
+	return app.dataConn.Vacuum(context.Background(), app.NonconcurrentDB())
 }
 
 // AuxVacuum executes VACUUM on the auxiliary.db in order to reclaim unused auxiliary db disk space.
 func (app *BaseApp) AuxVacuum() error {
-	return app.vacuum(app.AuxNonconcurrentDB())
-}
-
-func (app *BaseApp) vacuum(db dbx.Builder) error {
-	_, err := db.NewQuery("VACUUM").Execute()
-
-	return err
+	return app.auxConn.Vacuum(context.Background(), app.AuxNonconcurrentDB())
 }

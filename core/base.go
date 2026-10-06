@@ -2,6 +2,7 @@ package core
 
 import (
 	"github.com/tokibase/tokibase/kernel"
+	"github.com/tokibase/tokibase/modules/store/sqlite"
 	"github.com/tokibase/tokibase/tools/filesystem/fshttp"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/mailer"
@@ -30,6 +31,11 @@ func NewBaseApp(config BaseAppConfig) *BaseApp {
 	if config.MailClientFactory == nil {
 		config.MailClientFactory = newMailClient
 	}
+	if config.DBOpener == nil {
+		// wire the default (SQLite) store module; a custom DBConnect
+		// keeps working and is adapted to the same opener
+		config.DBOpener = sqlite.NewOpenerFunc(config.DBConnect)
+	}
 	if config.S3FilesystemFactory == nil {
 		config.S3FilesystemFactory = fshttp.NewS3
 	}
@@ -40,7 +46,7 @@ func NewBaseApp(config BaseAppConfig) *BaseApp {
 	}
 
 	// expose the outer app to the kernel hook handlers and transaction callbacks
-	app.BaseApp.SetOuter(app, wrapBaseApp)
+	app.SetOuter(app, wrapBaseApp)
 
 	app.registerBaseHooks()
 

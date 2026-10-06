@@ -1,13 +1,15 @@
 //go:build !no_default_driver
 
-package kernel
+package sqlite
 
 import (
 	"github.com/pocketbase/dbx"
 	_ "modernc.org/sqlite"
 )
 
-func DefaultDBConnect(dbPath string) (*dbx.DB, error) {
+// DefaultConnect opens the SQLite database at dbPath using the default
+// modernc.org/sqlite driver and the default pragmas.
+func DefaultConnect(dbPath string) (*dbx.DB, error) {
 	// Note: the busy_timeout pragma must be first because
 	// the connection needs to be set to block on busy before WAL mode
 	// is set in case it hasn't been already set by another connection.

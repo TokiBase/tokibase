@@ -30,6 +30,12 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: the kernel must not import `net/http` (see `docs/decisions/0001-fork-and-kernel-split.md`).
 - Migration for Go users: transaction callbacks (`RunInTransaction`) and kernel event `App` fields are `kernel.App`; use `core.AsApp(app)` to get the server hooks back. `OAuth2ProviderConfig.InitProvider()` became `core.InitOAuth2Provider(cfg)`; `filesystem.System.Serve/NewS3/NewFileFromURL` moved to `tools/filesystem/fshttp`; `mailer.SMTPClient/Sendmail` moved to `tools/mailer/clients`. Migration files (`migrations.Register(func(app core.App) error ...)`) and `pb_hooks` JS are unaffected. Full list: `docs/PHASE0_KERNEL_SPLIT.md`.
 
+### Go package API: SQLite driver moved to `modules/store/sqlite` (phase 0)
+
+- What: the driver import, `DefaultDBConnect`, pool tuning, pragmas, WAL/optimize/vacuum, lock retry and the concurrent/nonconcurrent builder moved out of `kernel` into `modules/store/sqlite`. `kernel.BaseAppConfig` gained `DBOpener`; `kernel.DefaultDBConnect` became `sqlite.DefaultConnect` (`core.DefaultDBConnect` still exists). `kernel.NewBaseApp` no longer has a default driver and fails on Bootstrap without `DBOpener`; `core.NewBaseApp` and `tokibase.New*` wire the SQLite opener, and a custom `DBConnect` keeps working. `tokibase.ModerncDepsCheckHookId` is unchanged. SQL, pragmas, pool sizes, retry behavior and `pb_data` are unchanged.
+- Why: the kernel must not depend on the SQLite driver (`docs/PHASE0_SQLITE_STORE.md`).
+- Migration for Go users: only code that used `kernel.NewBaseApp` directly needs `DBOpener: sqlite.NewOpener()`.
+
 ## Not promised
 
 - Go package API (`core`, `apis`, ...) may change between TokiBase minor versions.

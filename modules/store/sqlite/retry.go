@@ -1,11 +1,10 @@
-package kernel
+package sqlite
 
 import (
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/pocketbase/dbx"
@@ -13,9 +12,6 @@ import (
 
 // default retries intervals (in ms)
 var defaultRetryIntervals = []int{50, 100, 150, 200, 300, 400, 500, 700, 1000}
-
-// default max retry attempts
-const defaultMaxLockRetries = 12
 
 func execLockRetry(timeout time.Duration, maxRetries int) dbx.ExecHookFunc {
 	return func(q *dbx.Query, op func() error) error {
@@ -47,10 +43,7 @@ Retry:
 	err := op(attempt)
 
 	if err != nil && attempt <= maxRetries {
-		errStr := err.Error()
-		// we are checking the error against the plain error texts since the codes could vary between drivers
-		if strings.Contains(errStr, "database is locked") ||
-			strings.Contains(errStr, "table is locked") {
+		if isLockedError(err) {
 			// wait and retry
 			time.Sleep(getDefaultRetryInterval(attempt))
 			attempt++

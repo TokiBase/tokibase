@@ -65,23 +65,42 @@ func crc32Checksum(str string) string {
 // ModelQuery creates a new preconfigured select data.db query with preset
 // SELECT, FROM and other common fields based on the provided model.
 func (app *BaseApp) ModelQuery(m Model) *dbx.SelectQuery {
-	return app.modelQuery(app.ConcurrentDB(), m)
+	return app.modelQuery(app.ConcurrentDB(), m, false)
 }
 
 // AuxModelQuery creates a new preconfigured select auxiliary.db query with preset
 // SELECT, FROM and other common fields based on the provided model.
 func (app *BaseApp) AuxModelQuery(m Model) *dbx.SelectQuery {
-	return app.modelQuery(app.AuxConcurrentDB(), m)
+	return app.modelQuery(app.AuxConcurrentDB(), m, true)
 }
 
-func (app *BaseApp) modelQuery(db dbx.Builder, m Model) *dbx.SelectQuery {
+// dbConn returns the store connection of the data or the auxiliary database.
+func (app *BaseApp) dbConn(isForAuxDB bool) DBConn {
+	if isForAuxDB {
+		return app.auxConn
+	}
+
+	return app.dataConn
+}
+
+// lockRetry runs op and retries it on locked db errors (see [DBConn.LockRetry]).
+func (app *BaseApp) lockRetry(isForAuxDB bool, op func(attempt int) error) error {
+	return app.dbConn(isForAuxDB).LockRetry(DefaultMaxLockRetries, op)
+}
+
+// execLockRetry returns the exec hook that retries the locked db queries (see [DBConn.ExecLockRetry]).
+func (app *BaseApp) execLockRetry(isForAuxDB bool) dbx.ExecHookFunc {
+	return app.dbConn(isForAuxDB).ExecLockRetry(app.config.QueryTimeout, DefaultMaxLockRetries)
+}
+
+func (app *BaseApp) modelQuery(db dbx.Builder, m Model, isForAuxDB bool) *dbx.SelectQuery {
 	tableName := m.TableName()
 
 	return db.
 		Select("{{" + tableName + "}}.*").
 		From(tableName).
 		WithBuildHook(func(query *dbx.Query) {
-			query.WithExecHook(execLockRetry(app.config.QueryTimeout, defaultMaxLockRetries))
+			query.WithExecHook(app.execLockRetry(isForAuxDB))
 		})
 }
 
@@ -129,13 +148,13 @@ func (app *BaseApp) delete(ctx context.Context, model Model, isForAuxDB bool) er
 				db = e.App.NonconcurrentDB()
 			}
 
-			return baseLockRetry(func(attempt int) error {
+			return app.lockRetry(isForAuxDB, func(attempt int) error {
 				_, err := db.Delete(e.Model.TableName(), dbx.HashExp{
 					idColumn: pk,
 				}).WithContext(e.Context).Execute()
 
 				return err
-			}, defaultMaxLockRetries)
+			})
 		})
 	})
 	if deleteErr != nil {
@@ -295,7 +314,7 @@ func (app *BaseApp) create(ctx context.Context, model Model, withValidations boo
 				db = e.App.NonconcurrentDB()
 			}
 
-			dbErr := baseLockRetry(func(attempt int) error {
+			dbErr := app.lockRetry(isForAuxDB, func(attempt int) error {
 				if m, ok := e.Model.(DBExporter); ok {
 					data, err := m.DBExport(e.App)
 					if err != nil {
@@ -317,7 +336,7 @@ func (app *BaseApp) create(ctx context.Context, model Model, withValidations boo
 				}
 
 				return db.Model(e.Model).WithContext(e.Context).Insert()
-			}, defaultMaxLockRetries)
+			})
 			if dbErr != nil {
 				return dbErr
 			}
@@ -390,7 +409,7 @@ func (app *BaseApp) update(ctx context.Context, model Model, withValidations boo
 				db = e.App.NonconcurrentDB()
 			}
 
-			return baseLockRetry(func(attempt int) error {
+			return app.lockRetry(isForAuxDB, func(attempt int) error {
 				if m, ok := e.Model.(DBExporter); ok {
 					data, err := m.DBExport(e.App)
 					if err != nil {
@@ -410,7 +429,7 @@ func (app *BaseApp) update(ctx context.Context, model Model, withValidations boo
 				}
 
 				return db.Model(e.Model).WithContext(e.Context).Update()
-			}, defaultMaxLockRetries)
+			})
 		})
 	})
 	if saveErr != nil {
