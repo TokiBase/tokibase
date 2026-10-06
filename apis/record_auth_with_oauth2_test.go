@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/auth"
 	"github.com/tokibase/tokibase/tools/dbutils"
@@ -1939,7 +1940,7 @@ func TestRecordAuthWithOAuth2(t *testing.T) {
 
 				app.OnRecordAuthWithOAuth2Request().BindFunc(func(e *core.RecordAuthWithOAuth2RequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
 						e.App = txApp
 						defer func() { e.App = original }()
 

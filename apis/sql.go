@@ -10,6 +10,7 @@ import (
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/router"
 )
 
@@ -118,7 +119,7 @@ func executeQuery(app core.App, query string, maxRows int) (*runSQLResult, error
 	// ---------------------------------------------------------------
 	if isPossibleWriteQuery {
 		// auto wrap in transaction in case there are multiple inline queries
-		txErr := app.RunInTransaction(func(txApp core.App) error {
+		txErr := app.RunInTransaction(func(txApp kernel.App) error {
 			execResult, err := txApp.NonconcurrentDB().NewQuery(query).WithContext(ctx).Execute()
 			if err != nil {
 				return err

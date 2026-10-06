@@ -9,17 +9,18 @@ import (
 	"strings"
 
 	"github.com/pocketbase/dbx"
+	"github.com/spf13/cast"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/security"
 	"github.com/tokibase/tokibase/tools/types"
-	"github.com/spf13/cast"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // note: this migration will be deleted in future version
 
 func init() {
-	core.SystemMigrations.Register(func(txApp core.App) error {
+	core.SystemMigrations.Register(func(txApp kernel.App) error {
 		// note: mfas and authOrigins tables are available only with v0.23
 		hasUpgraded := txApp.HasTable(core.CollectionNameMFAs) && txApp.HasTable(core.CollectionNameAuthOrigins)
 		if hasUpgraded {
@@ -70,7 +71,7 @@ func init() {
 
 // -------------------------------------------------------------------
 
-func migrateSuperusers(txApp core.App, oldSettings *oldSettingsModel) error {
+func migrateSuperusers(txApp kernel.App, oldSettings *oldSettingsModel) error {
 	// create new superusers collection and table
 	err := createSuperusersCollection(txApp)
 	if err != nil {
@@ -138,7 +139,7 @@ type oldSettingsModel struct {
 	Value    map[string]any `db:"-" json:"-"`
 }
 
-func loadOldSettings(txApp core.App) (*oldSettingsModel, error) {
+func loadOldSettings(txApp kernel.App) (*oldSettingsModel, error) {
 	oldSettings := &oldSettingsModel{Value: map[string]any{}}
 	err := txApp.DB().Select().From("_params").Where(dbx.HashExp{"key": "settings"}).One(oldSettings)
 	if err != nil {
@@ -173,7 +174,7 @@ func loadOldSettings(txApp core.App) (*oldSettingsModel, error) {
 	return oldSettings, nil
 }
 
-func migrateSettings(txApp core.App, oldSettings *oldSettingsModel) error {
+func migrateSettings(txApp kernel.App, oldSettings *oldSettingsModel) error {
 	// renamed old params collection
 	_, err := txApp.DB().RenameTable("_params", "_params_old").Execute()
 	if err != nil {
@@ -246,7 +247,7 @@ func migrateSettings(txApp core.App, oldSettings *oldSettingsModel) error {
 
 // -------------------------------------------------------------------
 
-func migrateExternalAuths(txApp core.App) error {
+func migrateExternalAuths(txApp kernel.App) error {
 	// renamed old externalAuths table
 	_, err := txApp.DB().RenameTable("_externalAuths", "_externalAuths_old").Execute()
 	if err != nil {
@@ -279,7 +280,7 @@ func migrateExternalAuths(txApp core.App) error {
 
 // -------------------------------------------------------------------
 
-func migrateOldCollections(txApp core.App, oldSettings *oldSettingsModel) error {
+func migrateOldCollections(txApp kernel.App, oldSettings *oldSettingsModel) error {
 	oldCollections := []*OldCollectionModel{}
 	err := txApp.DB().Select().From("_collections").All(&oldCollections)
 	if err != nil {

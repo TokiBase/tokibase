@@ -20,6 +20,7 @@ import (
 	"github.com/pocketbase/dbx"
 	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/auth"
 	"github.com/tokibase/tokibase/tools/dbutils"
 	"github.com/tokibase/tokibase/tools/filesystem"
@@ -68,7 +69,7 @@ func recordAuthWithOAuth2(e *core.RequestEvent) error {
 		return e.InternalServerError("Missing or invalid provider config.", nil)
 	}
 
-	provider, err := providerConfig.InitProvider()
+	provider, err := core.InitOAuth2Provider(providerConfig)
 	if err != nil {
 		return firstApiError(err, e.InternalServerError("Failed to init provider "+form.Provider, err))
 	}
@@ -219,7 +220,7 @@ func (form *recordOAuth2LoginForm) checkProviderName(value any) error {
 }
 
 // @todo evaluate if it is still worth keeping as this exists only for backward-compatibility with pre v0.23 versions
-func oldCanAssignUsername(txApp core.App, collection *core.Collection, username string) bool {
+func oldCanAssignUsername(txApp kernel.App, collection *core.Collection, username string) bool {
 	field := collection.Fields.GetByName(collection.OAuth2.MappedFields.Username)
 	if field == nil {
 		return false
@@ -256,7 +257,7 @@ func oldCanAssignUsername(txApp core.App, collection *core.Collection, username 
 }
 
 func oauth2Submit(e *core.RecordAuthWithOAuth2RequestEvent, optExternalAuth *core.ExternalAuth) error {
-	return e.App.RunInTransaction(func(txApp core.App) error {
+	return e.App.RunInTransaction(func(txApp kernel.App) error {
 		if e.Record == nil {
 			// extra check to prevent creating a superuser record via
 			// OAuth2 in case the method is used by another action
@@ -400,7 +401,7 @@ func oauth2Submit(e *core.RecordAuthWithOAuth2RequestEvent, optExternalAuth *cor
 	})
 }
 
-func sendOAuth2RecordCreateRequest(txApp core.App, e *core.RecordAuthWithOAuth2RequestEvent, payload map[string]any) (*core.Record, error) {
+func sendOAuth2RecordCreateRequest(txApp kernel.App, e *core.RecordAuthWithOAuth2RequestEvent, payload map[string]any) (*core.Record, error) {
 	ir := &core.InternalRequest{
 		Method: http.MethodPost,
 		URL:    "/api/collections/" + e.Collection.Name + "/records",
@@ -408,7 +409,7 @@ func sendOAuth2RecordCreateRequest(txApp core.App, e *core.RecordAuthWithOAuth2R
 	}
 
 	var createdRecord *core.Record
-	response, err := processInternalRequest(txApp, e.RequestEvent, ir, core.RequestInfoContextOAuth2, func(data any) error {
+	response, err := processInternalRequest(core.AsApp(txApp), e.RequestEvent, ir, core.RequestInfoContextOAuth2, func(data any) error {
 		createdRecord, _ = data.(*core.Record)
 
 		return nil

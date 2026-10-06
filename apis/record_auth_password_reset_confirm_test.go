@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
@@ -326,7 +327,7 @@ func TestRecordConfirmPasswordReset(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnRecordConfirmPasswordResetRequest().BindFunc(func(e *core.RecordConfirmPasswordResetRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
 						e.App = txApp
 						defer func() { e.App = original }()
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
@@ -276,7 +277,7 @@ func TestRecordConfirmVerification(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnRecordConfirmVerificationRequest().BindFunc(func(e *core.RecordConfirmVerificationRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
 						e.App = txApp
 						defer func() { e.App = original }()
 

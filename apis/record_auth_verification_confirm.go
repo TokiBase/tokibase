@@ -4,9 +4,9 @@ import (
 	"net/http"
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
+	"github.com/spf13/cast"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/tools/security"
-	"github.com/spf13/cast"
 )
 
 func recordConfirmVerification(e *core.RequestEvent) error {

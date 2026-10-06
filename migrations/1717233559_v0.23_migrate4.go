@@ -2,13 +2,14 @@ package migrations
 
 import (
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 // note: this migration will be deleted in future version
 
 // add new OTP sentTo text field (if not already)
 func init() {
-	core.SystemMigrations.Register(func(txApp core.App) error {
+	core.SystemMigrations.Register(func(txApp kernel.App) error {
 		otpCollection, err := txApp.FindCollectionByNameOrId(core.CollectionNameOTPs)
 		if err != nil {
 			return err

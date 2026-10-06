@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/types"
 )
@@ -486,7 +487,7 @@ func TestRecordAuthWithOTP(t *testing.T) {
 
 				app.OnRecordAuthWithOTPRequest().BindFunc(func(e *core.RecordAuthWithOTPRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
 						e.App = txApp
 						defer func() { e.App = original }()
 

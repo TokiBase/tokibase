@@ -32,6 +32,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/fsnotify/fsnotify"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/plugins/jsvm/internal/types/generated"
 	"github.com/tokibase/tokibase/tools/routine"
 	"github.com/tokibase/tokibase/tools/template"
@@ -217,7 +218,7 @@ func (p *plugin) registerMigrations() error {
 		vm.Set("$template", templateRegistry)
 		vm.Set("__hooks", absHooksDir)
 
-		vm.Set("migrate", func(up, down func(txApp core.App) error) {
+		vm.Set("migrate", func(up, down func(txApp kernel.App) error) {
 			core.AppMigrations.Register(up, down, file)
 		})
 

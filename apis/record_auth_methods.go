@@ -123,7 +123,7 @@ func recordAuthMethods(e *core.RequestEvent) error {
 	result.OAuth2.Enabled = true
 
 	for _, config := range collection.OAuth2.Providers {
-		provider, err := config.InitProvider()
+		provider, err := core.InitOAuth2Provider(config)
 		if err != nil {
 			e.App.Logger().Debug(
 				"Failed to setup OAuth2 provider",

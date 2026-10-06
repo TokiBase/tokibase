@@ -2,12 +2,13 @@ package migrations
 
 import (
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 // note: this migration will be deleted in future version
 
 func init() {
-	core.SystemMigrations.Register(func(txApp core.App) error {
+	core.SystemMigrations.Register(func(txApp kernel.App) error {
 		_, err := txApp.DB().NewQuery("CREATE INDEX IF NOT EXISTS idx__collections_type on {{_collections}} ([[type]]);").Execute()
 		if err != nil {
 			return err

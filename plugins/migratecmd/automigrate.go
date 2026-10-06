@@ -11,6 +11,7 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 // automigrateOnCollectionChange handles the automigration snapshot
@@ -70,7 +71,7 @@ func (p *plugin) automigrateOnCollectionChange(e *core.CollectionRequestEvent) e
 	name := fmt.Sprintf("%d_%s.%s", time.Now().Unix(), action, p.config.TemplateLang)
 	filePath := filepath.Join(p.config.Dir, name)
 
-	return p.app.RunInTransaction(func(txApp core.App) error {
+	return p.app.RunInTransaction(func(txApp kernel.App) error {
 		// insert the migration entry
 		_, err := txApp.DB().Insert(core.DefaultMigrationsTable, dbx.Params{
 			"file": name,

@@ -10,7 +10,8 @@ import (
 	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/spf13/cast"
 	"github.com/tokibase/tokibase/core"
-	"github.com/tokibase/tokibase/core/validators"
+	"github.com/tokibase/tokibase/kernel"
+	"github.com/tokibase/tokibase/kernel/validators"
 	"github.com/tokibase/tokibase/tools/security"
 )
 
@@ -225,11 +226,11 @@ func (form *RecordUpsert) DrySubmit(callback func(txApp core.App, drySavedRecord
 		clone.Id = "_temp_" + security.PseudorandomString(15)
 	}
 
-	app := form.app.UnsafeWithoutHooks()
+	app := core.AsApp(form.app.UnsafeWithoutHooks())
 
 	isTransactional := app.IsTransactional()
 	if !isTransactional {
-		return app.RunInTransaction(func(txApp core.App) error {
+		return app.RunInTransaction(func(txApp kernel.App) error {
 			tx, ok := txApp.DB().(*dbx.Tx)
 			if !ok {
 				return errors.New("failed to get transaction db")
@@ -241,7 +242,7 @@ func (form *RecordUpsert) DrySubmit(callback func(txApp core.App, drySavedRecord
 			}
 
 			if callback != nil {
-				return callback(txApp, clone)
+				return callback(core.AsApp(txApp), clone)
 			}
 
 			return nil

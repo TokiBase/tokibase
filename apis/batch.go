@@ -15,12 +15,13 @@ import (
 	"time"
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
+	"github.com/spf13/cast"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/filesystem"
 	"github.com/tokibase/tokibase/tools/router"
 	"github.com/tokibase/tokibase/tools/routine"
 	"github.com/tokibase/tokibase/tools/types"
-	"github.com/spf13/cast"
 )
 
 func bindBatchApi(app core.App, rg *router.RouterGroup[*core.RequestEvent]) {
@@ -190,14 +191,14 @@ func (p *batchProcessor) Process(batch []*core.InternalRequest, timeout time.Dur
 	}
 	p.errCh = make(chan error, 1)
 
-	return p.app.RunInTransaction(func(txApp core.App) error {
+	return p.app.RunInTransaction(func(txApp kernel.App) error {
 		// used to interupts the recursive processing calls in case of a timeout or connection close
 		defer func() {
 			p.stopCh <- struct{}{}
 		}()
 
 		routine.FireAndForget(func() {
-			err := p.process(txApp, batch, 0)
+			err := p.process(core.AsApp(txApp), batch, 0)
 
 			if err != nil {
 				err = validation.Errors{

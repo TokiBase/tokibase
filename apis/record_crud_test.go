@@ -13,6 +13,7 @@ import (
 
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/router"
 	"github.com/tokibase/tokibase/tools/types"
@@ -453,7 +454,7 @@ func TestRecordCrudList(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnRecordsListRequest().BindFunc(func(e *core.RecordsListRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
 						e.App = txApp
 						defer func() { e.App = original }()
 
@@ -923,7 +924,7 @@ func TestRecordCrudView(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnRecordViewRequest().BindFunc(func(e *core.RecordRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
 						e.App = txApp
 						defer func() { e.App = original }()
 
@@ -1295,7 +1296,7 @@ func TestRecordCrudDelete(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnRecordDeleteRequest().BindFunc(func(e *core.RecordRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
 						e.App = txApp
 						defer func() { e.App = original }()
 
@@ -1886,7 +1887,7 @@ func TestRecordCrudCreate(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnRecordCreateRequest().BindFunc(func(e *core.RecordRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
 						e.App = txApp
 						defer func() { e.App = original }()
 
@@ -2903,7 +2904,7 @@ func TestRecordCrudUpdate(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnRecordUpdateRequest().BindFunc(func(e *core.RecordRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
 						e.App = txApp
 						defer func() { e.App = original }()
 

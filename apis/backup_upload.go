@@ -5,7 +5,7 @@ import (
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/tokibase/tokibase/core"
-	"github.com/tokibase/tokibase/core/validators"
+	"github.com/tokibase/tokibase/kernel/validators"
 	"github.com/tokibase/tokibase/tools/filesystem"
 )
 

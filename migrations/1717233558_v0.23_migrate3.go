@@ -6,6 +6,7 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 // note: this migration will be deleted in future version
@@ -20,7 +21,7 @@ func fieldIdChecksum(typ, name string) string {
 
 // normalize system collection and field ids
 func init() {
-	core.SystemMigrations.Register(func(txApp core.App) error {
+	core.SystemMigrations.Register(func(txApp kernel.App) error {
 		collections := []*core.Collection{}
 		err := txApp.CollectionQuery().
 			AndWhere(dbx.In(

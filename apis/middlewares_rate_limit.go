@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/store"
 )
@@ -209,7 +210,7 @@ func defaultRateLimitLabels(e *core.RequestEvent) []string {
 	return []string{e.Request.Method + " " + e.Request.URL.Path, e.Request.URL.Path}
 }
 
-func destroyRateLimitersStore(app core.App) {
+func destroyRateLimitersStore(app kernel.App) {
 	app.OnSettingsReload().Unbind(rateLimitersSettingsHookId)
 	app.Cron().Remove(rateLimitersCronKey)
 	app.Store().Remove(rateLimitersStoreKey)
