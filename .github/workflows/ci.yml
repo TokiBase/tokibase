@@ -10,7 +10,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod }
-      - run: go vet ./...
+      - run: go vet -structtag=false ./...  # upstream test fixture has an intentional unexported tagged field
       - run: go test ./... -short
   build-matrix:
     runs-on: ubuntu-latest
