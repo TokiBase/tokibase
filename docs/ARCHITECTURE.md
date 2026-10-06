@@ -39,6 +39,7 @@ Exit gate: 100% SDK suite pass, kernel has no `net/http` import, all builds unde
 ## Phase 1 (in progress)
 
 - [x] ruleguard: explicit public API rules (`docs/modules/ruleguard.md`).
+- [x] lockout: progressive per-identity lockout for failed password/OTP auth (`docs/modules/lockout.md`).
 - [x] wal-replica: continuous WAL replication of `data.db` and `auxiliary.db` to a file path or S3 with Litestream embedded, plus restore (`docs/modules/walreplica.md`). Automatic promotion is still to come.
 
 ## Size budgets (phase 0 baseline, stripped)

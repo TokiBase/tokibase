@@ -20,7 +20,11 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/COMPAT.md](docs/COMPA
 
 - `modules/ruleguard`: public (`""`) API rules must be allowlisted in `pb_data/ruleguard.json`, otherwise they are warned about at boot and in `toki rule lint` ([docs/modules/ruleguard.md](docs/modules/ruleguard.md)).
 - `modules/audit`: append-only, hash-chained audit log of privileged and schema-changing actions, `toki audit tail|verify|export` ([docs/modules/audit.md](docs/modules/audit.md)). Disable with `TOKI_AUDIT=off`.
+<<<<<<< HEAD
 - `modules/adminlock`: `TOKI_ADMIN_UI=on|readonly|off` serves the Admin UI read-only (schema, settings and superuser changes from the UI get 403) or not at all ([docs/modules/adminlock.md](docs/modules/adminlock.md)).
+=======
+- `modules/lockout`: progressive per-identity lockout of failed password/OTP authentication, independent of client IP, `toki lockout list|unlock|clear` ([docs/modules/lockout.md](docs/modules/lockout.md)). Disable with `TOKI_LOCKOUT=off`.
+>>>>>>> 11e88c00 (Add lockout module: progressive per-identity auth lockout)
 - `modules/backupcheck`: every created backup is restored to a temp dir and verified (`PRAGMA integrity_check`, counts, sampled files); `toki backup verify latest` ([docs/modules/backupcheck.md](docs/modules/backupcheck.md)).
 - `modules/walreplica` (s3 backend needs `-tags replica_s3`): set `TOKI_REPLICA_URL` (`file://` or `s3://`) to continuously replicate `data.db` and `auxiliary.db` (Litestream embedded, RPO of seconds) and restore with `toki replica restore` or fail over with `toki replica promote` (one replicator per URL is guarded by a lease; drill: `tests/e2e/failover.sh`) ([docs/modules/walreplica.md](docs/modules/walreplica.md)).
 
