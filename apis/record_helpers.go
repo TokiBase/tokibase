@@ -10,6 +10,7 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/mails"
 	"github.com/tokibase/tokibase/tools/router"
 	"github.com/tokibase/tokibase/tools/routine"
@@ -311,7 +312,7 @@ func (ri *iterator[T]) next() T {
 	return item
 }
 
-func triggerRecordEnrichHooks(app core.App, requestInfo *core.RequestInfo, records []*core.Record, finalizer func() error) error {
+func triggerRecordEnrichHooks(app kernel.App, requestInfo *core.RequestInfo, records []*core.Record, finalizer func() error) error {
 	it := iterator[*core.Record]{items: records}
 
 	enrichHook := app.OnRecordEnrich()
@@ -373,7 +374,7 @@ func defaultEnrichRecords(app core.App, requestInfo *core.RequestInfo, records [
 }
 
 // expandFetch is the records fetch function that is used to expand related records.
-func expandFetch(app core.App, originalRequestInfo *core.RequestInfo) core.ExpandFetchFunc {
+func expandFetch(app kernel.App, originalRequestInfo *core.RequestInfo) core.ExpandFetchFunc {
 	// shallow clone the provided request info to set an "expand" context
 	requestInfoClone := *originalRequestInfo
 	requestInfoPtr := &requestInfoClone
@@ -434,7 +435,7 @@ func expandFetch(app core.App, originalRequestInfo *core.RequestInfo) core.Expan
 // - email export ignoring the emailVisibity checks if the current auth model is superuser, owner or a "manager".
 //
 // Note: Expects all records to be from the same collection!
-func autoResolveRecordsFlags(app core.App, records []*core.Record, requestInfo *core.RequestInfo) error {
+func autoResolveRecordsFlags(app kernel.App, records []*core.Record, requestInfo *core.RequestInfo) error {
 	if len(records) == 0 {
 		return nil // nothing to resolve
 	}

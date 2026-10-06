@@ -13,6 +13,7 @@ import (
 	"github.com/pocketbase/dbx"
 	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/picker"
 	"github.com/tokibase/tokibase/tools/router"
@@ -254,7 +255,7 @@ func realtimeSetSubscriptions(e *core.RequestEvent) error {
 // if the new record has a different tokenKey (e.g. in case of password reset)
 // the auth state of the related realtime connections is also cleared
 // (aka. they remain active but unauthenticated, allowing to reauthenicate with the next subscription).
-func realtimeUpdateClientsAuth(app core.App, authRecord *core.Record) error {
+func realtimeUpdateClientsAuth(app kernel.App, authRecord *core.Record) error {
 	chunks := app.SubscriptionsBroker().ChunkedClients(clientsChunkSize)
 
 	group := new(errgroup.Group)
@@ -282,7 +283,7 @@ func realtimeUpdateClientsAuth(app core.App, authRecord *core.Record) error {
 }
 
 // realtimeUnsetClientsAuthByRecordModelOrProxy unsets the auth state of all clients that have the provided auth model.
-func realtimeUnsetClientsAuthByRecordModelOrProxy(app core.App, authModel core.Model) error {
+func realtimeUnsetClientsAuthByRecordModelOrProxy(app kernel.App, authModel core.Model) error {
 	chunks := app.SubscriptionsBroker().ChunkedClients(clientsChunkSize)
 
 	group := new(errgroup.Group)
@@ -306,7 +307,7 @@ func realtimeUnsetClientsAuthByRecordModelOrProxy(app core.App, authModel core.M
 }
 
 // realtimeUnsetClientsAuthByCollection unsets the auth state of all authenticated clients related to the collection.
-func realtimeUnsetClientsAuthByCollection(app core.App, collection *core.Collection) error {
+func realtimeUnsetClientsAuthByCollection(app kernel.App, collection *core.Collection) error {
 	chunks := app.SubscriptionsBroker().ChunkedClients(clientsChunkSize)
 
 	group := new(errgroup.Group)
@@ -528,7 +529,7 @@ func bindRealtimeEvents(app core.App) {
 
 // resolveRecord converts *if possible* the provided model interface to a Record.
 // This is usually helpful if the provided model is a custom Record model struct.
-func realtimeResolveRecord(app core.App, model core.Model, optCollectionType string) *core.Record {
+func realtimeResolveRecord(app kernel.App, model core.Model, optCollectionType string) *core.Record {
 	var record *core.Record
 	switch m := model.(type) {
 	case *core.Record:
@@ -564,7 +565,7 @@ func realtimeResolveRecord(app core.App, model core.Model, optCollectionType str
 
 // realtimeResolveRecordCollection extracts *if possible* the Collection model from the provided model interface.
 // This is usually helpful if the provided model is a custom Record model struct.
-func realtimeResolveRecordCollection(app core.App, model core.Model) (collection *core.Collection) {
+func realtimeResolveRecordCollection(app kernel.App, model core.Model) (collection *core.Collection) {
 	switch m := model.(type) {
 	case *core.Record:
 		return m.Collection()
@@ -591,7 +592,7 @@ type recordData struct {
 // to be performed against different db app context (e.g. out of a transaction).
 // If set, it is expected that optAccessCheckApp instance is used for read-only operations to avoid deadlocks.
 // If not set, it fallbacks to app.
-func realtimeBroadcastRecord(app core.App, action string, record *core.Record, dryCache bool, optAccessCheckApp ...core.App) error {
+func realtimeBroadcastRecord(app kernel.App, action string, record *core.Record, dryCache bool, optAccessCheckApp ...core.App) error {
 	collection := record.Collection()
 	if collection == nil {
 		return errors.New("[broadcastRecord] Record collection not set")
@@ -773,7 +774,7 @@ func realtimeBroadcastRecord(app core.App, action string, record *core.Record, d
 }
 
 // realtimeBroadcastDryCacheKey broadcasts the dry cached key related messages.
-func realtimeBroadcastDryCacheKey(app core.App, key string) error {
+func realtimeBroadcastDryCacheKey(app kernel.App, key string) error {
 	chunks := app.SubscriptionsBroker().ChunkedClients(clientsChunkSize)
 	if len(chunks) == 0 {
 		return nil // no subscribers
@@ -808,7 +809,7 @@ func realtimeBroadcastDryCacheKey(app core.App, key string) error {
 }
 
 // realtimeUnsetDryCacheKey removes the dry cached key related messages.
-func realtimeUnsetDryCacheKey(app core.App, key string) error {
+func realtimeUnsetDryCacheKey(app kernel.App, key string) error {
 	chunks := app.SubscriptionsBroker().ChunkedClients(clientsChunkSize)
 	if len(chunks) == 0 {
 		return nil // no subscribers
@@ -854,7 +855,7 @@ func isSameAuth(authA, authB *core.Record) bool {
 
 // realtimeCanAccessRecord checks if the subscription client has access to the specified record model.
 func realtimeCanAccessRecord(
-	app core.App,
+	app kernel.App,
 	record *core.Record,
 	requestInfo *core.RequestInfo,
 	accessRule *string,

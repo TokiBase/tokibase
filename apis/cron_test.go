@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cast"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/tests"
-	"github.com/spf13/cast"
 )
 
 func TestCronsList(t *testing.T) {

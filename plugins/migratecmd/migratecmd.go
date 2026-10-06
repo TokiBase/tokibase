@@ -23,10 +23,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/tools/inflector"
 	"github.com/tokibase/tokibase/tools/osutils"
-	"github.com/spf13/cobra"
 )
 
 // Config defines the config options of the migratecmd plugin.
@@ -126,8 +126,8 @@ func (p *plugin) createCommand() *cobra.Command {
 			default:
 				// note: system migrations are always applied as part of the bootstrap process
 				var list = core.MigrationsList{}
-				list.Copy(core.SystemMigrations)
-				list.Copy(core.AppMigrations)
+				list.Copy(*core.SystemMigrations)
+				list.Copy(*core.AppMigrations)
 
 				runner := core.NewMigrationsRunner(p.app, list)
 

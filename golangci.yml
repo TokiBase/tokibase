@@ -7,6 +7,7 @@ linters:
   enable:
     - asasalint
     - asciicheck
+    - depguard
     - gomodguard_v2
     - goprintffuncname
     - govet
@@ -20,6 +21,26 @@ linters:
     - unconvert
     - unused
     - whitespace
+  settings:
+    depguard:
+      rules:
+        # the kernel must stay free from HTTP, process and UI concerns
+        # (see docs/ARCHITECTURE.md and docs/PHASE0_KERNEL_SPLIT.md)
+        kernel:
+          files:
+            - "**/kernel/**"
+            - "!$test"
+          deny:
+            - pkg: net/http
+              desc: the kernel must not depend on net/http (use the core package for HTTP bound code)
+            - pkg: github.com/tokibase/tokibase/tools/router
+              desc: the kernel must not depend on the HTTP router (use the core package)
+            - pkg: github.com/tokibase/tokibase/core
+              desc: the kernel must not import core (dependency direction is core -> kernel)
+            - pkg: github.com/tokibase/tokibase/apis
+              desc: the kernel must not import the server packages
+            - pkg: os/exec
+              desc: the kernel must not spawn OS processes
   exclusions:
     rules:
       - path: _test\.go

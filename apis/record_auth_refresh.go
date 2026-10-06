@@ -1,9 +1,9 @@
 package apis
 
 import (
+	"github.com/spf13/cast"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/tools/security"
-	"github.com/spf13/cast"
 )
 
 func recordAuthRefresh(e *core.RequestEvent) error {

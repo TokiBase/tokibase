@@ -6,7 +6,7 @@ import (
 	"runtime/debug"
 
 	"github.com/fatih/color"
-	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 const (
@@ -25,7 +25,7 @@ const (
 // and using a version different from the one in the go.mod of modernc.org/sqlite
 // could have unintended side-effects and cause obscure build and runtime bugs
 // (https://github.com/tokibase/tokibase/issues/6136).
-func checkModerncDeps(app core.App) {
+func checkModerncDeps(app kernel.App) {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return // no build info (probably compiled without module support)

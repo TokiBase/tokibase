@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/dbutils"
 )
@@ -91,8 +92,8 @@ func TestRecordAuthWithPassword(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnRecordAuthWithPasswordRequest().BindFunc(func(e *core.RecordAuthWithPasswordRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
-						e.App = txApp
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {

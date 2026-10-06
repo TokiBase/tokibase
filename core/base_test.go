@@ -10,13 +10,15 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/tokibase/tokibase/kernel"
+	"github.com/tokibase/tokibase/tools/mailer/clients"
+
 	_ "unsafe"
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/logger"
-	"github.com/tokibase/tokibase/tools/mailer"
 )
 
 func TestNewBaseApp(t *testing.T) {
@@ -157,7 +159,7 @@ func TestNewBaseAppTx(t *testing.T) {
 		}
 	}
 
-	mustHaveTx := func(app core.App) {
+	mustHaveTx := func(app kernel.App) {
 		if !app.IsTransactional() {
 			t.Fatalf("Expected the app to be transactional")
 		}
@@ -169,7 +171,7 @@ func TestNewBaseAppTx(t *testing.T) {
 
 	mustNotHaveTx(app)
 
-	app.RunInTransaction(func(txApp core.App) error {
+	app.RunInTransaction(func(txApp kernel.App) error {
 		mustHaveTx(txApp)
 		return nil
 	})
@@ -188,7 +190,7 @@ func TestBaseAppNewMailClient(t *testing.T) {
 	defer app.ClearBootstrap()
 
 	client1 := app.NewMailClient()
-	m1, ok := client1.(*mailer.Sendmail)
+	m1, ok := client1.(*clients.Sendmail)
 	if !ok {
 		t.Fatalf("Expected mailer.Sendmail instance, got %v", m1)
 	}
@@ -199,7 +201,7 @@ func TestBaseAppNewMailClient(t *testing.T) {
 	app.Settings().SMTP.Enabled = true
 
 	client2 := app.NewMailClient()
-	m2, ok := client2.(*mailer.SMTPClient)
+	m2, ok := client2.(*clients.SMTPClient)
 	if !ok {
 		t.Fatalf("Expected mailer.SMTPClient instance, got %v", m2)
 	}
@@ -411,7 +413,7 @@ func TestBaseAppLoggerWritesAwaited(t *testing.T) {
 		})
 		defer logsHook.Unbind(hookId)
 
-		app.AuxRunInTransaction(func(txApp core.App) error {
+		app.AuxRunInTransaction(func(txApp kernel.App) error {
 			for range logsThreshold {
 				txApp.Logger().Error("test")
 			}
@@ -557,7 +559,7 @@ func TestBaseAppDBDualBuilder(t *testing.T) {
 		}
 	}
 
-	app.RunInTransaction(func(txApp core.App) error {
+	app.RunInTransaction(func(txApp kernel.App) error {
 		for _, item := range txTests {
 			_, err := txApp.DB().NewQuery(item.query).Execute()
 			if err != nil {
@@ -633,7 +635,7 @@ func TestBaseAppAuxDBDualBuilder(t *testing.T) {
 		}
 	}
 
-	app.AuxRunInTransaction(func(txApp core.App) error {
+	app.AuxRunInTransaction(func(txApp kernel.App) error {
 		for _, item := range txTests {
 			_, err := txApp.AuxDB().NewQuery(item.query).Execute()
 			if err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/router"
 	"github.com/tokibase/tokibase/tools/types"
@@ -453,8 +454,8 @@ func TestRecordCrudList(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnRecordsListRequest().BindFunc(func(e *core.RecordsListRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
-						e.App = txApp
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -923,8 +924,8 @@ func TestRecordCrudView(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnRecordViewRequest().BindFunc(func(e *core.RecordRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
-						e.App = txApp
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -1295,8 +1296,8 @@ func TestRecordCrudDelete(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnRecordDeleteRequest().BindFunc(func(e *core.RecordRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
-						e.App = txApp
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -1886,8 +1887,8 @@ func TestRecordCrudCreate(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnRecordCreateRequest().BindFunc(func(e *core.RecordRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
-						e.App = txApp
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -2903,8 +2904,8 @@ func TestRecordCrudUpdate(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnRecordUpdateRequest().BindFunc(func(e *core.RecordRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
-						e.App = txApp
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {

@@ -6,11 +6,15 @@ import (
 	"runtime"
 
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/types"
 )
 
 // Register is a short alias for `AppMigrations.Register()`
 // that is usually used in external/user defined migrations.
+//
+// The callbacks receive a core.App (the kernel.App passed by the
+// migrations runner is the app that embeds the server hooks).
 func Register(
 	up func(app core.App) error,
 	down func(app core.App) error,
@@ -23,11 +27,23 @@ func Register(
 		_, path, _, _ := runtime.Caller(1)
 		optFiles = append(optFiles, filepath.Base(path))
 	}
-	core.AppMigrations.Register(up, down, optFiles...)
+	core.AppMigrations.Register(adaptMigrationFunc(up), adaptMigrationFunc(down), optFiles...)
+}
+
+// adaptMigrationFunc converts a core.App migration callback into the
+// kernel.App one expected by the kernel migrations runner.
+func adaptMigrationFunc(fn func(app core.App) error) func(app kernel.App) error {
+	if fn == nil {
+		return nil
+	}
+
+	return func(app kernel.App) error {
+		return fn(core.AsApp(app))
+	}
 }
 
 func init() {
-	core.SystemMigrations.Register(func(txApp core.App) error {
+	core.SystemMigrations.Register(func(txApp kernel.App) error {
 		if err := createParamsTable(txApp); err != nil {
 			return fmt.Errorf("_params exec error: %w", err)
 		}
@@ -83,7 +99,7 @@ func init() {
 		}
 
 		return nil
-	}, func(txApp core.App) error {
+	}, func(txApp kernel.App) error {
 		tables := []string{
 			"users",
 			core.CollectionNameSuperusers,
@@ -104,7 +120,7 @@ func init() {
 	})
 }
 
-func createParamsTable(txApp core.App) error {
+func createParamsTable(txApp kernel.App) error {
 	_, execErr := txApp.DB().NewQuery(`
 		CREATE TABLE {{_params}} (
 			[[id]]      TEXT PRIMARY KEY DEFAULT ('r'||lower(hex(randomblob(7)))) NOT NULL,
@@ -117,7 +133,7 @@ func createParamsTable(txApp core.App) error {
 	return execErr
 }
 
-func createMFAsCollection(txApp core.App) error {
+func createMFAsCollection(txApp kernel.App) error {
 	col := core.NewBaseCollection(core.CollectionNameMFAs)
 	col.System = true
 
@@ -156,7 +172,7 @@ func createMFAsCollection(txApp core.App) error {
 	return txApp.Save(col)
 }
 
-func createOTPsCollection(txApp core.App) error {
+func createOTPsCollection(txApp kernel.App) error {
 	col := core.NewBaseCollection(core.CollectionNameOTPs)
 	col.System = true
 
@@ -202,7 +218,7 @@ func createOTPsCollection(txApp core.App) error {
 	return txApp.Save(col)
 }
 
-func createAuthOriginsCollection(txApp core.App) error {
+func createAuthOriginsCollection(txApp kernel.App) error {
 	col := core.NewBaseCollection(core.CollectionNameAuthOrigins)
 	col.System = true
 
@@ -242,7 +258,7 @@ func createAuthOriginsCollection(txApp core.App) error {
 	return txApp.Save(col)
 }
 
-func createExternalAuthsCollection(txApp core.App) error {
+func createExternalAuthsCollection(txApp kernel.App) error {
 	col := core.NewBaseCollection(core.CollectionNameExternalAuths)
 	col.System = true
 
@@ -288,7 +304,7 @@ func createExternalAuthsCollection(txApp core.App) error {
 	return txApp.Save(col)
 }
 
-func createSuperusersCollection(txApp core.App) error {
+func createSuperusersCollection(txApp kernel.App) error {
 	superusers := core.NewAuthCollection(core.CollectionNameSuperusers)
 	superusers.System = true
 	superusers.Fields.Add(&core.EmailField{
@@ -312,7 +328,7 @@ func createSuperusersCollection(txApp core.App) error {
 	return txApp.Save(superusers)
 }
 
-func createUsersCollection(txApp core.App) error {
+func createUsersCollection(txApp kernel.App) error {
 	users := core.NewAuthCollection("users", "_pb_users_auth_")
 
 	ownerRule := "id = @request.auth.id"

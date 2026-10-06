@@ -2,6 +2,7 @@ package migrations
 
 import (
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 const oldAuthAlertTemplate = `<p>Hello,</p>
@@ -14,7 +15,7 @@ const oldAuthAlertTemplate = `<p>Hello,</p>
 </p>`
 
 func init() {
-	core.SystemMigrations.Register(func(txApp core.App) error {
+	core.SystemMigrations.Register(func(txApp kernel.App) error {
 		collections, err := txApp.FindAllCollections(core.CollectionTypeAuth)
 		if err != nil {
 			return err
@@ -36,7 +37,7 @@ func init() {
 		}
 
 		return nil
-	}, func(txApp core.App) error {
+	}, func(txApp kernel.App) error {
 		collections, err := txApp.FindAllCollections(core.CollectionTypeAuth)
 		if err != nil {
 			return err

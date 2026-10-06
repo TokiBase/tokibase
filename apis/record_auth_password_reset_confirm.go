@@ -4,10 +4,10 @@ import (
 	"net/http"
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/tokibase/tokibase/core"
-	"github.com/tokibase/tokibase/core/validators"
-	"github.com/tokibase/tokibase/tools/security"
 	"github.com/spf13/cast"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel/validators"
+	"github.com/tokibase/tokibase/tools/security"
 )
 
 func recordConfirmPasswordReset(e *core.RequestEvent) error {

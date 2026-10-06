@@ -12,6 +12,7 @@ import (
 
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/forms"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/filesystem"
 )
@@ -279,8 +280,8 @@ func TestRecordUpsertDrySubmitFailure(t *testing.T) {
 		testApp, _ := tests.NewTestApp()
 		defer testApp.Cleanup()
 
-		testApp.RunInTransaction(func(txApp core.App) error {
-			runTest(t, txApp)
+		testApp.RunInTransaction(func(txApp kernel.App) error {
+			runTest(t, core.AsApp(txApp))
 			return nil
 		})
 	})
@@ -347,8 +348,8 @@ func TestRecordUpsertDrySubmitCreateSuccess(t *testing.T) {
 		testApp, _ := tests.NewTestApp()
 		defer testApp.Cleanup()
 
-		testApp.RunInTransaction(func(txApp core.App) error {
-			runTest(t, txApp)
+		testApp.RunInTransaction(func(txApp kernel.App) error {
+			runTest(t, core.AsApp(txApp))
 			return nil
 		})
 	})
@@ -430,8 +431,8 @@ func TestRecordUpsertDrySubmitUpdateSuccess(t *testing.T) {
 		testApp, _ := tests.NewTestApp()
 		defer testApp.Cleanup()
 
-		testApp.RunInTransaction(func(txApp core.App) error {
-			runTest(t, txApp)
+		testApp.RunInTransaction(func(txApp kernel.App) error {
+			runTest(t, core.AsApp(txApp))
 			return nil
 		})
 	})

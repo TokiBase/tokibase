@@ -2,11 +2,12 @@ package migrations
 
 import (
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 func init() {
 	core.SystemMigrations.Add(&core.Migration{
-		Up: func(txApp core.App) error {
+		Up: func(txApp kernel.App) error {
 			_, execErr := txApp.AuxDB().NewQuery(`
 				CREATE TABLE IF NOT EXISTS {{_logs}} (
 					[[id]]      TEXT PRIMARY KEY DEFAULT ('r'||lower(hex(randomblob(7)))) NOT NULL,
@@ -23,11 +24,11 @@ func init() {
 
 			return execErr
 		},
-		Down: func(txApp core.App) error {
+		Down: func(txApp kernel.App) error {
 			_, err := txApp.AuxDB().DropTable("_logs").Execute()
 			return err
 		},
-		ReapplyCondition: func(txApp core.App, runner *core.MigrationsRunner, fileName string) (bool, error) {
+		ReapplyCondition: func(txApp kernel.App, runner *core.MigrationsRunner, fileName string) (bool, error) {
 			// reapply only if the _logs table doesn't exist
 			exists := txApp.AuxHasTable("_logs")
 			return !exists, nil

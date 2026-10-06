@@ -6,12 +6,13 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/dbutils"
 )
 
 // see https://github.com/tokibase/tokibase/issues/7689
 func init() {
-	core.SystemMigrations.Register(func(txApp core.App) error {
+	core.SystemMigrations.Register(func(txApp kernel.App) error {
 		collections, err := txApp.FindAllCollections()
 		if err != nil {
 			return err

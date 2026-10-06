@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/list"
 )
@@ -139,8 +140,8 @@ func TestCollectionsList(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnCollectionsListRequest().BindFunc(func(e *core.CollectionsListRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
-						e.App = txApp
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -240,8 +241,8 @@ func TestCollectionView(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnCollectionViewRequest().BindFunc(func(e *core.CollectionRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
-						e.App = txApp
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -421,8 +422,8 @@ func TestCollectionDelete(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnCollectionDeleteRequest().BindFunc(func(e *core.CollectionRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
-						e.App = txApp
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -724,8 +725,8 @@ func TestCollectionCreate(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnCollectionCreateRequest().BindFunc(func(e *core.CollectionRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
-						e.App = txApp
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {
@@ -1053,8 +1054,8 @@ func TestCollectionUpdate(t *testing.T) {
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				app.OnCollectionUpdateRequest().BindFunc(func(e *core.CollectionRequestEvent) error {
 					original := e.App
-					return e.App.RunInTransaction(func(txApp core.App) error {
-						e.App = txApp
+					return e.App.RunInTransaction(func(txApp kernel.App) error {
+						e.App = core.AsApp(txApp)
 						defer func() { e.App = original }()
 
 						if err := e.Next(); err != nil {

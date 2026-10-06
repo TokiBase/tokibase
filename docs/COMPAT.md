@@ -22,7 +22,13 @@ TokiBase keeps the PocketBase public contract so existing apps and SDKs keep wor
 
 ## Deviations
 
-None yet. Every deviation must be listed here with: what changed, why, migration path.
+Every deviation must be listed here with: what changed, why, migration path.
+
+### Go package API: `core` types are aliases of `kernel` types (phase 0)
+
+- What: models, fields, DB helpers, settings, migrations runner and the non-HTTP hooks/events moved to the `kernel` package. `core.Record`, `core.Collection`, `core.Field*`, `core.ModelEvent`, etc. are type aliases of the kernel types, and `core.App` embeds `kernel.App`. HTTP/REST behavior, JSON shapes, SQL and `pb_data` are unchanged.
+- Why: the kernel must not import `net/http` (see `docs/decisions/0001-fork-and-kernel-split.md`).
+- Migration for Go users: transaction callbacks (`RunInTransaction`) and kernel event `App` fields are `kernel.App`; use `core.AsApp(app)` to get the server hooks back. `OAuth2ProviderConfig.InitProvider()` became `core.InitOAuth2Provider(cfg)`; `filesystem.System.Serve/NewS3/NewFileFromURL` moved to `tools/filesystem/fshttp`; `mailer.SMTPClient/Sendmail` moved to `tools/mailer/clients`. Migration files (`migrations.Register(func(app core.App) error ...)`) and `pb_hooks` JS are unaffected. Full list: `docs/PHASE0_KERNEL_SPLIT.md`.
 
 ## Not promised
 

@@ -9,6 +9,12 @@ import (
 	"github.com/tokibase/tokibase/tools/hook"
 )
 
+// Supported SMTP authentication methods.
+const (
+	SMTPAuthPlain = "PLAIN"
+	SMTPAuthLogin = "LOGIN"
+)
+
 // Message defines a generic email message struct.
 type Message struct {
 	From              mail.Address         `json:"from"`
@@ -39,10 +45,10 @@ type SendEvent struct {
 	Message *Message
 }
 
-// addressesToStrings converts the provided address to a list of serialized RFC 5322 strings.
+// AddressesToStrings converts the provided address to a list of serialized RFC 5322 strings.
 //
 // To export only the email part of mail.Address, you can set withName to false.
-func addressesToStrings(addresses []mail.Address, withName bool) []string {
+func AddressesToStrings(addresses []mail.Address, withName bool) []string {
 	result := make([]string, len(addresses))
 
 	for i, addr := range addresses {
@@ -57,10 +63,10 @@ func addressesToStrings(addresses []mail.Address, withName bool) []string {
 	return result
 }
 
-// detectReaderMimeType reads the first couple bytes of the reader to detect its MIME type.
+// DetectReaderMimeType reads the first couple bytes of the reader to detect its MIME type.
 //
 // Returns a new combined reader from the partial read + the remaining of the original reader.
-func detectReaderMimeType(r io.Reader) (io.Reader, string, error) {
+func DetectReaderMimeType(r io.Reader) (io.Reader, string, error) {
 	readCopy := new(bytes.Buffer)
 
 	mime, err := mimetype.DetectReader(io.TeeReader(r, readCopy))
