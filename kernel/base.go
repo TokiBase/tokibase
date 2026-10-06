@@ -660,7 +660,7 @@ func (app *BaseApp) NewMailClient() mailer.Mailer {
 	if app.config.MailClientFactory != nil {
 		client = app.config.MailClientFactory(app.Settings())
 	} else {
-		client = unavailableMailer{}
+		client = &unavailableMailer{}
 	}
 
 	// register the app level hook
@@ -734,11 +734,33 @@ func (app *BaseApp) NewMailClient() mailer.Mailer {
 	return client
 }
 
-type unavailableMailer struct{}
+// unavailableMailer is the fallback mail client used when no MailClientFactory
+// is configured. It still supports the send interceptors (so the
+// OnMailerSend hooks work) but fails when the message has to be actually sent.
+type unavailableMailer struct {
+	onSend *hook.Hook[*mailer.SendEvent]
+}
+
+// OnSend implements [mailer.SendInterceptor] interface.
+func (c *unavailableMailer) OnSend() *hook.Hook[*mailer.SendEvent] {
+	if c.onSend == nil {
+		c.onSend = &hook.Hook[*mailer.SendEvent]{}
+	}
+
+	return c.onSend
+}
 
 // Send implements [mailer.Mailer] interface.
-func (unavailableMailer) Send(*mailer.Message) error {
-	return errors.New("no mail client factory configured (BaseAppConfig.MailClientFactory)")
+func (c *unavailableMailer) Send(m *mailer.Message) error {
+	errNoClient := errors.New("no mail client factory configured (BaseAppConfig.MailClientFactory)")
+
+	if c.onSend != nil {
+		return c.onSend.Trigger(&mailer.SendEvent{Message: m}, func(e *mailer.SendEvent) error {
+			return errNoClient
+		})
+	}
+
+	return errNoClient
 }
 
 // newS3Filesystem creates a new S3 filesystem via the configured factory.
