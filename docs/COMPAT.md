@@ -61,6 +61,12 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: replica lag is the signal operators need; an extra key in the superuser-only `data` map does not break the documented fields.
 - Migration: nothing needed; clients ignoring unknown `data` keys are unaffected.
 
+### Admin UI read-only or disabled by env (phase 1, adminlock)
+
+- What: `TOKI_ADMIN_UI=readonly` makes collection create/update/delete/import, settings update and `_superusers` record create/update/delete return 403 (JSON error in the usual shape) when the request is a superuser request carrying a `Referer`/`Origin` that points at `/_/` on the same host. `TOKI_ADMIN_UI=off` clears `ui.DistDirFS` so `/_/` is 404, like a `no_ui` build (installer and OAuth2 redirect fall back as in `no_ui`). Default `on` is byte for byte upstream.
+- Why: production schema changes should come from migration files in git, not from clicks in the UI.
+- Migration: nothing needed; SDK, CLI and migration calls (no UI referer) are never blocked. See `docs/modules/adminlock.md` for the detection rule and its limits.
+
 ## Not promised
 
 - Go package API (`core`, `apis`, ...) may change between TokiBase minor versions.

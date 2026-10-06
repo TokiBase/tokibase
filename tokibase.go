@@ -16,6 +16,7 @@ import (
 	"github.com/tokibase/tokibase/cmd"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/kernel"
+	"github.com/tokibase/tokibase/modules/adminlock"
 	"github.com/tokibase/tokibase/modules/audit"
 	"github.com/tokibase/tokibase/modules/backupcheck"
 	"github.com/tokibase/tokibase/modules/ruleguard"
@@ -152,6 +153,25 @@ func NewWithConfig(config Config) *PocketBase {
 	var auditLog *audit.Log
 	if audit.Enabled() {
 		auditLog = audit.Register(pb.App)
+	}
+
+	// Admin UI mode: TOKI_ADMIN_UI=on|readonly|off (default on)
+	adminlock.Register(pb.App.(core.App))
+	if auditLog != nil {
+		adminlock.SetAuditSink(func(b adminlock.Block) {
+			req, _ := json.Marshal(map[string]any{
+				"method": b.Method, "path": b.Path, "ip": b.IP, "user_agent": b.UserAgent,
+			})
+			reqStr := string(req)
+			err := auditLog.Append(&audit.Entry{
+				ActorKind: "superuser", ActorID: b.ActorID, ActorCollection: b.ActorColl,
+				Action: adminlock.ActionBlocked, Collection: b.Collection,
+				Record: b.Record + ":" + b.Action, Request: &reqStr,
+			})
+			if err != nil {
+				pb.App.Logger().Warn("audit: failed to record admin.blocked", "error", err)
+			}
+		})
 	}
 
 	// verify every created backup by restoring it to a temp dir (TOKI_BACKUP_VERIFY=off disables)
