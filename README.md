@@ -20,6 +20,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/COMPAT.md](docs/COMPA
 
 - `modules/ruleguard`: public (`""`) API rules must be allowlisted in `pb_data/ruleguard.json`, otherwise they are warned about at boot and in `toki rule lint` ([docs/modules/ruleguard.md](docs/modules/ruleguard.md)).
 - `modules/audit`: append-only, hash-chained audit log of privileged and schema-changing actions, `toki audit tail|verify|export` ([docs/modules/audit.md](docs/modules/audit.md)). Disable with `TOKI_AUDIT=off`.
+- `modules/backupcheck`: every created backup is restored to a temp dir and verified (`PRAGMA integrity_check`, counts, sampled files); `toki backup verify latest` ([docs/modules/backupcheck.md](docs/modules/backupcheck.md)).
 
 ## Build
 

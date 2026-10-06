@@ -1,6 +1,7 @@
 package tokibase
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -13,7 +14,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tokibase/tokibase/cmd"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/modules/audit"
+	"github.com/tokibase/tokibase/modules/backupcheck"
 	"github.com/tokibase/tokibase/modules/ruleguard"
 	"github.com/tokibase/tokibase/modules/store/sqlite"
 	"github.com/tokibase/tokibase/tools/hook"
@@ -144,8 +147,33 @@ func NewWithConfig(config Config) *PocketBase {
 	// make public ("") API rules explicit (policy file: pb_data/ruleguard.json)
 	ruleguard.Register(pb.App.(core.App))
 	// audit log (disable with TOKI_AUDIT=off)
+	var auditLog *audit.Log
 	if audit.Enabled() {
-		audit.Register(pb.App)
+		auditLog = audit.Register(pb.App)
+	}
+
+	// verify every created backup by restoring it to a temp dir (TOKI_BACKUP_VERIFY=off disables)
+	backupcheck.Register(pb.App.(core.App))
+	if auditLog != nil {
+		// record every automatic verification result in the audit log
+		backupcheck.OnResult = func(app kernel.App, r backupcheck.Report) {
+			after, _ := json.Marshal(r)
+			afterStr := string(after)
+			status := "ok"
+			if !r.OK() {
+				status = "failed"
+			}
+			err := auditLog.Append(&audit.Entry{
+				ActorKind:  "system",
+				Action:     "backup.verify",
+				Collection: "",
+				Record:     r.Name + ":" + status,
+				After:      &afterStr,
+			})
+			if err != nil {
+				app.Logger().Warn("audit: failed to record backup.verify", "error", err)
+			}
+		}
 	}
 
 	// hide the default help command (allow only `--help` flag)
@@ -178,6 +206,7 @@ func (pb *PocketBase) Start() error {
 	// register system commands
 	pb.RootCmd.AddCommand(cmd.NewSuperuserCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewRuleCommand(pb))
+	pb.RootCmd.AddCommand(cmd.NewBackupCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewServeCommand(pb, !pb.hideStartBanner))
 	if audit.Enabled() {
 		pb.RootCmd.AddCommand(audit.NewCommand(pb))
