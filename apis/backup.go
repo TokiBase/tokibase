@@ -6,11 +6,13 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/tokibase/tokibase/tools/filesystem/fshttp"
+
+	"github.com/spf13/cast"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/tools/router"
 	"github.com/tokibase/tokibase/tools/routine"
 	"github.com/tokibase/tokibase/tools/types"
-	"github.com/spf13/cast"
 )
 
 // bindBackupApi registers the file api endpoints and the corresponding handlers.
@@ -88,7 +90,7 @@ func backupDownload(e *core.RequestEvent) error {
 
 	key := e.Request.PathValue("key")
 
-	return fsys.Serve(
+	return fshttp.Serve(fsys,
 		e.Response,
 		e.Request,
 		key,

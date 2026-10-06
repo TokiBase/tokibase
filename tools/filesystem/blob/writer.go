@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"net/http"
 )
 
 // Largely copied from gocloud.dev/blob.Writer to minimize breaking changes.
@@ -140,7 +139,7 @@ func (w *Writer) Close() (err error) {
 // open tries to detect the MIME type of p and write it to the blob.
 // The error it returns is wrapped.
 func (w *Writer) open(p []byte) (int, error) {
-	ct := http.DetectContentType(p)
+	ct := detectContentType(p)
 
 	var err error
 	w.w, err = w.drv.NewTypedWriter(w.ctx, w.key, ct, w.opts)

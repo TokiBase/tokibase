@@ -119,7 +119,7 @@ func TestHTML2Text(t *testing.T) {
 	}
 
 	for i, s := range scenarios {
-		result, err := html2Text(s.html)
+		result, err := HTML2Text(s.html)
 		if err != nil {
 			t.Errorf("(%d) Unexpected error %v", i, err)
 		}

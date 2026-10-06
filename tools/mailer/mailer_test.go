@@ -35,7 +35,7 @@ func TestAddressesToStrings(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(fmt.Sprintf("%v_%v", s.withName, s.addresses), func(t *testing.T) {
-			result := addressesToStrings(s.addresses, s.withName)
+			result := AddressesToStrings(s.addresses, s.withName)
 
 			if len(s.expected) != len(result) {
 				t.Fatalf("Expected\n%v\ngot\n%v", s.expected, result)
@@ -55,7 +55,7 @@ func TestDetectReaderMimeType(t *testing.T) {
 
 	str := "#!/bin/node\n" + strings.Repeat("a", 10000) // ensure that it is large enough to remain after the signature sniffing
 
-	r, mime, err := detectReaderMimeType(strings.NewReader(str))
+	r, mime, err := DetectReaderMimeType(strings.NewReader(str))
 	if err != nil {
 		t.Fatal(err)
 	}

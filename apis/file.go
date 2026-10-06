@@ -10,11 +10,13 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/tokibase/tokibase/tools/filesystem/fshttp"
+
+	"github.com/spf13/cast"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/tools/filesystem"
 	"github.com/tokibase/tokibase/tools/list"
 	"github.com/tokibase/tokibase/tools/router"
-	"github.com/spf13/cast"
 	"golang.org/x/sync/semaphore"
 	"golang.org/x/sync/singleflight"
 )
@@ -206,7 +208,7 @@ func (api *fileApi) download(e *core.RequestEvent) error {
 
 	return e.App.OnFileDownloadRequest().Trigger(event, func(e *core.FileDownloadRequestEvent) error {
 		err = execAfterSuccessTx(true, e.App, func() error {
-			return fsys.Serve(e.Response, e.Request, e.ServedPath, e.ServedName)
+			return fshttp.Serve(fsys, e.Response, e.Request, e.ServedPath, e.ServedName)
 		})
 		if err != nil {
 			return e.NotFoundError("", err)

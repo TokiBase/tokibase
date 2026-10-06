@@ -15,8 +15,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tokibase/tokibase/tools/mailer/clients"
+
+	"github.com/tokibase/tokibase/tools/filesystem/fshttp"
+
 	"github.com/fatih/color"
 	"github.com/pocketbase/dbx"
+	"github.com/spf13/cast"
 	"github.com/tokibase/tokibase/tools/cron"
 	"github.com/tokibase/tokibase/tools/filesystem"
 	"github.com/tokibase/tokibase/tools/hook"
@@ -26,7 +31,6 @@ import (
 	"github.com/tokibase/tokibase/tools/store"
 	"github.com/tokibase/tokibase/tools/subscriptions"
 	"github.com/tokibase/tokibase/tools/types"
-	"github.com/spf13/cast"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -657,7 +661,7 @@ func (app *BaseApp) NewMailClient() mailer.Mailer {
 
 	// init mailer client
 	if app.Settings().SMTP.Enabled {
-		client = &mailer.SMTPClient{
+		client = &clients.SMTPClient{
 			Host:       app.Settings().SMTP.Host,
 			Port:       app.Settings().SMTP.Port,
 			Username:   app.Settings().SMTP.Username,
@@ -667,7 +671,7 @@ func (app *BaseApp) NewMailClient() mailer.Mailer {
 			LocalName:  app.Settings().SMTP.LocalName,
 		}
 	} else {
-		client = &mailer.Sendmail{}
+		client = &clients.Sendmail{}
 	}
 
 	// register the app level hook
@@ -750,7 +754,7 @@ func (app *BaseApp) NewMailClient() mailer.Mailer {
 func (app *BaseApp) NewFilesystem() (fsys *filesystem.System, err error) {
 	if app.settings != nil && app.settings.S3.Enabled {
 		// S3
-		fsys, err = filesystem.NewS3(
+		fsys, err = fshttp.NewS3(
 			app.settings.S3.Bucket,
 			app.settings.S3.Region,
 			app.settings.S3.Endpoint,
@@ -802,7 +806,7 @@ func (app *BaseApp) NewFilesystem() (fsys *filesystem.System, err error) {
 // after you are done working with it.
 func (app *BaseApp) NewBackupsFilesystem() (*filesystem.System, error) {
 	if app.settings != nil && app.settings.Backups.S3.Enabled {
-		return filesystem.NewS3(
+		return fshttp.NewS3(
 			app.settings.Backups.S3.Bucket,
 			app.settings.Backups.S3.Region,
 			app.settings.Backups.S3.Endpoint,

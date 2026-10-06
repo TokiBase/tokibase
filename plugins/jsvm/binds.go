@@ -18,10 +18,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tokibase/tokibase/tools/filesystem/fshttp"
+
 	"github.com/dop251/goja"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/pocketbase/dbx"
 	validation "github.com/pocketbase/ozzo-validation/v4"
+	"github.com/spf13/cast"
+	"github.com/spf13/cobra"
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/forms"
@@ -35,8 +39,6 @@ import (
 	"github.com/tokibase/tokibase/tools/store"
 	"github.com/tokibase/tokibase/tools/subscriptions"
 	"github.com/tokibase/tokibase/tools/types"
-	"github.com/spf13/cast"
-	"github.com/spf13/cobra"
 )
 
 // hooksBinds adds wrapped "on*" hook methods by reflecting on core.App.
@@ -764,7 +766,7 @@ func BindFilesystem(vm *goja.Runtime) {
 	obj := vm.NewObject()
 	vm.Set("$filesystem", obj)
 
-	obj.Set("s3", filesystem.NewS3)
+	obj.Set("s3", fshttp.NewS3)
 	obj.Set("local", filesystem.NewLocal)
 	obj.Set("fileFromPath", filesystem.NewFileFromPath)
 	obj.Set("fileFromBytes", filesystem.NewFileFromBytes)
@@ -777,7 +779,7 @@ func BindFilesystem(vm *goja.Runtime) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(secTimeout)*time.Second)
 		defer cancel()
 
-		return filesystem.NewFileFromURL(ctx, url)
+		return fshttp.NewFileFromURL(ctx, url)
 	})
 }
 

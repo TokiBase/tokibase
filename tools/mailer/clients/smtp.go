@@ -1,4 +1,4 @@
-package mailer
+package clients
 
 import (
 	"errors"
@@ -10,20 +10,21 @@ import (
 
 	"github.com/domodwyer/mailyak/v3"
 	"github.com/tokibase/tokibase/tools/hook"
+	"github.com/tokibase/tokibase/tools/mailer"
 	"github.com/tokibase/tokibase/tools/security"
 )
 
-var _ Mailer = (*SMTPClient)(nil)
+var _ mailer.Mailer = (*SMTPClient)(nil)
 
 const (
-	SMTPAuthPlain = "PLAIN"
-	SMTPAuthLogin = "LOGIN"
+	SMTPAuthPlain = mailer.SMTPAuthPlain
+	SMTPAuthLogin = mailer.SMTPAuthLogin
 )
 
 // SMTPClient defines a SMTP mail client structure that implements
 // `mailer.Mailer` interface.
 type SMTPClient struct {
-	onSend *hook.Hook[*SendEvent]
+	onSend *hook.Hook[*mailer.SendEvent]
 
 	TLS      bool
 	Port     int
@@ -43,17 +44,17 @@ type SMTPClient struct {
 }
 
 // OnSend implements [mailer.SendInterceptor] interface.
-func (c *SMTPClient) OnSend() *hook.Hook[*SendEvent] {
+func (c *SMTPClient) OnSend() *hook.Hook[*mailer.SendEvent] {
 	if c.onSend == nil {
-		c.onSend = &hook.Hook[*SendEvent]{}
+		c.onSend = &hook.Hook[*mailer.SendEvent]{}
 	}
 	return c.onSend
 }
 
 // Send implements [mailer.Mailer] interface.
-func (c *SMTPClient) Send(m *Message) error {
+func (c *SMTPClient) Send(m *mailer.Message) error {
 	if c.onSend != nil {
-		return c.onSend.Trigger(&SendEvent{Message: m}, func(e *SendEvent) error {
+		return c.onSend.Trigger(&mailer.SendEvent{Message: m}, func(e *mailer.SendEvent) error {
 			return c.send(e.Message)
 		})
 	}
@@ -61,7 +62,7 @@ func (c *SMTPClient) Send(m *Message) error {
 	return c.send(m)
 }
 
-func (c *SMTPClient) send(m *Message) error {
+func (c *SMTPClient) send(m *mailer.Message) error {
 	var smtpAuth smtp.Auth
 	if c.Username != "" || c.Password != "" {
 		switch c.AuthMethod {
@@ -99,7 +100,7 @@ func (c *SMTPClient) send(m *Message) error {
 
 	if m.Text == "" {
 		// try to generate a plain text version of the HTML
-		if plain, err := html2Text(m.HTML); err == nil {
+		if plain, err := mailer.HTML2Text(m.HTML); err == nil {
 			yak.Plain().Set(plain)
 		}
 	} else {
@@ -107,20 +108,20 @@ func (c *SMTPClient) send(m *Message) error {
 	}
 
 	if len(m.To) > 0 {
-		yak.To(addressesToStrings(m.To, true)...)
+		yak.To(mailer.AddressesToStrings(m.To, true)...)
 	}
 
 	if len(m.Bcc) > 0 {
-		yak.Bcc(addressesToStrings(m.Bcc, true)...)
+		yak.Bcc(mailer.AddressesToStrings(m.Bcc, true)...)
 	}
 
 	if len(m.Cc) > 0 {
-		yak.Cc(addressesToStrings(m.Cc, true)...)
+		yak.Cc(mailer.AddressesToStrings(m.Cc, true)...)
 	}
 
 	// add regular attachements (if any)
 	for name, data := range m.Attachments {
-		r, mime, err := detectReaderMimeType(data)
+		r, mime, err := mailer.DetectReaderMimeType(data)
 		if err != nil {
 			return err
 		}
@@ -129,7 +130,7 @@ func (c *SMTPClient) send(m *Message) error {
 
 	// add inline attachments (if any)
 	for name, data := range m.InlineAttachments {
-		r, mime, err := detectReaderMimeType(data)
+		r, mime, err := mailer.DetectReaderMimeType(data)
 		if err != nil {
 			return err
 		}

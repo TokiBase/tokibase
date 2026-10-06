@@ -2,14 +2,11 @@ package filesystem
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
-	"net/http"
 	"os"
-	"path"
 	"regexp"
 	"strings"
 
@@ -87,40 +84,6 @@ func NewFileFromMultipart(mh *multipart.FileHeader) (*File, error) {
 	f.Name = normalizeName(f.Reader, f.OriginalName)
 
 	return f, nil
-}
-
-// NewFileFromURL creates a new File from the provided url by
-// downloading the resource and load it as BytesReader.
-//
-// Example
-//
-//	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-//	defer cancel()
-//
-//	file, err := filesystem.NewFileFromURL(ctx, "https://example.com/image.png")
-func NewFileFromURL(ctx context.Context, url string) (*File, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-
-	if res.StatusCode < 200 || res.StatusCode > 399 {
-		return nil, fmt.Errorf("failed to download url %s (%d)", url, res.StatusCode)
-	}
-
-	var buf bytes.Buffer
-
-	if _, err = io.Copy(&buf, res.Body); err != nil {
-		return nil, err
-	}
-
-	return NewFileFromBytes(buf.Bytes(), path.Base(url))
 }
 
 // -------------------------------------------------------------------

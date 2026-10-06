@@ -29,7 +29,7 @@ var inlineTags = []string{
 // - Indentation is stripped (both tabs and spaces).
 // - Trailing spaces are preserved.
 // - Multiple consequence newlines are collapsed as one unless multiple <br> tags are used.
-func html2Text(htmlDocument string) (string, error) {
+func HTML2Text(htmlDocument string) (string, error) {
 	doc, err := html.Parse(strings.NewReader(htmlDocument))
 	if err != nil {
 		return "", err

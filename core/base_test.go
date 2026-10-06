@@ -10,13 +10,14 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/tokibase/tokibase/tools/mailer/clients"
+
 	_ "unsafe"
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/logger"
-	"github.com/tokibase/tokibase/tools/mailer"
 )
 
 func TestNewBaseApp(t *testing.T) {
@@ -188,7 +189,7 @@ func TestBaseAppNewMailClient(t *testing.T) {
 	defer app.ClearBootstrap()
 
 	client1 := app.NewMailClient()
-	m1, ok := client1.(*mailer.Sendmail)
+	m1, ok := client1.(*clients.Sendmail)
 	if !ok {
 		t.Fatalf("Expected mailer.Sendmail instance, got %v", m1)
 	}
@@ -199,7 +200,7 @@ func TestBaseAppNewMailClient(t *testing.T) {
 	app.Settings().SMTP.Enabled = true
 
 	client2 := app.NewMailClient()
-	m2, ok := client2.(*mailer.SMTPClient)
+	m2, ok := client2.(*clients.SMTPClient)
 	if !ok {
 		t.Fatalf("Expected mailer.SMTPClient instance, got %v", m2)
 	}

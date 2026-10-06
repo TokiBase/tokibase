@@ -6,10 +6,8 @@ import (
 	"image"
 	"io"
 	"mime/multipart"
-	"net/http"
 	"os"
 	"path"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -20,10 +18,7 @@ import (
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/tokibase/tokibase/tools/filesystem/blob"
 	"github.com/tokibase/tokibase/tools/filesystem/internal/fileblob"
-	"github.com/tokibase/tokibase/tools/filesystem/internal/s3blob"
-	"github.com/tokibase/tokibase/tools/filesystem/internal/s3blob/s3"
 	"github.com/tokibase/tokibase/tools/hook"
-	"github.com/tokibase/tokibase/tools/list"
 	"github.com/tokibase/tokibase/tools/routine"
 
 	// manually register the webp decoder because disintegration/imaging does not support webp
@@ -60,34 +55,11 @@ type System struct {
 	onDelete    *hook.Hook[*DeleteEvent]
 }
 
-// NewS3 initializes a new S3 filesystem instance.
+// NewFromDriver initializes a new filesystem instance on top of the provided blob driver.
 //
 // NB! Make sure to call `Close()` after you are done working with it.
-func NewS3(
-	bucketName string,
-	region string,
-	endpoint string,
-	accessKey string,
-	secretKey string,
-	s3ForcePathStyle bool,
-) (*System, error) {
-	ctx := context.Background() // default context
-
-	client := &s3.S3{
-		Bucket:       bucketName,
-		Region:       region,
-		Endpoint:     endpoint,
-		AccessKey:    accessKey,
-		SecretKey:    secretKey,
-		UsePathStyle: s3ForcePathStyle,
-	}
-
-	drv, err := s3blob.New(client)
-	if err != nil {
-		return nil, err
-	}
-
-	return &System{ctx: ctx, bucket: blob.NewBucket(drv)}, nil
+func NewFromDriver(drv blob.Driver) *System {
+	return &System{ctx: context.Background(), bucket: blob.NewBucket(drv)}
 }
 
 // NewLocal initializes a new local filesystem instance.
@@ -508,93 +480,6 @@ func (s *System) IsEmptyDir(dir string) bool {
 	_, err := iter.Next(s.ctx)
 
 	return err != nil && errors.Is(err, io.EOF)
-}
-
-var inlineServeContentTypes = []string{
-	// image
-	"image/png", "image/jpg", "image/jpeg", "image/gif", "image/webp", "image/x-icon", "image/bmp",
-	// video
-	"video/webm", "video/mp4", "video/3gpp", "video/quicktime", "video/x-ms-wmv",
-	// audio
-	"audio/basic", "audio/aiff", "audio/mpeg", "audio/midi", "audio/mp3", "audio/wave",
-	"audio/wav", "audio/x-wav", "audio/x-mpeg", "audio/x-m4a", "audio/aac",
-	// document
-	"application/pdf", "application/x-pdf",
-}
-
-// manualExtensionContentTypes is a map of file extensions to content types.
-var manualExtensionContentTypes = map[string]string{
-	// https://github.com/whatwg/mimesniff/issues/7
-	".svg": "image/svg+xml",
-
-	// https://github.com/gabriel-vasile/mimetype/pull/113
-	".css": "text/css",
-
-	// https://github.com/tokibase/tokibase/issues/6597
-	".js":  "text/javascript",
-	".mjs": "text/javascript",
-
-	// https://github.com/tokibase/tokibase/discussions/7467
-	".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-	".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-}
-
-// forceAttachmentParam is the name of the request query parameter to
-// force "Content-Disposition: attachment" header.
-const forceAttachmentParam = "download"
-
-// Serve serves the file at fileKey location to an HTTP response.
-//
-// If the `download` query parameter is used the file will be always served for
-// download no matter of its type (aka. with "Content-Disposition: attachment").
-//
-// Internally this method uses [http.ServeContent] so Range requests,
-// If-Match, If-Unmodified-Since, etc. headers are handled transparently.
-func (s *System) Serve(res http.ResponseWriter, req *http.Request, fileKey string, name string) error {
-	br, readErr := s.GetReader(fileKey)
-	if readErr != nil {
-		return readErr
-	}
-	defer br.Close()
-
-	var forceAttachment bool
-	if raw := req.URL.Query().Get(forceAttachmentParam); raw != "" {
-		forceAttachment, _ = strconv.ParseBool(raw)
-	}
-
-	disposition := "attachment"
-	realContentType := br.ContentType()
-	if !forceAttachment && list.ExistInSlice(realContentType, inlineServeContentTypes) {
-		disposition = "inline"
-	}
-
-	// make an exception for specific content types and force a custom
-	// content type to send in the response so that it can be loaded properly
-	extContentType := realContentType
-	if ct, found := manualExtensionContentTypes[filepath.Ext(fileKey)]; found {
-		extContentType = ct
-	}
-
-	setHeaderIfMissing(res, "Content-Disposition", disposition+"; filename="+strconv.Quote(name))
-	setHeaderIfMissing(res, "Content-Type", extContentType)
-	setHeaderIfMissing(res, "Content-Security-Policy", "default-src 'none'; media-src 'self'; style-src 'unsafe-inline'; sandbox")
-
-	// set a default cache-control header
-	// (valid for 30 days but the cache is allowed to reuse the file for any requests
-	// that are made in the last day while revalidating the res in the background)
-	setHeaderIfMissing(res, "Cache-Control", "max-age=2592000, stale-while-revalidate=86400")
-
-	http.ServeContent(res, req, name, br.ModTime(), br)
-
-	return nil
-}
-
-// note: expects key to be in a canonical form (eg. "accept-encoding" should be "Accept-Encoding").
-func setHeaderIfMissing(res http.ResponseWriter, key string, value string) {
-	if _, ok := res.Header()[key]; !ok {
-		res.Header().Set(key, value)
-	}
 }
 
 var ThumbSizeRegex = regexp.MustCompile(`^(\d+)x(\d+)(t|b|f)?$`)

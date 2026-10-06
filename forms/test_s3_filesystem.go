@@ -4,9 +4,10 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/tokibase/tokibase/tools/filesystem/fshttp"
+
 	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/tokibase/tokibase/core"
-	"github.com/tokibase/tokibase/tools/filesystem"
 	"github.com/tokibase/tokibase/tools/security"
 )
 
@@ -57,7 +58,7 @@ func (form *TestS3Filesystem) Submit() error {
 		return errors.New("S3 storage filesystem is not enabled")
 	}
 
-	fsys, err := filesystem.NewS3(
+	fsys, err := fshttp.NewS3(
 		s3Config.Bucket,
 		s3Config.Region,
 		s3Config.Endpoint,
