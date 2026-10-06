@@ -34,3 +34,4 @@ Every deviation must be listed here with: what changed, why, migration path.
 
 - Go package API (`core`, `apis`, ...) may change between TokiBase minor versions.
 - Admin UI internals.
+- The jsvm `types.d.ts` now also exposes a `kernel` namespace; `core.*` names remain as aliases.

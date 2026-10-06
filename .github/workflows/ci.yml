@@ -37,3 +37,13 @@ jobs:
           echo "solo=$((s/1024/1024))MB noui=$((n/1024/1024))MB"
           test $s -le $((45*1024*1024)) || { echo "solo over 45MB budget"; exit 1; }
           test $n -le $((40*1024*1024)) || { echo "no_ui over 40MB budget"; exit 1; }
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+          args: -c ./golangci.yml ./kernel/... ./core/...
