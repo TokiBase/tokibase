@@ -218,7 +218,6 @@ type BaseApp struct {
 	// record crud API event hooks
 
 	// collection API event hooks
-
 }
 
 // NewBaseApp creates and returns a new BaseApp instance
@@ -336,7 +335,6 @@ func (app *BaseApp) initHooks() {
 	// record crud API event hooks
 
 	// collection API event hooks
-
 }
 
 // UnsafeWithoutHooks returns a shallow copy of the current app WITHOUT any registered hooks.

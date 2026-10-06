@@ -46,7 +46,7 @@ func NewBaseApp(config BaseAppConfig) *BaseApp {
 	}
 
 	// expose the outer app to the kernel hook handlers and transaction callbacks
-	app.BaseApp.SetOuter(app, wrapBaseApp)
+	app.SetOuter(app, wrapBaseApp)
 
 	app.registerBaseHooks()
 
