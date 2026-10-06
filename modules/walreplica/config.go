@@ -102,6 +102,9 @@ func subURL(root, name string) (string, error) {
 		}
 		u.Path = path.Join(u.Path, name)
 	case "s3":
+		if !s3Supported {
+			return "", fmt.Errorf("walreplica: this binary was built without the replica_s3 tag; s3:// replicas need `go build -tags replica_s3`")
+		}
 		if u.Host == "" {
 			return "", fmt.Errorf("walreplica: s3 replica url needs a bucket (s3://bucket/prefix), got %q", root)
 		}

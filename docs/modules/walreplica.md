@@ -1,5 +1,7 @@
 # walreplica
 
+> Build note: default binaries link only the `file://` backend. For `s3://` (AWS S3, Cloudflare R2, MinIO) build with `go build -tags replica_s3 ./examples/base`; the AWS SDK adds about 10 MB and is kept out of `nano`/`edge` by default.
+
 Continuous replication of `data.db` and `auxiliary.db` to a local path or an S3 compatible bucket, with point-in-time restore. It embeds [Litestream](https://github.com/benbjohnson/litestream) (v0.5.x, pure Go, same `modernc.org/sqlite` driver as TokiBase) as a library. It replaces rsync based HA copies: rsync of a live SQLite file can capture a torn database, WAL replication cannot.
 
 The REST contract, settings and collection JSON are unchanged. The module is inactive unless `TOKI_REPLICA_URL` is set.

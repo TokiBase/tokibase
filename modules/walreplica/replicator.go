@@ -10,7 +10,6 @@ import (
 
 	"github.com/benbjohnson/litestream"
 	"github.com/benbjohnson/litestream/file"
-	_ "github.com/benbjohnson/litestream/s3" // registers the s3:// replica client
 	"github.com/tokibase/tokibase/kernel"
 )
 
