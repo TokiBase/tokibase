@@ -16,6 +16,10 @@ rebuilt around a small HTTP-free kernel plus removable modules, shipped as five 
 Status: **phase 0** (fork, rename, kernel/server split, compatibility CI). Not ready for use.
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/COMPAT.md](docs/COMPAT.md).
 
+## Features
+
+- Rule guard: public (`""`) API rules must be allowlisted in `pb_data/ruleguard.json`, otherwise they are warned about at boot and in `toki rule lint` ([docs/modules/ruleguard.md](docs/modules/ruleguard.md)).
+
 ## Build
 
 ```sh
