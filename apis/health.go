@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/modules/walreplica"
 	"github.com/tokibase/tokibase/tools/router"
 )
 
@@ -46,6 +47,19 @@ func healthCheck(e *core.RequestEvent) error {
 			}
 		}
 		resp.Data["possibleProxyHeader"] = possibleProxyHeader
+
+		// only present when WAL replication is active (modules/walreplica)
+		if walreplica.Active(e.App) {
+			healthy, reason := walreplica.Healthy(e.App)
+			replica := map[string]any{
+				"healthy":   healthy,
+				"databases": walreplica.Status(e.App),
+			}
+			if reason != "" {
+				replica["reason"] = reason
+			}
+			resp.Data["replica"] = replica
+		}
 	} else {
 		resp.Data = map[string]any{} // ensure that it is returned as object
 	}

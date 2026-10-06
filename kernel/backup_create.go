@@ -161,6 +161,10 @@ func createZip(app *BaseApp, be *BackupEvent, tempZipPath string) error {
 		excluded.Set(normalizePathExclude(name), struct{}{})
 	}
 
+	// local replicator metadata is machine specific and rebuilt on demand
+	excluded.Set(normalizePathExclude("."+dataDBFilename+ReplicaMetaDirSuffix), struct{}{})
+	excluded.Set(normalizePathExclude("."+auxDBFilename+ReplicaMetaDirSuffix), struct{}{})
+
 	// init deleted files tracker
 	// ---------------------------------------------------------------
 	be.App.onFilesystemDelete().Bind(&hook.Handler[*FilesystemDeleteEvent]{

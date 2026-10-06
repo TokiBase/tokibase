@@ -1179,6 +1179,7 @@ func (app *BaseApp) initDataDB() error {
 		MaxOpenConns:       app.config.DataMaxOpenConns,
 		MaxIdleConns:       app.config.DataMaxIdleConns,
 		OptimizeOnMaintain: true,
+		CheckpointDisabled: app.checkpointDisabled,
 	})
 	if err != nil {
 		return err
@@ -1206,6 +1207,10 @@ func (app *BaseApp) initDataDB() error {
 }
 
 // openDB opens a database using the configured store opener.
+func (app *BaseApp) checkpointDisabled() bool {
+	return app.Store().Has(StoreKeyDisableCheckpoint)
+}
+
 func (app *BaseApp) openDB(cfg DBConfig) (DBConn, error) {
 	if app.config.DBOpener == nil {
 		return nil, errors.New("no DBOpener configured (use core.NewBaseApp or set BaseAppConfig.DBOpener)")
@@ -1247,6 +1252,8 @@ func (app *BaseApp) initAuxDB() error {
 		Path:         dbPath,
 		MaxOpenConns: app.config.AuxMaxOpenConns,
 		MaxIdleConns: app.config.AuxMaxIdleConns,
+
+		CheckpointDisabled: app.checkpointDisabled,
 	})
 	if err != nil {
 		return err

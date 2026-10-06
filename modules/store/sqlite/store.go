@@ -125,6 +125,10 @@ func (c *conn) Optimize(ctx context.Context, db dbx.Builder) error {
 }
 
 func (c *conn) Checkpoint(ctx context.Context, db dbx.Builder) error {
+	if c.cfg.CheckpointDisabled != nil && c.cfg.CheckpointDisabled() {
+		return nil // an external replicator owns the WAL checkpoints
+	}
+
 	_, err := db.NewQuery("PRAGMA wal_checkpoint(TRUNCATE)").WithContext(ctx).Execute()
 
 	return err

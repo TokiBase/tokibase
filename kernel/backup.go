@@ -12,6 +12,16 @@ import (
 
 const (
 	StoreKeyActiveBackup = "@activeBackup"
+
+	// StoreKeyDisableCheckpoint, when set in app.Store(), makes the periodic
+	// maintenance and backups skip the manual WAL checkpoint
+	// (an external replicator such as modules/walreplica owns the checkpoints).
+	StoreKeyDisableCheckpoint = "@disableWALCheckpoint"
+
+	// ReplicaMetaDirSuffix is the suffix of the local replicator metadata
+	// directories (".data.db-litestream", ".auxiliary.db-litestream"),
+	// which are never included in backups.
+	ReplicaMetaDirSuffix = "-litestream"
 )
 
 // generateBackupName generates a new backup name based on the app name and current date.

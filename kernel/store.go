@@ -45,6 +45,10 @@ type DBConfig struct {
 	// OptimizeOnMaintain specifies whether DBConn.Maintain should also
 	// run the store optimize step (in addition to the WAL checkpoint).
 	OptimizeOnMaintain bool
+
+	// CheckpointDisabled (optional) reports whether the manual WAL checkpoint
+	// must be skipped (e.g. while a replicator owns the checkpoints).
+	CheckpointDisabled func() bool
 }
 
 // DBOpener opens the connection handles for a database.
