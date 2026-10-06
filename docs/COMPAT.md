@@ -38,6 +38,12 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: the kernel must not depend on the SQLite driver (`docs/PHASE0_SQLITE_STORE.md`).
 - Migration for Go users: only code that used `kernel.NewBaseApp` directly needs `DBOpener: sqlite.NewOpener()`.
 
+### Boot and collection-save warnings for public rules (phase 1, ruleguard)
+
+- What: `modules/ruleguard` logs a warning at boot and after collection saves when an API rule is `""` (public) and not allowlisted in `pb_data/ruleguard.json`; a `strict` policy makes the app refuse to start. New `toki rule lint|allow` commands. REST endpoints, collection JSON and rule semantics are unchanged; collection saves are never blocked.
+- Why: an empty rule silently means public (a real incident exposed health data).
+- Migration: nothing needed (default policy `warn`). Set `{"policy":"off"}` to silence, or allowlist with `toki rule allow <collection> <kind>...`.
+
 ## Not promised
 
 - Go package API (`core`, `apis`, ...) may change between TokiBase minor versions.
