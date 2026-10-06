@@ -25,12 +25,12 @@ Dependency rules, enforced by `depguard` in CI:
 Goal: profile `solo` behaves identically to PocketBase v0.40.4.
 
 - [x] Fork v0.40.4, module path `github.com/tokibase/tokibase`, root package `tokibase`.
-- [ ] Map every place SQLite leaks above the store layer (`docs/PHASE0_AUDIT.md`).
+- [x] Map every place SQLite leaks above the store layer (`docs/PHASE0_AUDIT.md`).
 - [x] Move `core/` pieces into `kernel/`, no behavior change (`docs/PHASE0_KERNEL_SPLIT.md`). `core` stays as the server facing compatibility package (type aliases + request hooks). Store interface is still to come.
 - [x] `depguard` rule for `kernel/**` in `golangci.yml` and `kernel/deps_test.go` (runs in CI with `go test`).
 - [x] Move the SQLite driver, connection setup, pragmas, maintenance, lock retry and error classification to `modules/store/sqlite` behind `kernel.DBOpener`/`kernel.DBConn` (`docs/PHASE0_SQLITE_STORE.md`). Typed record CRUD on the store is still to come.
-- [ ] CI job that runs `golangci-lint`.
-- [ ] CI: build matrix (linux/darwin/windows x amd64/arm64), `-s -w`, size budgets.
+- [x] CI job that runs `golangci-lint` (kernel and core).
+- [x] CI: build matrix (linux/darwin/windows x amd64/arm64), `-s -w`, size budgets.
 - [ ] CI: official JS SDK and Dart SDK test suites against the binary.
 - [ ] `toki import pb_data/` smoke test with a real PocketBase data directory.
 
