@@ -21,9 +21,9 @@ import (
 	"strings"
 
 	"github.com/fatih/color"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tools/archive"
-	"github.com/pocketbase/pocketbase/tools/osutils"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/tools/archive"
+	"github.com/tokibase/tokibase/tools/osutils"
 	"github.com/spf13/cobra"
 )
 

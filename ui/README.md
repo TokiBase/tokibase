@@ -7,7 +7,7 @@ Although it could be used independently, it is intended to be embedded and exten
 as part of the PocketBase app executable (hence the `dist` directory and `embed.go` file).
 
 > [!WARNING]
-> The UI kit and extension APIs remains deliberately undocumented for the time being until a stable PocketBase release is published ([#7612](https://github.com/pocketbase/pocketbase/discussions/7612)).
+> The UI kit and extension APIs remains deliberately undocumented for the time being until a stable PocketBase release is published ([#7612](https://github.com/tokibase/tokibase/discussions/7612)).
 
 ## Development
 

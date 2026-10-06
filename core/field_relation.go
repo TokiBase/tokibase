@@ -6,8 +6,8 @@ import (
 
 	"github.com/pocketbase/dbx"
 	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/tools/list"
-	"github.com/pocketbase/pocketbase/tools/types"
+	"github.com/tokibase/tokibase/tools/list"
+	"github.com/tokibase/tokibase/tools/types"
 )
 
 func init() {
@@ -287,7 +287,7 @@ func (f *RelationField) checkCollectionId(app App, collection *Collection) valid
 		}
 
 		// allow only views to have relations to other views
-		// (see https://github.com/pocketbase/pocketbase/issues/3000)
+		// (see https://github.com/tokibase/tokibase/issues/3000)
 		if !collection.IsView() && relCollection.IsView() {
 			return validation.NewError(
 				"validation_relation_field_non_view_base_collection",

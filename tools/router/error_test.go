@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/tools/router"
+	"github.com/tokibase/tokibase/tools/router"
 )
 
 func TestNewApiErrorWithRawData(t *testing.T) {

@@ -9,10 +9,10 @@ import (
 	"strings"
 
 	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/tools/dbutils"
-	"github.com/pocketbase/pocketbase/tools/inflector"
-	"github.com/pocketbase/pocketbase/tools/security"
-	"github.com/pocketbase/pocketbase/tools/tokenizer"
+	"github.com/tokibase/tokibase/tools/dbutils"
+	"github.com/tokibase/tokibase/tools/inflector"
+	"github.com/tokibase/tokibase/tools/security"
+	"github.com/tokibase/tokibase/tools/tokenizer"
 )
 
 // DeleteView drops the specified view name.

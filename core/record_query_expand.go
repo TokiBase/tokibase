@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/tools/dbutils"
-	"github.com/pocketbase/pocketbase/tools/list"
+	"github.com/tokibase/tokibase/tools/dbutils"
+	"github.com/tokibase/tokibase/tools/list"
 )
 
 // ExpandFetchFunc defines the function that is used to fetch the expanded relation records.

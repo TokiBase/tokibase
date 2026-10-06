@@ -5,7 +5,7 @@ import (
 	"math"
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/core/validators"
+	"github.com/tokibase/tokibase/core/validators"
 	"github.com/spf13/cast"
 )
 

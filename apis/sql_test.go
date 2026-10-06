@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pocketbase/pocketbase/tests"
+	"github.com/tokibase/tokibase/tests"
 )
 
 func TestSQLRun(t *testing.T) {

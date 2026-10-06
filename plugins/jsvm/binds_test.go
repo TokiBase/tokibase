@@ -18,13 +18,13 @@ import (
 
 	"github.com/dop251/goja"
 	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/apis"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tests"
-	"github.com/pocketbase/pocketbase/tools/filesystem"
-	"github.com/pocketbase/pocketbase/tools/mailer"
-	"github.com/pocketbase/pocketbase/tools/router"
-	"github.com/pocketbase/pocketbase/tools/types"
+	"github.com/tokibase/tokibase/apis"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/tests"
+	"github.com/tokibase/tokibase/tools/filesystem"
+	"github.com/tokibase/tokibase/tools/mailer"
+	"github.com/tokibase/tokibase/tools/router"
+	"github.com/tokibase/tokibase/tools/types"
 	"github.com/spf13/cast"
 )
 

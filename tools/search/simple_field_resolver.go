@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/tools/inflector"
-	"github.com/pocketbase/pocketbase/tools/list"
+	"github.com/tokibase/tokibase/tools/inflector"
+	"github.com/tokibase/tokibase/tools/list"
 )
 
 type NullFallbackPreference int

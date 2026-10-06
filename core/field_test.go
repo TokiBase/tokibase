@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tests"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/tests"
 )
 
 func testFieldBaseMethods(t *testing.T, fieldType string) {

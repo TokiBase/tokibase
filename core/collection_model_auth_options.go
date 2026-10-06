@@ -10,10 +10,10 @@ import (
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/pocketbase/ozzo-validation/v4/is"
-	"github.com/pocketbase/pocketbase/tools/auth"
-	"github.com/pocketbase/pocketbase/tools/list"
-	"github.com/pocketbase/pocketbase/tools/security"
-	"github.com/pocketbase/pocketbase/tools/types"
+	"github.com/tokibase/tokibase/tools/auth"
+	"github.com/tokibase/tokibase/tools/list"
+	"github.com/tokibase/tokibase/tools/security"
+	"github.com/tokibase/tokibase/tools/types"
 	"github.com/spf13/cast"
 )
 
@@ -418,7 +418,7 @@ type OAuth2Config struct {
 // instead of replacing the entire providers config slice, we ensure
 // that partially submitted provider data (e.g. without clientSecret)
 // is merged on per config level based on the provider name
-// (https://github.com/pocketbase/pocketbase/issues/7815).
+// (https://github.com/tokibase/tokibase/issues/7815).
 func (c *OAuth2Config) UnmarshalJSON(b []byte) error {
 	originalProviders := slices.Clone(c.Providers)
 
@@ -529,7 +529,7 @@ type OAuth2ProviderConfig struct {
 	//
 	// This usually shouldn't be needed but some OAuth2 vendors, like the LinkedIn OIDC,
 	// may require manual adjustment due to returning error if extra parameters are added to the request
-	// (https://github.com/pocketbase/pocketbase/discussions/3799#discussioncomment-7640312)
+	// (https://github.com/tokibase/tokibase/discussions/3799#discussioncomment-7640312)
 	PKCE *bool `form:"pkce" json:"pkce"`
 
 	Name         string         `form:"name" json:"name"`

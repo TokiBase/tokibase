@@ -4,9 +4,9 @@ import (
 	"net/http"
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/forms"
-	"github.com/pocketbase/pocketbase/tools/router"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/forms"
+	"github.com/tokibase/tokibase/tools/router"
 )
 
 // bindSettingsApi registers the settings api endpoints.

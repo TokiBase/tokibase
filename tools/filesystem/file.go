@@ -14,8 +14,8 @@ import (
 	"strings"
 
 	"github.com/gabriel-vasile/mimetype"
-	"github.com/pocketbase/pocketbase/tools/inflector"
-	"github.com/pocketbase/pocketbase/tools/security"
+	"github.com/tokibase/tokibase/tools/inflector"
+	"github.com/tokibase/tokibase/tools/security"
 )
 
 // FileReader defines an interface for a file resource reader.

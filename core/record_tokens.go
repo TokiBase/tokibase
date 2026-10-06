@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/pocketbase/pocketbase/tools/security"
+	"github.com/tokibase/tokibase/tools/security"
 )
 
 // Supported record token types

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pocketbase/pocketbase/core"
+	"github.com/tokibase/tokibase/core"
 )
 
 func TestNewFieldsList(t *testing.T) {

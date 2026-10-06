@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/pocketbase/pocketbase/tools/archive"
-	"github.com/pocketbase/pocketbase/tools/osutils"
-	"github.com/pocketbase/pocketbase/tools/security"
+	"github.com/tokibase/tokibase/tools/archive"
+	"github.com/tokibase/tokibase/tools/osutils"
+	"github.com/tokibase/tokibase/tools/security"
 )
 
 // RestoreBackup restores the backup with the specified name and restarts
@@ -46,7 +46,7 @@ import (
 //
 // Note that if your pb_data has custom network mounts as subdirectories, then
 // it is possible the restore to fail during the `os.Rename` operations
-// (see https://github.com/pocketbase/pocketbase/issues/4647).
+// (see https://github.com/tokibase/tokibase/issues/4647).
 func (app *BaseApp) RestoreBackup(ctx context.Context, name string) error {
 	if app.Store().Has(StoreKeyActiveBackup) {
 		return errors.New("try again later - another backup/restore operation has already been started")

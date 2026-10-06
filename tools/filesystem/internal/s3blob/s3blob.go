@@ -40,9 +40,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pocketbase/pocketbase/tools/filesystem/blob"
-	"github.com/pocketbase/pocketbase/tools/filesystem/internal/s3blob/s3"
-	"github.com/pocketbase/pocketbase/tools/routine"
+	"github.com/tokibase/tokibase/tools/filesystem/blob"
+	"github.com/tokibase/tokibase/tools/filesystem/internal/s3blob/s3"
+	"github.com/tokibase/tokibase/tools/routine"
 )
 
 const defaultPageSize = 1000

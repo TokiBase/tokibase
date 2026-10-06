@@ -7,7 +7,7 @@ import (
 	"slices"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/pocketbase/pocketbase/tools/types"
+	"github.com/tokibase/tokibase/tools/types"
 	"github.com/spf13/cast"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/microsoft"

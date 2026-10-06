@@ -7,13 +7,13 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/pocketbase/pocketbase/tools/auth"
-	"github.com/pocketbase/pocketbase/tools/filesystem"
-	"github.com/pocketbase/pocketbase/tools/hook"
-	"github.com/pocketbase/pocketbase/tools/mailer"
-	"github.com/pocketbase/pocketbase/tools/router"
-	"github.com/pocketbase/pocketbase/tools/search"
-	"github.com/pocketbase/pocketbase/tools/subscriptions"
+	"github.com/tokibase/tokibase/tools/auth"
+	"github.com/tokibase/tokibase/tools/filesystem"
+	"github.com/tokibase/tokibase/tools/hook"
+	"github.com/tokibase/tokibase/tools/mailer"
+	"github.com/tokibase/tokibase/tools/router"
+	"github.com/tokibase/tokibase/tools/search"
+	"github.com/tokibase/tokibase/tools/subscriptions"
 	"golang.org/x/crypto/acme/autocert"
 )
 

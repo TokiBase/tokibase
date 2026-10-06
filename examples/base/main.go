@@ -6,18 +6,18 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/pocketbase/pocketbase"
-	"github.com/pocketbase/pocketbase/apis"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/plugins/ghupdate"
-	"github.com/pocketbase/pocketbase/plugins/jsvm"
-	"github.com/pocketbase/pocketbase/plugins/migratecmd"
-	"github.com/pocketbase/pocketbase/tools/hook"
-	"github.com/pocketbase/pocketbase/tools/osutils"
+	"github.com/tokibase/tokibase"
+	"github.com/tokibase/tokibase/apis"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/plugins/ghupdate"
+	"github.com/tokibase/tokibase/plugins/jsvm"
+	"github.com/tokibase/tokibase/plugins/migratecmd"
+	"github.com/tokibase/tokibase/tools/hook"
+	"github.com/tokibase/tokibase/tools/osutils"
 )
 
 func main() {
-	app := pocketbase.New()
+	app := tokibase.New()
 
 	// ---------------------------------------------------------------
 	// Optional plugin flags:

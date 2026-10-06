@@ -23,9 +23,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tools/inflector"
-	"github.com/pocketbase/pocketbase/tools/osutils"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/tools/inflector"
+	"github.com/tokibase/tokibase/tools/osutils"
 	"github.com/spf13/cobra"
 )
 

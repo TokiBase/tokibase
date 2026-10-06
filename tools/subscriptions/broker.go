@@ -3,8 +3,8 @@ package subscriptions
 import (
 	"fmt"
 
-	"github.com/pocketbase/pocketbase/tools/list"
-	"github.com/pocketbase/pocketbase/tools/store"
+	"github.com/tokibase/tokibase/tools/list"
+	"github.com/tokibase/tokibase/tools/store"
 )
 
 // Broker defines a struct for managing subscriptions clients.

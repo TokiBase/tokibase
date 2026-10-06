@@ -4,7 +4,7 @@
 
 ## v0.39.11
 
-- Fixed "API preview" examples ([#7782](https://github.com/pocketbase/pocketbase/issues/7782), [#7785](https://github.com/pocketbase/pocketbase/issues/7785)).
+- Fixed "API preview" examples ([#7782](https://github.com/tokibase/tokibase/issues/7782), [#7785](https://github.com/tokibase/tokibase/issues/7785)).
 
 - Other minor UI improvements (fixed sortable `dragend` event handling, allow ESC to workaround TAB trap for the rule fields, allow new duplicated collection to edit the collection of relation fields, updated shablon, updated npm dev dependencies, etc.).
 
@@ -13,7 +13,7 @@
 
 ## v0.39.10
 
-- Reverted the auto panic recover handling for the cli commands to preserve the old behavior and allow panic to force exit with non-zero code ([#7781](https://github.com/pocketbase/pocketbase/issues/7781)).
+- Reverted the auto panic recover handling for the cli commands to preserve the old behavior and allow panic to force exit with non-zero code ([#7781](https://github.com/tokibase/tokibase/issues/7781)).
     _Proper command non-zero exit support will be available with the next v0.40/v0.41 release._
 
 - Minor UI improvements (added placeholder loader for the logs chart, npm dev deps update, etc.).
@@ -23,7 +23,7 @@
 
 ## v0.39.9
 
-- Fixed `Shift + Click` range bulk selection not working in Firefox ([#7771](https://github.com/pocketbase/pocketbase/issues/7771))
+- Fixed `Shift + Click` range bulk selection not working in Firefox ([#7771](https://github.com/tokibase/tokibase/issues/7771))
 
 - Updated goja and its related dependencies _(fixes for TypedArray and regexp2 dep regression for the reported empty string match with lookahead patterns)_.
 
@@ -36,7 +36,7 @@
 
 - Minor UI improvements:
     - prevent resetting number inputs with leading 0 while still typing (normalized in `onchange`)
-    - added support for `Shift + Click` range bulk selection ([#7759](https://github.com/pocketbase/pocketbase/issues/7759))
+    - added support for `Shift + Click` range bulk selection ([#7759](https://github.com/tokibase/tokibase/issues/7759))
 
 - Bumped `golang.org/x/*` indirect dependencies as there are some minor security fixes.
 
@@ -48,12 +48,12 @@
 - Replaced `github.com/go-ozzo/ozzo-validation` with the fork `github.com/pocketbase/ozzo-validation` since the original library has recently changed ownership and the new maintainer cannot be trusted.
   _There are plans to create eventually a new validation library from scratch more suited for our needs in PocketBase because ozzo-validation is known to have some minor performance and obscure regex issues, but until then we'll stick with the fork (and if you use `ozzo-validation` in your own Go code, I'd suggest to swap the imports with the fork)_.
 
-- Fixed missing import collection `fields` property access ([#7760](https://github.com/pocketbase/pocketbase/issues/7760)).
+- Fixed missing import collection `fields` property access ([#7760](https://github.com/tokibase/tokibase/issues/7760)).
 
-- Fixed View collection `*` validator and added more friendly error messages ([#7761](https://github.com/pocketbase/pocketbase/issues/7761)).
+- Fixed View collection `*` validator and added more friendly error messages ([#7761](https://github.com/tokibase/tokibase/issues/7761)).
 
-- ⚠️ Security fix for unhandled panic in internal worker goroutines ([#7762](https://github.com/pocketbase/pocketbase/discussions/7762)).
-    _To prevent this from showing again, all existing internal worker functions were wrapped with [`routine.SafeWrap(f)`](https://pkg.go.dev/github.com/pocketbase/pocketbase/tools/routine#SafeWrap) (auto recovers and returns any eventual panic as regular error)._
+- ⚠️ Security fix for unhandled panic in internal worker goroutines ([#7762](https://github.com/tokibase/tokibase/discussions/7762)).
+    _To prevent this from showing again, all existing internal worker functions were wrapped with [`routine.SafeWrap(f)`](https://pkg.go.dev/github.com/tokibase/tokibase/tools/routine#SafeWrap) (auto recovers and returns any eventual panic as regular error)._
 
 
 ## v0.39.6
@@ -71,17 +71,17 @@
 
 - Limit with ellipsis long `url` field values.
 
-- Readded the "fullscreen" `editor` field option and preloaded the TinyMCE component for slightly faster initial rendering ([#7746](https://github.com/pocketbase/pocketbase/issues/7746)).
+- Readded the "fullscreen" `editor` field option and preloaded the TinyMCE component for slightly faster initial rendering ([#7746](https://github.com/tokibase/tokibase/issues/7746)).
 
 - Updated goja (`TypedArray` fixes).
 
 
 ## v0.39.4
 
-- Removed `redirectURL` required validator from the code->token exchange endpoint (aka. `authWithOAuth2Code()`) ([#7734](https://github.com/pocketbase/pocketbase/issues/7734)).
+- Removed `redirectURL` required validator from the code->token exchange endpoint (aka. `authWithOAuth2Code()`) ([#7734](https://github.com/tokibase/tokibase/issues/7734)).
     _Note that OAuth2 providers have their own validations and whether it is allowed to be empty or not could depend on the configured OAuth2 app (in most cases it is required and the redirect address must match with the initial value submitted with the authorization request)._
 
-- Enabled sorting by the first _implicit_ presentable relation field ([#7735](https://github.com/pocketbase/pocketbase/discussions/7735)).
+- Enabled sorting by the first _implicit_ presentable relation field ([#7735](https://github.com/tokibase/tokibase/discussions/7735)).
 
 - Other minor UI fixes (tooltip clear on hovered element removal, optional before element sortable fix, etc.).
 
@@ -90,7 +90,7 @@
 
 ## v0.39.3
 
-- Fixed JS error on `file` settings `maxSelect` change ([#7731](https://github.com/pocketbase/pocketbase/issues/7731)).
+- Fixed JS error on `file` settings `maxSelect` change ([#7731](https://github.com/tokibase/tokibase/issues/7731)).
 
 - Apply the `Ctrl+S` record panel save shortcut only if it is the current top open modal.
 
@@ -101,9 +101,9 @@
 
 ## v0.39.2
 
-- Fixed records list UI sorting ([#7724](https://github.com/pocketbase/pocketbase/issues/7724)).
+- Fixed records list UI sorting ([#7724](https://github.com/tokibase/tokibase/issues/7724)).
 
-- Don't clear the date input on invalid value while still typing ([#7726](https://github.com/pocketbase/pocketbase/issues/7726)).
+- Don't clear the date input on invalid value while still typing ([#7726](https://github.com/tokibase/tokibase/issues/7726)).
 
 - Return `filepath.SkipDir` in the `pb_hooks` dirs watcher to avoid unnecessary iterating over `node_modules` and `.*` prefixed hidden dirs (`.DS_Store`, `.git`, etc.).
 
@@ -114,9 +114,9 @@
 
 ## v0.39.1
 
-- Fixed multiple select options wrapping ([#7720](https://github.com/pocketbase/pocketbase/issues/7720)).
+- Fixed multiple select options wrapping ([#7720](https://github.com/tokibase/tokibase/issues/7720)).
 
-- Return the hidden record data fields for superusers realtime subscribers ([#7721](https://github.com/pocketbase/pocketbase/issues/7721)).
+- Return the hidden record data fields for superusers realtime subscribers ([#7721](https://github.com/tokibase/tokibase/issues/7721)).
 
 - Added default panic-recover handling for the cron jobs to avoid terminating the server on panic.
 
@@ -125,10 +125,10 @@
 
 ## v0.39.0
 
-- Added new "SQL console" section under _Settings > Debug_ allowing executing any raw SQL query from the UI ([#2236](https://github.com/pocketbase/pocketbase/issues/2236); [#7638](https://github.com/pocketbase/pocketbase/discussions/7638)).
+- Added new "SQL console" section under _Settings > Debug_ allowing executing any raw SQL query from the UI ([#2236](https://github.com/tokibase/tokibase/issues/2236); [#7638](https://github.com/tokibase/tokibase/discussions/7638)).
     _Note that this is intended for one-off analytic queries, the occasional `VACUUM`/`PRAGMA optimize` or debug purposes and not as the primary interface for interacting with your PocketBase data because it can break your application if not used with proper care!_
 
-- Send system email alerts to superusers in case of an error with the automated backups ([#7698](https://github.com/pocketbase/pocketbase/issues/7698)).
+- Send system email alerts to superusers in case of an error with the automated backups ([#7698](https://github.com/tokibase/tokibase/issues/7698)).
 
 - Various minor improvements and fixes:
     - fixed logs bulk selection export error
@@ -148,7 +148,7 @@
 
 - Added extra checks for the connected user IP in the realtime APIs to prevent bruteforce guest subscription update attempts and to serve as an extra protection for the "all-in-one" OAuth2 realtime handler.
 
-- Don't reset the records list pagination on record update ([#7694](https://github.com/pocketbase/pocketbase/issues/7694)).
+- Don't reset the records list pagination on record update ([#7694](https://github.com/tokibase/tokibase/issues/7694)).
 
 - Updated all `golang.org/x/` packages to cover the recent [security fixes](https://groups.google.com/g/golang-announce/c/PdiGK3xulk4) _(none of them should be a critical issue in PocketBase but nonetheless it is advised to update)_.
 
@@ -164,7 +164,7 @@
 
 - Added error marker for each collection tab and fixed the styles of the raw errors tooltip.
 
-- Fixed indexes collection update error ([#7689](https://github.com/pocketbase/pocketbase/issues/7689)).
+- Fixed indexes collection update error ([#7689](https://github.com/tokibase/tokibase/issues/7689)).
     _⚠️ The fix comes with a system migration that resaves all collections with indexes to ensure that all indexes are normalized and available in the `Collection.Indexes` field (it will also include indexes created manually via the sqlite3 cli or other external tool)._
     _If you are using a test `pb_data` for your Go automation tests you may want to apply the migration to it too so that it runs only once and not for each execution of your tests, aka. you could run once `go run main.go migrate up --dir="/path/to/test_pb_data"`._
 
@@ -177,11 +177,11 @@
 
 - Fixed UI logs pagination when no custom range is specified.
 
-- Fixed default CSP not allowing audio/video previews ([#7677](https://github.com/pocketbase/pocketbase/issues/7677)).
+- Fixed default CSP not allowing audio/video previews ([#7677](https://github.com/tokibase/tokibase/issues/7677)).
 
-- Serve fixed `Content-Type` for `.xlsx`, `.docx` and `.pptx` files to allow previews on iOS ([#7467](https://github.com/pocketbase/pocketbase/discussions/7467)).
+- Serve fixed `Content-Type` for `.xlsx`, `.docx` and `.pptx` files to allow previews on iOS ([#7467](https://github.com/tokibase/tokibase/discussions/7467)).
 
-- Changed settings app URL input to `type="text"` for compatibility with earlier versions ([#7681](https://github.com/pocketbase/pocketbase/issues/7681)).
+- Changed settings app URL input to `type="text"` for compatibility with earlier versions ([#7681](https://github.com/tokibase/tokibase/issues/7681)).
 
 - Added an internal watcher to sync various runtime states between multiple PocketBase processes (e.g. memory store) using the same `pb_data`.
     _This is helpful in case for example a separate PocketBase console command change the collections or application settings while the server is still running._
@@ -200,14 +200,14 @@
     ./pocketbase superuser ips 127.0.0.1 10.0.0.0 --dir=/custom/path/to/pb_data
     ```
 
-- Added rate limit option to exclude IPs/CIDR subnets ([#6410](https://github.com/pocketbase/pocketbase/issues/6410)).
+- Added rate limit option to exclude IPs/CIDR subnets ([#6410](https://github.com/tokibase/tokibase/issues/6410)).
 
 - Bumped min Go GitHub action version to 1.26.3 because it comes with some [minor bug and security fixes](https://github.com/golang/go/issues?q=milestone%3AGo1.26.3).
 
 
 ## v0.37.5
 
-- Fixed password fields not being detected as changed ([#7670](https://github.com/pocketbase/pocketbase/issues/7670)).
+- Fixed password fields not being detected as changed ([#7670](https://github.com/tokibase/tokibase/issues/7670)).
 
 - Added the local time zone name next to the `date` field label.
 
@@ -218,22 +218,22 @@
 
 ## v0.37.4
 
-- Added backups list scroll container ([#7655](https://github.com/pocketbase/pocketbase/issues/7655)).
+- Added backups list scroll container ([#7655](https://github.com/tokibase/tokibase/issues/7655)).
 
 - Optimized record upsert and preview modals data loading to minimize layout jumps.
 
-- Fixed SMTP IPv6 network address format ([#7659](https://github.com/pocketbase/pocketbase/issues/7659)).
+- Fixed SMTP IPv6 network address format ([#7659](https://github.com/tokibase/tokibase/issues/7659)).
 
-- Fixed autocomplete selection not properly updating the underlying input value ([#7664](https://github.com/pocketbase/pocketbase/issues/7664)).
+- Fixed autocomplete selection not properly updating the underlying input value ([#7664](https://github.com/tokibase/tokibase/issues/7664)).
 
-- Added `ghupdate.BaseURL` config option ([#7665](https://github.com/pocketbase/pocketbase/issues/7665)).
+- Added `ghupdate.BaseURL` config option ([#7665](https://github.com/tokibase/tokibase/issues/7665)).
 
 - Added dummy bcrypt password check for the failure auth path to minimize enumeration timing attacks when registrations are disabled.
 
 - Adjusted Bitbucket, GitHub, GitLab and Gitea/Forgejo OAuth2 providers to better reflect recent API updates and doc references.
     _In case the userinfo data is not sufficient, some of the providers now send a separate list emails request in order to minimize eventual linking security issues caused by custom onpremise setups (e.g. Gitea/Forgejo allows skipping the email verification if an ENV variable is configured)._
 
-- ⚠️ Fixed a pre-hijacking OAuth2 linking vulnerability ([#7662](https://github.com/pocketbase/pocketbase/discussions/7662); thanks @Alardiians for reporting it privately).
+- ⚠️ Fixed a pre-hijacking OAuth2 linking vulnerability ([#7662](https://github.com/tokibase/tokibase/discussions/7662); thanks @Alardiians for reporting it privately).
 
 - Bumped Go and npm dependencies.
 
@@ -242,7 +242,7 @@
 
 - Fixed total count load on page back/forward navigation.
 
-- Fixed `editor` floating dialogs position when scrolling ([#7653](https://github.com/pocketbase/pocketbase/issues/7653)).
+- Fixed `editor` floating dialogs position when scrolling ([#7653](https://github.com/tokibase/tokibase/issues/7653)).
 
 - Enabled text wrapping for the API rule fields.
 
@@ -253,19 +253,19 @@
 
 ## v0.37.2
 
-- Fixed autoexpandable input in Firefox ([#7648](https://github.com/pocketbase/pocketbase/discussions/7648)).
+- Fixed autoexpandable input in Firefox ([#7648](https://github.com/tokibase/tokibase/discussions/7648)).
 
-- Slightly adjusted the dark theme colors for better readability ([#7648](https://github.com/pocketbase/pocketbase/discussions/7648)).
+- Slightly adjusted the dark theme colors for better readability ([#7648](https://github.com/tokibase/tokibase/discussions/7648)).
 
-- Removed unnecessary tags stripping from the displayed log attributes ([#7649](https://github.com/pocketbase/pocketbase/issues/7649)).
+- Removed unnecessary tags stripping from the displayed log attributes ([#7649](https://github.com/tokibase/tokibase/issues/7649)).
 
-- Workarounded Safari freeze caused by a buggy CSS popover property ([#7650](https://github.com/pocketbase/pocketbase/issues/7650)).
+- Workarounded Safari freeze caused by a buggy CSS popover property ([#7650](https://github.com/tokibase/tokibase/issues/7650)).
 
 
 ## v0.37.1
 
 - Minor UI bugfixes:
-    - Fixed `number` field input values normalization ([#7646](https://github.com/pocketbase/pocketbase/issues/7646)).
+    - Fixed `number` field input values normalization ([#7646](https://github.com/tokibase/tokibase/issues/7646)).
     - Allow opening collections in new tab with middle click.
     - Show collection name in the page title on initial load.
 
@@ -273,7 +273,7 @@
 ## v0.37.0
 
 - New UI rewritten from scratch and with support for external customization in mind.
-    > Note that as explained in [#7612](https://github.com/pocketbase/pocketbase/discussions/7612) the new UI kit and extensions APIs will intentionally remain undocumented until "Stage 2 completion" _(there no ETAs)_.
+    > Note that as explained in [#7612](https://github.com/tokibase/tokibase/discussions/7612) the new UI kit and extensions APIs will intentionally remain undocumented until "Stage 2 completion" _(there no ETAs)_.
 
     The new UI also introduced several other small improvements:
     - ~2MB smaller bundle size.
@@ -292,12 +292,12 @@
     - `listAuthMethods()` (aka. `/api/collection/{col}/auth-methods`) now returns the OAuth2 provider logo for each provider as inlined SVG string in its response data.
         _⚠️ Note that if your app for whatever reason rely on the dashboard OAuth2 logos available under `/_/images/oauth2/*` they are still available for now but will be removed in future versions and it is recommended to use the new inline SVGs!_
 
-- Added optional `no_ui` build tag to exclude the UI from bundling with the executable ([#7548](https://github.com/pocketbase/pocketbase/issues/7548)).
+- Added optional `no_ui` build tag to exclude the UI from bundling with the executable ([#7548](https://github.com/tokibase/tokibase/issues/7548)).
     ```sh
     go build -tags no_ui
     ```
 
-- Exported the internal JSVM bind functions ([#7600](https://github.com/pocketbase/pocketbase/discussions/7600)).
+- Exported the internal JSVM bind functions ([#7600](https://github.com/tokibase/tokibase/discussions/7600)).
     ```go
     jsvm.BindCore(vm)
     jsvm.BindDbx(vm)
@@ -316,7 +316,7 @@
 
 ## v0.36.9
 
-- Updated the Discord `AuthUser.Name` field to use `global_name` ([#7603](https://github.com/pocketbase/pocketbase/pull/7603); thanks @HansHans135).
+- Updated the Discord `AuthUser.Name` field to use `global_name` ([#7603](https://github.com/tokibase/tokibase/pull/7603); thanks @HansHans135).
 
 - Fixed settings SMTP password clear persistence.
 
@@ -339,7 +339,7 @@
 
 ## v0.36.7
 
-- Fixed high memory usage with large file uploads ([#7572](https://github.com/pocketbase/pocketbase/discussions/7572)).
+- Fixed high memory usage with large file uploads ([#7572](https://github.com/tokibase/tokibase/discussions/7572)).
 
 - Updated the rate limiter reset rules to follow a more traditional fixed window strategy _(aka. to be more close to how it is presented in the UI - allow max X user requests under Ys)_ since several users complained that the older algorithm was not intuitive and not suitable for large intervals.
     _Approximated sliding window strategy was also suggested as a better compromise option to help minimize traffic spikes right after reset but the additional tracking could introduce some overhead and for now it is left aside until we have more tests._
@@ -353,9 +353,9 @@
 
 ## v0.36.6
 
-- Set `NumberField.OnlyInt:true` for the generated View collection schema fields when a view column expression is known to return int-only values ([#7538](https://github.com/pocketbase/pocketbase/issues/7538)).
+- Set `NumberField.OnlyInt:true` for the generated View collection schema fields when a view column expression is known to return int-only values ([#7538](https://github.com/tokibase/tokibase/issues/7538)).
 
-- Documented the `unmarshal` JSVM helper ([#7543](https://github.com/pocketbase/pocketbase/issues/7543)).
+- Documented the `unmarshal` JSVM helper ([#7543](https://github.com/tokibase/tokibase/issues/7543)).
 
 - Added extra read check after the `Store.GetOrSet` write lock to prevent races overwriting an already existing value.
 
@@ -370,21 +370,21 @@
 
 ## v0.36.5
 
-- Disabled collection and fields name normalization while in IME mode ([#7532](https://github.com/pocketbase/pocketbase/pull/7532); thanks @miaopan607).
+- Disabled collection and fields name normalization while in IME mode ([#7532](https://github.com/tokibase/tokibase/pull/7532); thanks @miaopan607).
 
 - Updated `modernc.org/sqlite` to v1.46.1 _(resets connection state on Tx.Commit failure)_.
 
 
 ## v0.36.4
 
-- Made the optional `Bearer` token prefix case-insensitive ([#7525](https://github.com/pocketbase/pocketbase/pull/7525); thanks @benjamesfleming).
+- Made the optional `Bearer` token prefix case-insensitive ([#7525](https://github.com/tokibase/tokibase/pull/7525); thanks @benjamesfleming).
 
-- Enabled `$filesystem.s3(...)` and `$filesystem.local(...)` JSVM bindings ([#7526](https://github.com/pocketbase/pocketbase/issues/7526)).
+- Enabled `$filesystem.s3(...)` and `$filesystem.local(...)` JSVM bindings ([#7526](https://github.com/tokibase/tokibase/issues/7526)).
 
 
 ## v0.36.3
 
-- Added `Accept-Encoding: identity` to the S3 requests per the suggestion in [#7523](https://github.com/pocketbase/pocketbase/issues/7523).
+- Added `Accept-Encoding: identity` to the S3 requests per the suggestion in [#7523](https://github.com/tokibase/tokibase/issues/7523).
     _This should help fixing the 0-bytes file response when S3 API compression is enabled._
 
 - Bumped min Go GitHub action version to 1.26.0 _(it comes with minor [GC performance improvements](https://go.dev/doc/go1.26#runtime))_.
@@ -402,7 +402,7 @@
 ## v0.36.1
 
 - Reverted the `DISTINCT` with `GROUP BY` replacement optimization from v0.36.0 as it was reported to negatively impact the indexes utilization for some queries
-and the minor performance boost that you may get when used on large records is not enough to justify the more common use ([#7461](https://github.com/pocketbase/pocketbase/discussions/7461)).
+and the minor performance boost that you may get when used on large records is not enough to justify the more common use ([#7461](https://github.com/tokibase/tokibase/discussions/7461)).
     _A better generic deduplication optimization for large records (aka. records with large `text`/`json` fields or many small ones) will be researched but there are no ETAs._
 
 - Updated `modernc.org/sqlite` to v1.44.2 _(SQLite 3.51.2)_.
@@ -450,7 +450,7 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.35.0
 
-- Added `nullString()`, `nullInt()`, `nullFloat()`, `nullBool`, `nullArray()`, `nullObject()` JSVM helpers for scanning nullable columns ([#7396](https://github.com/pocketbase/pocketbase/issues/7396)).
+- Added `nullString()`, `nullInt()`, `nullFloat()`, `nullBool`, `nullArray()`, `nullObject()` JSVM helpers for scanning nullable columns ([#7396](https://github.com/tokibase/tokibase/issues/7396)).
 
 - Store the correct `image/png` as attrs content type when generating a thumb fallback _(e.g. for `webp`)_.
 
@@ -462,14 +462,14 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.34.2
 
-- Bumped JS SDK to v0.26.5 to fix Safari AbortError detection introduced with the previous release ([#7369](https://github.com/pocketbase/pocketbase/issues/7369)).
+- Bumped JS SDK to v0.26.5 to fix Safari AbortError detection introduced with the previous release ([#7369](https://github.com/tokibase/tokibase/issues/7369)).
 
 
 ## v0.34.1
 
-- Added missing `:` char to the autocomplete regex ([#7353](https://github.com/pocketbase/pocketbase/pull/7353); thanks @ouvreboite).
+- Added missing `:` char to the autocomplete regex ([#7353](https://github.com/tokibase/tokibase/pull/7353); thanks @ouvreboite).
 
-- Added "Copy raw JSON" collection dropdown option ([#7357](https://github.com/pocketbase/pocketbase/issues/7357)).
+- Added "Copy raw JSON" collection dropdown option ([#7357](https://github.com/tokibase/tokibase/issues/7357)).
 
 - Updated Go deps and JS SDK.
 
@@ -499,11 +499,11 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.33.0
 
-- Added extra `id` characters validation in addition to the user specified regex pattern ([#7312](https://github.com/pocketbase/pocketbase/issues/7312)).
+- Added extra `id` characters validation in addition to the user specified regex pattern ([#7312](https://github.com/tokibase/tokibase/issues/7312)).
     _The following special characters are always forbidden: `./\|"'``<>:?*%$\n\r\t\0 `. Common reserved Windows file names such as `aux`, `prn`, `con`, `nul`, `com1-9`, `lpt1-9` are also not allowed._
     _The list is not exhaustive but it should help minimizing eventual filesystem compatibility issues in case of wildcards or other loose regex patterns._
 
-- Added `{ALERT_INFO}` placeholder to the auth alert mail template ([#7314](https://github.com/pocketbase/pocketbase/issues/7314)).
+- Added `{ALERT_INFO}` placeholder to the auth alert mail template ([#7314](https://github.com/tokibase/tokibase/issues/7314)).
     _⚠️ `mails.SendRecordAuthAlert(app, authRecord, info)` also now accepts a 3rd `info` string argument._
 
 - Updated Go deps.
@@ -515,7 +515,7 @@ and the minor performance boost that you may get when used on large records is n
 
     This is continuation of the effort to eliminate the risk of information disclosure _(and eventually the side-channel attacks that may originate from that)_.
 
-    So far this was accepted tradeoff between performance, usability and correctness since the solutions at the time weren't really practical _(especially with the back-relations as mentioned in ["Security and performance" section in #4417](https://github.com/pocketbase/pocketbase/discussions/4417))_, but with v0.23+ changes we can implement the extra checks without littering the code too much, with very little impact on the performance and at the same time ensuring better out of the box security _(especially for the cases where users operate with sensitive fields like "code", "token", "secret", etc.)_.
+    So far this was accepted tradeoff between performance, usability and correctness since the solutions at the time weren't really practical _(especially with the back-relations as mentioned in ["Security and performance" section in #4417](https://github.com/tokibase/tokibase/discussions/4417))_, but with v0.23+ changes we can implement the extra checks without littering the code too much, with very little impact on the performance and at the same time ensuring better out of the box security _(especially for the cases where users operate with sensitive fields like "code", "token", "secret", etc.)_.
 
     Similar to the previous release, probably for most users with already configured API rules this change won't be breaking, but if you have an _intermediate/junction collection_ that is "locked" (superusers-only) we no longer will allow the client-side relation filter to pass through it and you'll have to set its List/Search API rule to enable the current user to search in it.
 
@@ -529,7 +529,7 @@ and the minor performance boost that you may get when used on large records is n
 
 - Increased the default SQLite `PRAGMA cache_size` to ~32MB.
 
-- Fixed deadlock when manually triggering the `OnTerminate` hook ([#7305](https://github.com/pocketbase/pocketbase/pull/7305); thanks @yerTools).
+- Fixed deadlock when manually triggering the `OnTerminate` hook ([#7305](https://github.com/tokibase/tokibase/pull/7305); thanks @yerTools).
 
 - Fixed some code comment typos, regenerated the JSVM types and updated npm dependencies.
 
@@ -538,31 +538,31 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.31.0
 
-- Visualize presentable multiple `relation` fields ([#7260](https://github.com/pocketbase/pocketbase/issues/7260)).
+- Visualize presentable multiple `relation` fields ([#7260](https://github.com/tokibase/tokibase/issues/7260)).
 
-- Support Ed25519 in the optional OIDC `id_token` signature validation ([#7252](https://github.com/pocketbase/pocketbase/issues/7252); thanks @shynome).
+- Support Ed25519 in the optional OIDC `id_token` signature validation ([#7252](https://github.com/tokibase/tokibase/issues/7252); thanks @shynome).
 
-- Added `ApiScenario.DisableTestAppCleanup` optional field to skip the auto test app cleanup and leave it up to the developers to do the cleanup manually ([#7267](https://github.com/pocketbase/pocketbase/discussions/7267)).
+- Added `ApiScenario.DisableTestAppCleanup` optional field to skip the auto test app cleanup and leave it up to the developers to do the cleanup manually ([#7267](https://github.com/tokibase/tokibase/discussions/7267)).
 
-- Added `FileDownloadRequestEvent.ThumbError` field that is populated in case of a thumb generation failure (e.g. unsupported format, timing out, etc.), allowing developers to reject the thumb fallback and/or supply their own custom thumb generation ([#7268](https://github.com/pocketbase/pocketbase/discussions/7268)).
+- Added `FileDownloadRequestEvent.ThumbError` field that is populated in case of a thumb generation failure (e.g. unsupported format, timing out, etc.), allowing developers to reject the thumb fallback and/or supply their own custom thumb generation ([#7268](https://github.com/tokibase/tokibase/discussions/7268)).
 
 - ⚠️ Disallow client-side filtering and sorting of relations where the collection of the last targeted relation field has superusers-only List/Search API rule to further minimize the risk of eventual side-channel attack.
     _This should be a non-breaking change for most users, but if you want the old behavior, please open a new Q&A discussion with details about your use case to evaluate making it configurable._
-    _Note also that as mentioned in the "Security and performance" section of [#4417](https://github.com/pocketbase/pocketbase/discussions/4417) and [#5863](https://github.com/pocketbase/pocketbase/discussions/5863), the easiest and recommended solution to protect security sensitive fields (tokens, codes, passwords, etc.) is to mark them as "Hidden" (aka. make them non-API filterable)._
+    _Note also that as mentioned in the "Security and performance" section of [#4417](https://github.com/tokibase/tokibase/discussions/4417) and [#5863](https://github.com/tokibase/tokibase/discussions/5863), the easiest and recommended solution to protect security sensitive fields (tokens, codes, passwords, etc.) is to mark them as "Hidden" (aka. make them non-API filterable)._
 
 - Regenerated JSVM types and updated npm and Go deps.
 
 
 ## v0.30.4
 
-- Fixed `json` field CSS regression introduced with the overflow workaround in v0.30.3 ([#7259](https://github.com/pocketbase/pocketbase/issues/7259)).
+- Fixed `json` field CSS regression introduced with the overflow workaround in v0.30.3 ([#7259](https://github.com/tokibase/tokibase/issues/7259)).
 
 
 ## v0.30.3
 
-- Fixed legacy identitity field priority check when a username is a valid email address ([#7256](https://github.com/pocketbase/pocketbase/issues/7256)).
+- Fixed legacy identitity field priority check when a username is a valid email address ([#7256](https://github.com/tokibase/tokibase/issues/7256)).
 
-- Workaround autocomplete overflow issue with Firefox 144 ([#7223](https://github.com/pocketbase/pocketbase/issues/7223)).
+- Workaround autocomplete overflow issue with Firefox 144 ([#7223](https://github.com/tokibase/tokibase/issues/7223)).
 
 - Updated `modernc.org/sqlite` to 1.39.1 (SQLite 3.50.4).
 
@@ -574,7 +574,7 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.30.1
 
-- ⚠️ Excluded the `lost+found` directory from the backups ([#7208](https://github.com/pocketbase/pocketbase/pull/7208); thanks @lbndev).
+- ⚠️ Excluded the `lost+found` directory from the backups ([#7208](https://github.com/tokibase/tokibase/pull/7208); thanks @lbndev).
     _If for some reason you want to keep it, you can restore it by editing the `e.Exclude` list of the `OnBackupCreate` and `OnBackupRestore` hooks._
 
 - Minor tests improvements (disabled initial superuser creation for the test app to avoid cluttering the std output, added more tests for the `s3.Uploader.MaxConcurrency`, etc.).
@@ -584,11 +584,11 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.30.0
 
-- Eagerly escape the S3 request path following the same rules as in the S3 signing header ([#7153](https://github.com/pocketbase/pocketbase/issues/7153)).
+- Eagerly escape the S3 request path following the same rules as in the S3 signing header ([#7153](https://github.com/tokibase/tokibase/issues/7153)).
 
-- Added Lark OAuth2 provider ([#7130](https://github.com/pocketbase/pocketbase/pull/7130); thanks @mashizora).
+- Added Lark OAuth2 provider ([#7130](https://github.com/tokibase/tokibase/pull/7130); thanks @mashizora).
 
-- Increased test tokens `exp` claim to minimize eventual issues with reproducible builds ([#7123](https://github.com/pocketbase/pocketbase/issues/7123)).
+- Increased test tokens `exp` claim to minimize eventual issues with reproducible builds ([#7123](https://github.com/tokibase/tokibase/issues/7123)).
 
 - Added `os.Root` bindings to the JSVM ([`$os.openRoot`](https://pocketbase.io/jsvm/functions/_os.openRoot.html), [`$os.openInRoot`](https://pocketbase.io/jsvm/functions/_os.openInRoot.html)).
 
@@ -601,14 +601,14 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.29.3
 
-- Try to forward Apple OAuth2 POST redirect user's name so that it can be returned (and eventually assigned) with the success response of the all-in-one auth call ([#7090](https://github.com/pocketbase/pocketbase/issues/7090)).
+- Try to forward Apple OAuth2 POST redirect user's name so that it can be returned (and eventually assigned) with the success response of the all-in-one auth call ([#7090](https://github.com/tokibase/tokibase/issues/7090)).
 
-- Fixed `RateLimitRule.Audience` code comment ([#7098](https://github.com/pocketbase/pocketbase/pull/7098); thanks @iustin05).
+- Fixed `RateLimitRule.Audience` code comment ([#7098](https://github.com/tokibase/tokibase/pull/7098); thanks @iustin05).
 
-- Mocked `syscall.Exec` when building for WASM ([#7116](https://github.com/pocketbase/pocketbase/pull/7116); thanks @joas8211).
+- Mocked `syscall.Exec` when building for WASM ([#7116](https://github.com/tokibase/tokibase/pull/7116); thanks @joas8211).
     _Note that WASM is not officially supported PocketBase build target and many things may not work as expected._
 
-- Registered missing `$filesystem`, `$mails`, `$template` and `__hooks` bindings in the JSVM migrations ([#7125](https://github.com/pocketbase/pocketbase/issues/7125)).
+- Registered missing `$filesystem`, `$mails`, `$template` and `__hooks` bindings in the JSVM migrations ([#7125](https://github.com/tokibase/tokibase/issues/7125)).
 
 - Regenerated JSVM types to include methods from structs with single generic parameter.
 
@@ -622,13 +622,13 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.29.1
 
-- Updated the X/Twitter provider to return the `confirmed_email` field and to use the `x.com` domain ([#7035](https://github.com/pocketbase/pocketbase/issues/7035)).
+- Updated the X/Twitter provider to return the `confirmed_email` field and to use the `x.com` domain ([#7035](https://github.com/tokibase/tokibase/issues/7035)).
 
-- Added Box.com OAuth2 provider ([#7056](https://github.com/pocketbase/pocketbase/pull/7056); thanks @blakepatteson).
+- Added Box.com OAuth2 provider ([#7056](https://github.com/tokibase/tokibase/pull/7056); thanks @blakepatteson).
 
 - Updated `modernc.org/sqlite` to 1.38.2 (SQLite 3.50.3).
 
-- Fixed example List API response ([#7049](https://github.com/pocketbase/pocketbase/pull/7049); thanks @williamtguerra).
+- Fixed example List API response ([#7049](https://github.com/tokibase/tokibase/pull/7049); thanks @williamtguerra).
 
 
 ## v0.29.0
@@ -638,27 +638,27 @@ and the minor performance boost that you may get when used on large records is n
 
 - Added the triggered rate rimit rule in the error log `details`.
 
-- Added optional `ServeEvent.Listener` field to initialize a custom network listener (e.g. `unix`) instead of the default `tcp` ([#3233](https://github.com/pocketbase/pocketbase/discussions/3233)).
+- Added optional `ServeEvent.Listener` field to initialize a custom network listener (e.g. `unix`) instead of the default `tcp` ([#3233](https://github.com/tokibase/tokibase/discussions/3233)).
 
-- Fixed request data unmarshalization for the `DynamicModel` array/object fields ([#7022](https://github.com/pocketbase/pocketbase/discussions/7022)).
+- Fixed request data unmarshalization for the `DynamicModel` array/object fields ([#7022](https://github.com/tokibase/tokibase/discussions/7022)).
 
-- Fixed Dashboard page title `-` escaping ([#6982](https://github.com/pocketbase/pocketbase/issues/6982)).
+- Fixed Dashboard page title `-` escaping ([#6982](https://github.com/tokibase/tokibase/issues/6982)).
 
 - Other minor improvements (updated first superuser console text when running with `go run`, clarified trusted IP proxy header label, wrapped the backup restore in a transaction as an extra precaution, updated deps, etc.).
 
 
 ## v0.28.4
 
-- Added global JSVM `toBytes()` helper to return the bytes slice representation of a value such as io.Reader or string, _other types are first serialized to Go string_ ([#6935](https://github.com/pocketbase/pocketbase/issues/6935)).
+- Added global JSVM `toBytes()` helper to return the bytes slice representation of a value such as io.Reader or string, _other types are first serialized to Go string_ ([#6935](https://github.com/tokibase/tokibase/issues/6935)).
 
-- Fixed `security.RandomStringByRegex` random distribution ([#6947](https://github.com/pocketbase/pocketbase/pull/6947); thanks @yerTools).
+- Fixed `security.RandomStringByRegex` random distribution ([#6947](https://github.com/tokibase/tokibase/pull/6947); thanks @yerTools).
 
 - Minor docs and typos fixes.
 
 
 ## v0.28.3
 
-- Skip sending empty `Range` header when fetching blobs from S3 ([#6914](https://github.com/pocketbase/pocketbase/pull/6914)).
+- Skip sending empty `Range` header when fetching blobs from S3 ([#6914](https://github.com/tokibase/tokibase/pull/6914)).
 
 - Updated Go deps and particularly `modernc.org/sqlite` to 1.38.0 (SQLite 3.50.1).
 
@@ -667,23 +667,23 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.28.2
 
-- Loaded latin-ext charset for the default text fonts ([#6869](https://github.com/pocketbase/pocketbase/issues/6869)).
+- Loaded latin-ext charset for the default text fonts ([#6869](https://github.com/tokibase/tokibase/issues/6869)).
 
-- Updated view query CAST regex to properly recognize multiline expressions ([#6860](https://github.com/pocketbase/pocketbase/pull/6860); thanks @azat-ismagilov).
+- Updated view query CAST regex to properly recognize multiline expressions ([#6860](https://github.com/tokibase/tokibase/pull/6860); thanks @azat-ismagilov).
 
 - Updated Go and npm dependencies.
 
 
 ## v0.28.1
 
-- Fixed `json_each`/`json_array_length` normalizations to properly check for array values ([#6835](https://github.com/pocketbase/pocketbase/issues/6835)).
+- Fixed `json_each`/`json_array_length` normalizations to properly check for array values ([#6835](https://github.com/tokibase/tokibase/issues/6835)).
 
 
 ## v0.28.0
 
-- Write the default response body of `*Request` hooks that are wrapped in a transaction after the related transaction completes to allow propagating the transaction error ([#6462](https://github.com/pocketbase/pocketbase/discussions/6462#discussioncomment-12207818)).
+- Write the default response body of `*Request` hooks that are wrapped in a transaction after the related transaction completes to allow propagating the transaction error ([#6462](https://github.com/tokibase/tokibase/discussions/6462#discussioncomment-12207818)).
 
-- Updated `app.DB()` to automatically routes raw write SQL statements to the nonconcurrent db pool ([#6689](https://github.com/pocketbase/pocketbase/discussions/6689)).
+- Updated `app.DB()` to automatically routes raw write SQL statements to the nonconcurrent db pool ([#6689](https://github.com/tokibase/tokibase/discussions/6689)).
     _For the rare cases when it is needed users still have the option to explicitly target the specific pool they want using `app.ConcurrentDB()`/`app.NonconcurrentDB()`._
 
 - ⚠️ Changed the default `json` field max size to 1MB.
@@ -692,7 +692,7 @@ and the minor performance boost that you may get when used on large records is n
 - ⚠️ Soft-deprecated and replaced `filesystem.System.GetFile(fileKey)` with `filesystem.System.GetReader(fileKey)` to avoid the confusion with `filesystem.File`.
     _The old method will still continue to work for at least until v0.29.0 but you'll get a console warning to replace it with `GetReader`._
 
-- Added new `filesystem.System.GetReuploadableFile(fileKey, preserveName)` method to return an existing blob as a `*filesystem.File` value ([#6792](https://github.com/pocketbase/pocketbase/discussions/6792)).
+- Added new `filesystem.System.GetReuploadableFile(fileKey, preserveName)` method to return an existing blob as a `*filesystem.File` value ([#6792](https://github.com/tokibase/tokibase/discussions/6792)).
     _This method could be useful in case you want to clone an existing Record file and assign it to a new Record (e.g. in a Record duplicate action)._
 
 - Other minor improvements (updated the GitHub release min Go version to 1.23.9, updated npm and Go deps, etc.)
@@ -700,11 +700,11 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.27.2
 
-- Added workers pool when cascade deleting record files to minimize _"thread exhaustion"_ errors ([#6780](https://github.com/pocketbase/pocketbase/discussions/6780)).
+- Added workers pool when cascade deleting record files to minimize _"thread exhaustion"_ errors ([#6780](https://github.com/tokibase/tokibase/discussions/6780)).
 
-- Updated the `:excerpt` fields modifier to properly account for multibyte characters ([#6778](https://github.com/pocketbase/pocketbase/issues/6778)).
+- Updated the `:excerpt` fields modifier to properly account for multibyte characters ([#6778](https://github.com/tokibase/tokibase/issues/6778)).
 
-- Use `rowid` as count column for non-view collections to minimize the need of having the id field in a covering index ([#6739](https://github.com/pocketbase/pocketbase/discussions/6739))
+- Use `rowid` as count column for non-view collections to minimize the need of having the id field in a covering index ([#6739](https://github.com/tokibase/tokibase/discussions/6739))
 
 
 ## v0.27.1
@@ -713,7 +713,7 @@ and the minor performance boost that you may get when used on large records is n
 
 - Added JSVM `new GeoPointField({ ... })` constructor.
 
-- Added _partial_ WebP thumbs generation (_the thumbs will be stored as PNG_; [#6744](https://github.com/pocketbase/pocketbase/pull/6744)).
+- Added _partial_ WebP thumbs generation (_the thumbs will be stored as PNG_; [#6744](https://github.com/tokibase/tokibase/pull/6744)).
 
 - Updated npm dev dependencies.
 
@@ -738,18 +738,18 @@ and the minor performance boost that you may get when used on large records is n
         ExpectedEvents:  map[string]int{"*": 0},
     }
     ```
-    If you are having difficulties adjusting your code, feel free to open a [Q&A discussion](https://github.com/pocketbase/pocketbase/discussions) with the failing/problematic code sample.
+    If you are having difficulties adjusting your code, feel free to open a [Q&A discussion](https://github.com/tokibase/tokibase/discussions) with the failing/problematic code sample.
 
 - Added [new `geoPoint` field](https://pocketbase.io/docs/collections/#geopoint) for storing `{"lon":x,"lat":y}` geographic coordinates.
     In addition, a new [`geoDistance(lonA, lotA, lonB, lotB)` function](https://pocketbase.io/docs/api-rules-and-filters/#geodistancelona-lata-lonb-latb) was also implemented that could be used to apply an API rule or filter constraint based on the distance (in km) between 2 geo points.
 
-- Updated the `select` field UI to accommodate better larger lists and RTL languages ([#4674](https://github.com/pocketbase/pocketbase/issues/4674)).
+- Updated the `select` field UI to accommodate better larger lists and RTL languages ([#4674](https://github.com/tokibase/tokibase/issues/4674)).
 
 - Updated the mail attachments auto MIME type detection to use `gabriel-vasile/mimetype` for consistency and broader sniffing signatures support.
 
-- Forced `text/javascript` Content-Type when serving `.js`/`.mjs` collection uploaded files with the `/api/files/...` endpoint ([#6597](https://github.com/pocketbase/pocketbase/issues/6597)).
+- Forced `text/javascript` Content-Type when serving `.js`/`.mjs` collection uploaded files with the `/api/files/...` endpoint ([#6597](https://github.com/tokibase/tokibase/issues/6597)).
 
-- Added second optional JSVM `DateTime` constructor argument for specifying a default timezone as TZ identifier when parsing the date string as alternative to a fixed offset in order to better handle daylight saving time nuances ([#6688](https://github.com/pocketbase/pocketbase/discussions/6688)):
+- Added second optional JSVM `DateTime` constructor argument for specifying a default timezone as TZ identifier when parsing the date string as alternative to a fixed offset in order to better handle daylight saving time nuances ([#6688](https://github.com/tokibase/tokibase/discussions/6688)):
     ```js
     // the same as with CET offset: new DateTime("2025-10-26 03:00:00 +01:00")
     new DateTime("2025-10-26 03:00:00", "Europe/Amsterdam") // 2025-10-26 02:00:00.000Z
@@ -767,19 +767,19 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.26.6
 
-- Allow OIDC `email_verified` to be int or boolean string since some OIDC providers like AWS Cognito has non-standard userinfo response ([#6657](https://github.com/pocketbase/pocketbase/pull/6657)).
+- Allow OIDC `email_verified` to be int or boolean string since some OIDC providers like AWS Cognito has non-standard userinfo response ([#6657](https://github.com/tokibase/tokibase/pull/6657)).
 
 - Updated `modernc.org/sqlite` to 1.36.3.
 
 
 ## v0.26.5
 
-- Fixed canonical URI parts escaping when generating the S3 request signature ([#6654](https://github.com/pocketbase/pocketbase/issues/6654)).
+- Fixed canonical URI parts escaping when generating the S3 request signature ([#6654](https://github.com/tokibase/tokibase/issues/6654)).
 
 
 ## v0.26.4
 
-- Fixed `RecordErrorEvent.Error` and `CollectionErrorEvent.Error` sync with `ModelErrorEvent.Error` ([#6639](https://github.com/pocketbase/pocketbase/issues/6639)).
+- Fixed `RecordErrorEvent.Error` and `CollectionErrorEvent.Error` sync with `ModelErrorEvent.Error` ([#6639](https://github.com/tokibase/tokibase/issues/6639)).
 
 - Fixed logs details copy to clipboard action.
 
@@ -788,7 +788,7 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.26.3
 
-- Fixed and normalized logs error serialization across common types for more consistent logs error output ([#6631](https://github.com/pocketbase/pocketbase/issues/6631)).
+- Fixed and normalized logs error serialization across common types for more consistent logs error output ([#6631](https://github.com/tokibase/tokibase/issues/6631)).
 
 
 ## v0.26.2
@@ -798,18 +798,18 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.26.1
 
-- Removed the wrapping of `io.EOF` error when reading files since currently `io.ReadAll` doesn't check for wrapped errors ([#6600](https://github.com/pocketbase/pocketbase/issues/6600)).
+- Removed the wrapping of `io.EOF` error when reading files since currently `io.ReadAll` doesn't check for wrapped errors ([#6600](https://github.com/tokibase/tokibase/issues/6600)).
 
 
 ## v0.26.0
 
-- ⚠️ Replaced `aws-sdk-go-v2` and `gocloud.dev/blob` with custom lighter implementation ([#6562](https://github.com/pocketbase/pocketbase/discussions/6562)).
+- ⚠️ Replaced `aws-sdk-go-v2` and `gocloud.dev/blob` with custom lighter implementation ([#6562](https://github.com/tokibase/tokibase/discussions/6562)).
     As a side-effect of the dependency removal, the binary size has been reduced with ~10MB and builds ~30% faster.
     _Although the change is expected to be backward-compatible, I'd recommend to test first locally the new version with your S3 provider (if you use S3 for files storage and backups)._
 
 - ⚠️ Prioritized the user submitted non-empty `createData.email` (_it will be unverified_) when creating the PocketBase user during the first OAuth2 auth.
 
-- Load the request info context during password/OAuth2/OTP authentication ([#6402](https://github.com/pocketbase/pocketbase/issues/6402)).
+- Load the request info context during password/OAuth2/OTP authentication ([#6402](https://github.com/tokibase/tokibase/issues/6402)).
     This could be useful in case you want to target the auth method as part of the MFA and Auth API rules.
     For example, to disable MFA for the OAuth2 auth could be expressed as `@request.context != "oauth2"` MFA rule.
 
@@ -817,39 +817,39 @@ and the minor performance boost that you may get when used on large records is n
 
 - Added `subscription.Message.WriteSSE(w, id)` for writing an SSE formatted message into the provided writer interface (_used mostly to assist with the unit testing_).
 
-- Added `$os.stat(file)` JSVM helper ([#6407](https://github.com/pocketbase/pocketbase/discussions/6407)).
+- Added `$os.stat(file)` JSVM helper ([#6407](https://github.com/tokibase/tokibase/discussions/6407)).
 
-- Added log warning for `async` marked JSVM handlers and resolve when possible the returned `Promise` as fallback ([#6476](https://github.com/pocketbase/pocketbase/issues/6476)).
+- Added log warning for `async` marked JSVM handlers and resolve when possible the returned `Promise` as fallback ([#6476](https://github.com/tokibase/tokibase/issues/6476)).
 
-- Allowed calling `cronAdd`, `cronRemove` from inside other JSVM handlers ([#6481](https://github.com/pocketbase/pocketbase/discussions/6481)).
+- Allowed calling `cronAdd`, `cronRemove` from inside other JSVM handlers ([#6481](https://github.com/tokibase/tokibase/discussions/6481)).
 
 - Bumped the default request read and write timeouts to 5mins (_old 3mins_) to accommodate slower internet connections and larger file uploads/downloads.
-    _If you want to change them you can modify the `OnServe` hook's `ServeEvent.ReadTimeout/WriteTimeout` fields as shown in [#6550](https://github.com/pocketbase/pocketbase/discussions/6550#discussioncomment-12364515)._
+    _If you want to change them you can modify the `OnServe` hook's `ServeEvent.ReadTimeout/WriteTimeout` fields as shown in [#6550](https://github.com/tokibase/tokibase/discussions/6550#discussioncomment-12364515)._
 
-- Normalized the `@request.auth.*` and `@request.body.*` back relations resolver to always return `null` when the relation field is pointing to a different collection ([#6590](https://github.com/pocketbase/pocketbase/discussions/6590#discussioncomment-12496581)).
+- Normalized the `@request.auth.*` and `@request.body.*` back relations resolver to always return `null` when the relation field is pointing to a different collection ([#6590](https://github.com/tokibase/tokibase/discussions/6590#discussioncomment-12496581)).
 
 - Other minor improvements (_fixed query dev log nested parameters output, reintroduced `DynamicModel` object/array props reflect types caching, updated Go and npm deps, etc._)
 
 
 ## v0.25.9
 
-- Fixed `DynamicModel` object/array props reflect type caching ([#6563](https://github.com/pocketbase/pocketbase/discussions/6563)).
+- Fixed `DynamicModel` object/array props reflect type caching ([#6563](https://github.com/tokibase/tokibase/discussions/6563)).
 
 
 ## v0.25.8
 
-- Added a default leeway of 5 minutes for the Apple/OIDC `id_token` timestamp claims check to account for clock-skew ([#6529](https://github.com/pocketbase/pocketbase/issues/6529)).
+- Added a default leeway of 5 minutes for the Apple/OIDC `id_token` timestamp claims check to account for clock-skew ([#6529](https://github.com/tokibase/tokibase/issues/6529)).
     It can be further customized if needed with the `PB_ID_TOKEN_LEEWAY` env variable (_the value must be in seconds, e.g. "PB_ID_TOKEN_LEEWAY=60" for 1 minute_).
 
 
 ## v0.25.7
 
-- Fixed `@request.body.jsonObjOrArr.*` values extraction ([#6493](https://github.com/pocketbase/pocketbase/discussions/6493)).
+- Fixed `@request.body.jsonObjOrArr.*` values extraction ([#6493](https://github.com/tokibase/tokibase/discussions/6493)).
 
 
 ## v0.25.6
 
-- Restore the missing `meta.isNew` field of the OAuth2 success response ([#6490](https://github.com/pocketbase/pocketbase/issues/6490)).
+- Restore the missing `meta.isNew` field of the OAuth2 success response ([#6490](https://github.com/tokibase/tokibase/issues/6490)).
 
 - Updated npm dependencies.
 
@@ -886,12 +886,12 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.25.3
 
-- Added a temporary exception for Backblaze S3 endpoints to exclude the new `aws-sdk-go-v2` checksum headers ([#6440](https://github.com/pocketbase/pocketbase/discussions/6440)).
+- Added a temporary exception for Backblaze S3 endpoints to exclude the new `aws-sdk-go-v2` checksum headers ([#6440](https://github.com/tokibase/tokibase/discussions/6440)).
 
 
 ## v0.25.2
 
-- Fixed realtime delete event not being fired for `RecordProxy`-ies and added basic realtime record resolve automated tests ([#6433](https://github.com/pocketbase/pocketbase/issues/6433)).
+- Fixed realtime delete event not being fired for `RecordProxy`-ies and added basic realtime record resolve automated tests ([#6433](https://github.com/tokibase/tokibase/issues/6433)).
 
 
 ## v0.25.1
@@ -913,20 +913,20 @@ and the minor performance boost that you may get when used on large records is n
     - `/v2/auth` query parameters changes:
         If you are specifying custom `approval_prompt=force` query parameter for the OAuth2 auth URL, you'll have to replace it with **`prompt=consent`**.
 
-- Added Trakt OAuth2 provider ([#6338](https://github.com/pocketbase/pocketbase/pull/6338); thanks @aidan-)
+- Added Trakt OAuth2 provider ([#6338](https://github.com/tokibase/tokibase/pull/6338); thanks @aidan-)
 
-- Added support for case-insensitive password auth based on the related UNIQUE index field collation ([#6337](https://github.com/pocketbase/pocketbase/discussions/6337)).
+- Added support for case-insensitive password auth based on the related UNIQUE index field collation ([#6337](https://github.com/tokibase/tokibase/discussions/6337)).
 
-- Enforced `when_required` for the new AWS SDK request and response checksum validations to allow other non-AWS vendors to catch up with new AWS SDK changes (see [#6313](https://github.com/pocketbase/pocketbase/discussions/6313) and [aws/aws-sdk-go-v2#2960](https://github.com/aws/aws-sdk-go-v2/discussions/2960)).
+- Enforced `when_required` for the new AWS SDK request and response checksum validations to allow other non-AWS vendors to catch up with new AWS SDK changes (see [#6313](https://github.com/tokibase/tokibase/discussions/6313) and [aws/aws-sdk-go-v2#2960](https://github.com/aws/aws-sdk-go-v2/discussions/2960)).
     _You can set the environment variables `AWS_REQUEST_CHECKSUM_CALCULATION` and `AWS_RESPONSE_CHECKSUM_VALIDATION` to `when_supported` if your S3 vendor supports the [new default integrity protections](https://docs.aws.amazon.com/sdkref/latest/guide/feature-dataintegrity.html)._
 
-- Soft-deprecated `Record.GetUploadedFiles` in favor of `Record.GetUnsavedFiles` to minimize the ambiguities what the method do ([#6269](https://github.com/pocketbase/pocketbase/discussions/6269)).
+- Soft-deprecated `Record.GetUploadedFiles` in favor of `Record.GetUnsavedFiles` to minimize the ambiguities what the method do ([#6269](https://github.com/tokibase/tokibase/discussions/6269)).
 
 - Replaced archived `github.com/AlecAivazis/survey` dependency with a simpler  `osutils.YesNoPrompt(message, fallback)` helper.
 
 - Upgraded to `golang-jwt/jwt/v5`.
 
-- Added JSVM `new Timezone(name)` binding for constructing `time.Location` value ([#6219](https://github.com/pocketbase/pocketbase/discussions/6219)).
+- Added JSVM `new Timezone(name)` binding for constructing `time.Location` value ([#6219](https://github.com/tokibase/tokibase/discussions/6219)).
 
 - Added `inflector.Camelize(str)` and `inflector.Singularize(str)` helper methods.
 
@@ -937,14 +937,14 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.24.4
 
-- Fixed fields extraction for view query with nested comments ([#6309](https://github.com/pocketbase/pocketbase/discussions/6309)).
+- Fixed fields extraction for view query with nested comments ([#6309](https://github.com/tokibase/tokibase/discussions/6309)).
 
 - Bumped GitHub action min Go version to 1.23.5 as it comes with some [minor security fixes](https://github.com/golang/go/issues?q=milestone%3AGo1.23.5).
 
 
 ## v0.24.3
 
-- Fixed incorrectly reported unique validator error for fields starting with name of another field ([#6281](https://github.com/pocketbase/pocketbase/pull/6281); thanks @svobol13).
+- Fixed incorrectly reported unique validator error for fields starting with name of another field ([#6281](https://github.com/tokibase/tokibase/pull/6281); thanks @svobol13).
 
 - Reload the created/edited records data in the RecordsPicker UI.
 
@@ -953,7 +953,7 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.24.2
 
-- Fixed display fields extraction when there are multiple "Presentable" `relation` fields in a single related collection ([#6229](https://github.com/pocketbase/pocketbase/issues/6229)).
+- Fixed display fields extraction when there are multiple "Presentable" `relation` fields in a single related collection ([#6229](https://github.com/tokibase/tokibase/issues/6229)).
 
 
 ## v0.24.1
@@ -966,7 +966,7 @@ and the minor performance boost that you may get when used on large records is n
 ## v0.24.0
 
 - ⚠️ Removed the "dry submit" when executing the collections Create API rule
-    (you can find more details why this change was introduced and how it could affect your app in https://github.com/pocketbase/pocketbase/discussions/6073).
+    (you can find more details why this change was introduced and how it could affect your app in https://github.com/tokibase/tokibase/discussions/6073).
     For most users it should be non-breaking change, BUT if you have Create API rules that uses self-references or view counters you may have to adjust them manually.
     With this change the "multi-match" operators are also normalized in case the targeted collection doesn't have any records
     (_or in other words, `@collection.example.someField != "test"` will result to `true` if `example` collection has no records because it satisfies the condition that all available "example" records mustn't have `someField` equal to "test"_).
@@ -983,7 +983,7 @@ and the minor performance boost that you may get when used on large records is n
 
 - Added cache for the JSVM `arrayOf(m)`, `DynamicModel`, etc. dynamic `reflect` created types.
 
-- Added auth collection select for the settings "Send test email" popup ([#6166](https://github.com/pocketbase/pocketbase/issues/6166)).
+- Added auth collection select for the settings "Send test email" popup ([#6166](https://github.com/tokibase/tokibase/issues/6166)).
 
 - Added `record.SetRandomPassword()` to simplify random password generation usually used in the OAuth2 or OTP record creation flows.
     _The generated ~30 chars random password is assigned directly as bcrypt hash and ignores the `password` field plain value validators like min/max length or regex pattern._
@@ -998,20 +998,20 @@ and the minor performance boost that you may get when used on large records is n
 
 - Added `tests.NewTestAppWithConfig(config)` helper if you need more control over the test configurations like `IsDev`, the number of allowed connections, etc.
 
-- Invalidate all record tokens when the auth record email is changed programmatically or by a superuser ([#5964](https://github.com/pocketbase/pocketbase/issues/5964)).
+- Invalidate all record tokens when the auth record email is changed programmatically or by a superuser ([#5964](https://github.com/tokibase/tokibase/issues/5964)).
 
 - Eagerly interrupt waiting for the email alert send in case it takes longer than 15s.
 
 - Normalized the hidden fields filter checks and allow targeting hidden fields in the List API rule.
 
-- Fixed "Unique identify fields" input not refreshing on unique indexes change ([#6184](https://github.com/pocketbase/pocketbase/issues/6184)).
+- Fixed "Unique identify fields" input not refreshing on unique indexes change ([#6184](https://github.com/tokibase/tokibase/issues/6184)).
 
 
 ## v0.23.12
 
-- Added warning logs in case of mismatched `modernc.org/sqlite` and `modernc.org/libc` versions ([#6136](https://github.com/pocketbase/pocketbase/issues/6136#issuecomment-2556336962)).
+- Added warning logs in case of mismatched `modernc.org/sqlite` and `modernc.org/libc` versions ([#6136](https://github.com/tokibase/tokibase/issues/6136#issuecomment-2556336962)).
 
-- Skipped the default body size limit middleware for the backup upload endpoint ([#6152](https://github.com/pocketbase/pocketbase/issues/6152)).
+- Skipped the default body size limit middleware for the backup upload endpoint ([#6152](https://github.com/tokibase/tokibase/issues/6152)).
 
 
 ## v0.23.11
@@ -1022,7 +1022,7 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.23.10
 
-- Renew the superuser file token cache when clicking on the thumb preview or download link ([#6137](https://github.com/pocketbase/pocketbase/discussions/6137)).
+- Renew the superuser file token cache when clicking on the thumb preview or download link ([#6137](https://github.com/tokibase/tokibase/discussions/6137)).
 
 - Upgraded `modernc.org/sqlite` to 1.34.3 to fix "disk io" error on arm64 systems.
     _If you are extending PocketBase with Go and upgrading with `go get -u` make sure to manually set in your go.mod the `modernc.org/libc` indirect dependency to v1.55.3, aka. the exact same version the driver is using._
@@ -1030,28 +1030,28 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.23.9
 
-- Replaced `strconv.Itoa` with `strconv.FormatInt` to avoid the int64->int conversion overflow on 32-bit platforms ([#6132](https://github.com/pocketbase/pocketbase/discussions/6132)).
+- Replaced `strconv.Itoa` with `strconv.FormatInt` to avoid the int64->int conversion overflow on 32-bit platforms ([#6132](https://github.com/tokibase/tokibase/discussions/6132)).
 
 
 ## v0.23.8
 
-- Fixed Model->Record and Model->Collection hook events sync for nested and/or inner-hook transactions ([#6122](https://github.com/pocketbase/pocketbase/discussions/6122)).
+- Fixed Model->Record and Model->Collection hook events sync for nested and/or inner-hook transactions ([#6122](https://github.com/tokibase/tokibase/discussions/6122)).
 
 - Other minor improvements (updated Go and npm deps, added extra escaping for the default mail record params in case the emails are stored as html files, fixed code comment typos, etc.).
 
 
 ## v0.23.7
 
-- Fixed JSVM exception -> Go error unwrapping when throwing errors from non-request hooks ([#6102](https://github.com/pocketbase/pocketbase/discussions/6102)).
+- Fixed JSVM exception -> Go error unwrapping when throwing errors from non-request hooks ([#6102](https://github.com/tokibase/tokibase/discussions/6102)).
 
 
 ## v0.23.6
 
-- Fixed `$filesystem.fileFromURL` documentation and generated type ([#6058](https://github.com/pocketbase/pocketbase/issues/6058)).
+- Fixed `$filesystem.fileFromURL` documentation and generated type ([#6058](https://github.com/tokibase/tokibase/issues/6058)).
 
-- Fixed `X-Forwarded-For` header typo in the suggested UI "Common trusted proxy" headers ([#6063](https://github.com/pocketbase/pocketbase/pull/6063)).
+- Fixed `X-Forwarded-For` header typo in the suggested UI "Common trusted proxy" headers ([#6063](https://github.com/tokibase/tokibase/pull/6063)).
 
-- Updated the `text` field max length validator error message to make it more clear ([#6066](https://github.com/pocketbase/pocketbase/issues/6066)).
+- Updated the `text` field max length validator error message to make it more clear ([#6066](https://github.com/tokibase/tokibase/issues/6066)).
 
 - Other minor fixes (updated Go deps, skipped unnecessary validator check when the default primary key pattern is used, updated JSVM types, etc.).
 
@@ -1060,7 +1060,7 @@ and the minor performance boost that you may get when used on large records is n
 
 - Fixed UI logs search not properly accounting for the "Include requests by superusers" toggle when multiple search expressions are used.
 
-- Fixed `text` field max validation error message ([#6053](https://github.com/pocketbase/pocketbase/issues/6053)).
+- Fixed `text` field max validation error message ([#6053](https://github.com/tokibase/tokibase/issues/6053)).
 
 - Other minor fixes (comment typos, JSVM types update).
 
@@ -1069,11 +1069,11 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.23.4
 
-- Fixed `autodate` fields not refreshing when calling `Save` multiple times on the same `Record` instance ([#6000](https://github.com/pocketbase/pocketbase/issues/6000)).
+- Fixed `autodate` fields not refreshing when calling `Save` multiple times on the same `Record` instance ([#6000](https://github.com/tokibase/tokibase/issues/6000)).
 
-- Added more descriptive test OTP id and failure log message ([#5982](https://github.com/pocketbase/pocketbase/discussions/5982)).
+- Added more descriptive test OTP id and failure log message ([#5982](https://github.com/tokibase/tokibase/discussions/5982)).
 
-- Moved the default UI CSP from meta tag to response header ([#5995](https://github.com/pocketbase/pocketbase/discussions/5995)).
+- Moved the default UI CSP from meta tag to response header ([#5995](https://github.com/tokibase/tokibase/discussions/5995)).
 
 - Updated Go and npm dependencies.
 
@@ -1082,12 +1082,12 @@ and the minor performance boost that you may get when used on large records is n
 
 - Fixed Gzip middleware not applying when serving static files.
 
-- Fixed `Record.Fresh()`/`Record.Clone()` methods not properly cloning `autodate` fields ([#5973](https://github.com/pocketbase/pocketbase/discussions/5973)).
+- Fixed `Record.Fresh()`/`Record.Clone()` methods not properly cloning `autodate` fields ([#5973](https://github.com/tokibase/tokibase/discussions/5973)).
 
 
 ## v0.23.2
 
-- Fixed `RecordQuery()` custom struct scanning ([#5958](https://github.com/pocketbase/pocketbase/discussions/5958)).
+- Fixed `RecordQuery()` custom struct scanning ([#5958](https://github.com/tokibase/tokibase/discussions/5958)).
 
 - Fixed `--dev` log query print formatting.
 
@@ -1099,7 +1099,7 @@ and the minor performance boost that you may get when used on large records is n
 
 ## v0.23.1
 
-- Added `RequestEvent.Blob(status, contentType, bytes)` response write helper ([#5940](https://github.com/pocketbase/pocketbase/discussions/5940)).
+- Added `RequestEvent.Blob(status, contentType, bytes)` response write helper ([#5940](https://github.com/tokibase/tokibase/discussions/5940)).
 
 - Added more descriptive error messages.
 
@@ -1149,11 +1149,11 @@ There are a lot of changes but to highlight some of the most notable ones:
 - One-Time Password (OTP) auth method (_via email code_).
 - Multi-Factor Authentication (MFA) support (_currently requires any 2 different auth methods to be used_).
 - Support for Record "proxy/projection" in preparation for the planned autogeneration of typed Go record models.
-- Linear OAuth2 provider ([#5909](https://github.com/pocketbase/pocketbase/pull/5909); thanks @chnfyi).
-- WakaTime OAuth2 provider ([#5829](https://github.com/pocketbase/pocketbase/pull/5829); thanks @tigawanna).
-- Notion OAuth2 provider ([#4999](https://github.com/pocketbase/pocketbase/pull/4999); thanks @s-li1).
-- monday.com OAuth2 provider ([#5346](https://github.com/pocketbase/pocketbase/pull/5346); thanks @Jaytpa01).
-- New Instagram provider compatible with the new Instagram Login APIs ([#5588](https://github.com/pocketbase/pocketbase/pull/5588); thanks @pnmcosta).
+- Linear OAuth2 provider ([#5909](https://github.com/tokibase/tokibase/pull/5909); thanks @chnfyi).
+- WakaTime OAuth2 provider ([#5829](https://github.com/tokibase/tokibase/pull/5829); thanks @tigawanna).
+- Notion OAuth2 provider ([#4999](https://github.com/tokibase/tokibase/pull/4999); thanks @s-li1).
+- monday.com OAuth2 provider ([#5346](https://github.com/tokibase/tokibase/pull/5346); thanks @Jaytpa01).
+- New Instagram provider compatible with the new Instagram Login APIs ([#5588](https://github.com/tokibase/tokibase/pull/5588); thanks @pnmcosta).
     _The provider key is `instagram2` to prevent conflicts with existing linked users._
 - Option to retrieve the OIDC OAuth2 user info from the `id_token` payload for the cases when the provider doesn't have a dedicated user info endpoint.
 - Various minor UI improvements (_recursive `Presentable` view, slightly different collection options organization, zoom/pan for the logs chart, etc._)
@@ -1197,9 +1197,9 @@ There are a lot of changes but to highlight some of the most notable ones:
 
 - ⚠️ Removed `GET /records/{id}/external-auths` and `DELETE /records/{id}/external-auths/{provider}` endpoints because this is now handled by sending list and delete requests to the `_externalAuths` collection.
 
-- ⚠️ Changes to the app settings model fields and response (+new options such as `trustedProxy`, `rateLimits`, `batch`, etc.). The app settings Web APIs are mostly used by the Dashboard UI and rarely by the end users, but if you want to check all settings changes please refer to the [Settings Go struct](https://github.com/pocketbase/pocketbase/blob/develop/core/settings_model.go#L121).
+- ⚠️ Changes to the app settings model fields and response (+new options such as `trustedProxy`, `rateLimits`, `batch`, etc.). The app settings Web APIs are mostly used by the Dashboard UI and rarely by the end users, but if you want to check all settings changes please refer to the [Settings Go struct](https://github.com/tokibase/tokibase/blob/develop/core/settings_model.go#L121).
 
-- ⚠️ New flatten Collection model and fields structure. The Collection model Web APIs are mostly used by the Dashboard UI and rarely by the end users, but if you want to check all changes please refer to the [Collection Go struct](https://github.com/pocketbase/pocketbase/blob/develop/core/collection_model.go#L308).
+- ⚠️ New flatten Collection model and fields structure. The Collection model Web APIs are mostly used by the Dashboard UI and rarely by the end users, but if you want to check all changes please refer to the [Collection Go struct](https://github.com/tokibase/tokibase/blob/develop/core/collection_model.go#L308).
 
 - ⚠️ The top level error response `code` key was renamed to `status` for consistency with the Go APIs.
     The error field key remains `code`:

@@ -1,6 +1,6 @@
 ## v0.40.4
 
-- Fixed migration deadlock if a logs db write happens to run while the migration is still executing ([#7836](https://github.com/pocketbase/pocketbase/issues/7836)).
+- Fixed migration deadlock if a logs db write happens to run while the migration is still executing ([#7836](https://github.com/tokibase/tokibase/issues/7836)).
 
 - `app.ResetBootstrapState()` was soft-deprecated in favour of `app.ClearBootstrap()`.
     _Additionally a new `app.OnClearBootstrap()` hook was added to allow clearing custom allocated `OnBootstrap` resources in case the app uses a non-standard initialization (e.g. doesn't call `Start()` or intentionally skip the `OnTerminate` hook)._
@@ -25,9 +25,9 @@
 
 - Minor UI fixes (updated dark primary btn color contrast, force reload the records list if the deleted record has self-referenced cascade relation field, etc.).
 
-- Changed JSVM `$app` variable definition from TS type to interface ([#7834](https://github.com/pocketbase/pocketbase/issues/7834)).
+- Changed JSVM `$app` variable definition from TS type to interface ([#7834](https://github.com/tokibase/tokibase/issues/7834)).
 
-- Bumped `golang.org/x/*` dependencies to silence security scanners ([#7829](https://github.com/pocketbase/pocketbase/discussions/7829)).
+- Bumped `golang.org/x/*` dependencies to silence security scanners ([#7829](https://github.com/tokibase/tokibase/discussions/7829)).
 
 
 ## v0.40.2
@@ -48,8 +48,8 @@
 ## v0.40.1
 
 - Fixes for some reported regressions related to the `encoding/json/v2` update:
-    - allow mangling invalid UTF8 characters when serializing json data ([#7814](https://github.com/pocketbase/pocketbase/issues/7814))
-    - fixed OAuth2 providers config merge incorrectly replacing the entire slice ([#7815](https://github.com/pocketbase/pocketbase/issues/7815))
+    - allow mangling invalid UTF8 characters when serializing json data ([#7814](https://github.com/tokibase/tokibase/issues/7814))
+    - fixed OAuth2 providers config merge incorrectly replacing the entire slice ([#7815](https://github.com/tokibase/tokibase/issues/7815))
 
 
 ## v0.40.0
@@ -79,7 +79,7 @@
     - `filesystem.OnNewWriter()` hook to allow listening for new/to-be-created files _(it is not exposed in `core.App` instance for now to avoid introducing breaking changes)_.
     - `filesystem.OnDelete()` hook to allow listening for deleted files _(it is not exposed in `core.App` instance for now to avoid introducing breaking changes)_.
 
-- Optimized backups to no longer transaction lock the database during backup generation ([#7799](https://github.com/pocketbase/pocketbase/discussions/7799#discussioncomment-18108244)).
+- Optimized backups to no longer transaction lock the database during backup generation ([#7799](https://github.com/tokibase/tokibase/discussions/7799#discussioncomment-18108244)).
 
 - Updated `modernc.org/sqlite` to 1.57.0 and registered by default the new `_defensive=1` DSN query parameter to enable [SQLite's defensive mode](https://sqlite.org/c3ref/c_dbconfig_defensive.html#sqlitedbconfigdefensive).
 

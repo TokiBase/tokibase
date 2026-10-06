@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tests"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/tests"
 )
 
 func TestEmailFieldBaseMethods(t *testing.T) {

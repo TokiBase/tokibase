@@ -11,7 +11,7 @@ This means:
 - no inflated severity (we can discuss the CVSS score after confirming the issue)
 - no LLMs usage as part of your report description or followup communication
 
-Reports that don't follow the above will NOT be reviewed no matter of their validity _(you are of course free to publish whatever you want; see also [#7718](https://github.com/pocketbase/pocketbase/discussions/7718))_.
+Reports that don't follow the above will NOT be reviewed no matter of their validity _(you are of course free to publish whatever you want; see also [#7718](https://github.com/tokibase/tokibase/discussions/7718))_.
 
 **Or in other words - a simple _"Hey I think I found a security issue when I do X"_ is enough.**
 
@@ -28,7 +28,7 @@ In case the vulnerability is confirmed:
 <details>
 <summary><strong>Stored XSS</strong></summary>
 
-This was discussed several times, both privately and [publicly](https://github.com/pocketbase/pocketbase/discussions/6694), but I remain on the opinion that it should be handled primarily on the client-side.
+This was discussed several times, both privately and [publicly](https://github.com/tokibase/tokibase/discussions/6694), but I remain on the opinion that it should be handled primarily on the client-side.
 
 Modern browsers recently introduced a basic [`Sanitizer` interface](https://developer.mozilla.org/en-US/docs/Web/API/Sanitizer) that could help filtering HTML strings without external libraries.
 
@@ -38,7 +38,7 @@ Having also a default [Content Security Policy (CSP)](https://developer.mozilla.
 <details>
 <summary><strong>SQL injection in low level DB methods like <code>app.DeleteTable(dangerousName)</code></strong></summary>
 
-This is working correctly and it is not an issue but it is a common report most likely found by LLM or some other automated tools that may have stumbled on the [NB! code comments](https://pkg.go.dev/github.com/pocketbase/pocketbase@master/core#BaseApp.DeleteTable).
+This is working correctly and it is not an issue but it is a common report most likely found by LLM or some other automated tools that may have stumbled on the [NB! code comments](https://pkg.go.dev/github.com/tokibase/tokibase@master/core#BaseApp.DeleteTable).
 
 Raw SQL statements, table and column names are not parameterized and they are vulnerable to SQL injection if used with untrusted input. The documentation as seen above already warns against it. In recent PocketBase releases, many of the arguments of these methods were also prefixed with `dangerous*` to make it even more clear that they should be used with caution.
 </details>
@@ -59,7 +59,7 @@ For the cases where transactions are really needed, users can utilize the [Batch
 <details>
 <summary><strong>List/Search side-channel attacks</strong></summary>
 
-Over the years we've implemented several extra checks to minimize the risk of List/Search side-channel attacks (see especially [v0.32.0](https://github.com/pocketbase/pocketbase/blob/master/CHANGELOG.md#v0320)) but users need to be aware that all client-side filtered fields are technically subject to timing attacks _(whether they are practical or not is a different topic)_.
+Over the years we've implemented several extra checks to minimize the risk of List/Search side-channel attacks (see especially [v0.32.0](https://github.com/tokibase/tokibase/blob/master/CHANGELOG.md#v0320)) but users need to be aware that all client-side filtered fields are technically subject to timing attacks _(whether they are practical or not is a different topic)_.
 
 This is by design and it is accepted tradeoff between performance, security and usability.
 

@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/mails"
-	"github.com/pocketbase/pocketbase/tools/router"
-	"github.com/pocketbase/pocketbase/tools/routine"
-	"github.com/pocketbase/pocketbase/tools/search"
-	"github.com/pocketbase/pocketbase/tools/security"
-	"github.com/pocketbase/pocketbase/tools/types"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/mails"
+	"github.com/tokibase/tokibase/tools/router"
+	"github.com/tokibase/tokibase/tools/routine"
+	"github.com/tokibase/tokibase/tools/search"
+	"github.com/tokibase/tokibase/tools/security"
+	"github.com/tokibase/tokibase/tools/types"
 )
 
 const (

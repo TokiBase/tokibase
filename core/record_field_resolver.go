@@ -9,10 +9,10 @@ import (
 	"strings"
 
 	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/tools/inflector"
-	"github.com/pocketbase/pocketbase/tools/search"
-	"github.com/pocketbase/pocketbase/tools/security"
-	"github.com/pocketbase/pocketbase/tools/types"
+	"github.com/tokibase/tokibase/tools/inflector"
+	"github.com/tokibase/tokibase/tools/search"
+	"github.com/tokibase/tokibase/tools/security"
+	"github.com/tokibase/tokibase/tools/types"
 	"github.com/spf13/cast"
 )
 
@@ -214,7 +214,7 @@ func (r *RecordFieldResolver) updateQueryWithDeduplicateConstraint(query *dbx.Se
 	//
 	// Disable the GROUP BY conditional checks for now since it prevents
 	// proper utilization of ORDER BY indexes (and maybe others)
-	// (https://github.com/pocketbase/pocketbase/discussions/7461)
+	// (https://github.com/tokibase/tokibase/discussions/7461)
 
 	// info := query.Info()
 	// if info.Distinct {

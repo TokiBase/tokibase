@@ -4,8 +4,8 @@ import (
 	"net/http"
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tools/security"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/tools/security"
 )
 
 func recordConfirmEmailChange(e *core.RequestEvent) error {

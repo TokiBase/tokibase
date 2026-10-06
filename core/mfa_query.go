@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/tools/types"
+	"github.com/tokibase/tokibase/tools/types"
 )
 
 // FindAllMFAsByRecord returns all MFA models linked to the provided auth record.

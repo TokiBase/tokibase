@@ -9,10 +9,10 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tools/hook"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/tools/hook"
 
-	_ "github.com/pocketbase/pocketbase/migrations"
+	_ "github.com/tokibase/tokibase/migrations"
 )
 
 // TestApp is a wrapper app instance used for testing.
@@ -155,7 +155,7 @@ func NewTestAppWithConfig(config core.BaseAppConfig) (*TestApp, error) {
 	t.OnServe().Bind(&hook.Handler[*core.ServeEvent]{
 		Func: func(e *core.ServeEvent) error {
 			t.registerEventCall("OnServe")
-			e.InstallerFunc = nil // https://github.com/pocketbase/pocketbase/discussions/7202
+			e.InstallerFunc = nil // https://github.com/tokibase/tokibase/discussions/7202
 			return e.Next()
 		},
 		Priority: -99999,

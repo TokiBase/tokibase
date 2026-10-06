@@ -7,10 +7,10 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/pocketbase/pocketbase/apis"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tests"
-	"github.com/pocketbase/pocketbase/tools/hook"
+	"github.com/tokibase/tokibase/apis"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/tests"
+	"github.com/tokibase/tokibase/tools/hook"
 )
 
 func TestDefaultRateLimitMiddleware(t *testing.T) {

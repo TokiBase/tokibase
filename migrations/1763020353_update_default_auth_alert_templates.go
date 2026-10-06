@@ -1,7 +1,7 @@
 package migrations
 
 import (
-	"github.com/pocketbase/pocketbase/core"
+	"github.com/tokibase/tokibase/core"
 )
 
 const oldAuthAlertTemplate = `<p>Hello,</p>

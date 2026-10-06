@@ -1,4 +1,4 @@
-package pocketbase
+package tokibase
 
 import (
 	"errors"
@@ -10,15 +10,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pocketbase/pocketbase/cmd"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tools/hook"
-	"github.com/pocketbase/pocketbase/tools/list"
-	"github.com/pocketbase/pocketbase/tools/osutils"
-	"github.com/pocketbase/pocketbase/tools/routine"
+	"github.com/tokibase/tokibase/cmd"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/tools/hook"
+	"github.com/tokibase/tokibase/tools/list"
+	"github.com/tokibase/tokibase/tools/osutils"
+	"github.com/tokibase/tokibase/tools/routine"
 	"github.com/spf13/cobra"
 
-	_ "github.com/pocketbase/pocketbase/migrations"
+	_ "github.com/tokibase/tokibase/migrations"
 )
 
 var _ core.App = (*PocketBase)(nil)
@@ -141,7 +141,7 @@ func NewWithConfig(config Config) *PocketBase {
 	// hide the default help command (allow only `--help` flag)
 	pb.RootCmd.SetHelpCommand(&cobra.Command{Hidden: true})
 
-	// https://github.com/pocketbase/pocketbase/issues/6136
+	// https://github.com/tokibase/tokibase/issues/6136
 	pb.OnBootstrap().Bind(&hook.Handler[*core.BootstrapEvent]{
 		Id: ModerncDepsCheckHookId,
 		Func: func(be *core.BootstrapEvent) error {
@@ -254,8 +254,8 @@ func (pb *PocketBase) eagerParseFlags(config *Config) error {
 // - is the default help command
 // - is the default version command
 //
-// https://github.com/pocketbase/pocketbase/issues/404
-// https://github.com/pocketbase/pocketbase/discussions/1267
+// https://github.com/tokibase/tokibase/issues/404
+// https://github.com/tokibase/tokibase/discussions/1267
 func (pb *PocketBase) skipBootstrap() bool {
 	flags := []string{
 		"-h",

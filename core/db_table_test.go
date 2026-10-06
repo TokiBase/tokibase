@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tests"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/tests"
 )
 
 func TestHasTable(t *testing.T) {

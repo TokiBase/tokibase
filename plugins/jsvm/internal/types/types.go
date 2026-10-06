@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/plugins/jsvm"
-	"github.com/pocketbase/pocketbase/tools/list"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/plugins/jsvm"
+	"github.com/tokibase/tokibase/tools/list"
 	"github.com/pocketbase/tygoja"
 )
 
@@ -128,7 +128,7 @@ type excludeHooks<Type> = {
 // core.App without the on* hook methods
 type CoreApp = excludeHooks<ORIGINAL_CORE_APP>
 
-// pocketbase.PocketBase without the on* hook methods
+// tokibase.PocketBase without the on* hook methods
 interface PocketBase extends excludeHooks<ORIGINAL_POCKETBASE>{}
 
 /**
@@ -1291,14 +1291,14 @@ func main() {
 		Packages: map[string][]string{
 			"github.com/pocketbase/ozzo-validation/v4":          {"Error"},
 			"github.com/pocketbase/dbx":                         {"*"},
-			"github.com/pocketbase/pocketbase/tools/security":   {"*"},
-			"github.com/pocketbase/pocketbase/tools/filesystem": {"*"},
-			"github.com/pocketbase/pocketbase/tools/template":   {"*"},
-			"github.com/pocketbase/pocketbase/mails":            {"*"},
-			"github.com/pocketbase/pocketbase/apis":             {"*"},
-			"github.com/pocketbase/pocketbase/core":             {"*"},
-			"github.com/pocketbase/pocketbase/forms":            {"*"},
-			"github.com/pocketbase/pocketbase":                  {"*"},
+			"github.com/tokibase/tokibase/tools/security":   {"*"},
+			"github.com/tokibase/tokibase/tools/filesystem": {"*"},
+			"github.com/tokibase/tokibase/tools/template":   {"*"},
+			"github.com/tokibase/tokibase/mails":            {"*"},
+			"github.com/tokibase/tokibase/apis":             {"*"},
+			"github.com/tokibase/tokibase/core":             {"*"},
+			"github.com/tokibase/tokibase/forms":            {"*"},
+			"github.com/tokibase/tokibase":                  {"*"},
 			"path/filepath":                                     {"*"},
 			"os":                                                {"*"},
 			"os/exec":                                           {"Command"},
@@ -1344,9 +1344,9 @@ func main() {
 
 	// replace the original app interfaces with their non-"on*"" hooks equivalents
 	result = strings.ReplaceAll(result, "core.App", "CoreApp")
-	result = strings.ReplaceAll(result, "pocketbase.PocketBase", "PocketBase")
+	result = strings.ReplaceAll(result, "tokibase.PocketBase", "PocketBase")
 	result = strings.ReplaceAll(result, "ORIGINAL_CORE_APP", "core.App")
-	result = strings.ReplaceAll(result, "ORIGINAL_POCKETBASE", "pocketbase.PocketBase")
+	result = strings.ReplaceAll(result, "ORIGINAL_POCKETBASE", "tokibase.PocketBase")
 
 	// prepend a timestamp with the generation time
 	// so that it can be compared without reading the entire file

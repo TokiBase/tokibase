@@ -1,0 +1,38 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: go vet ./...
+      - run: go test ./... -short
+  build-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: build solo (with UI)
+        run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags "-s -w" -o out/toki-solo ./examples/base
+      - name: build no_ui
+        run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -tags no_ui -ldflags "-s -w" -o out/toki-noui ./examples/base
+      - name: size budget
+        run: |
+          s=$(stat -c %s out/toki-solo); n=$(stat -c %s out/toki-noui)
+          echo "solo=$((s/1024/1024))MB noui=$((n/1024/1024))MB"
+          test $s -le $((45*1024*1024)) || { echo "solo over 45MB budget"; exit 1; }
+          test $n -le $((40*1024*1024)) || { echo "no_ui over 40MB budget"; exit 1; }

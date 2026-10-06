@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pocketbase/pocketbase/tools/subscriptions"
+	"github.com/tokibase/tokibase/tools/subscriptions"
 )
 
 func TestMessageWrite(t *testing.T) {
