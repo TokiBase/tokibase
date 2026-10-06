@@ -16,7 +16,7 @@ modules/    storage drivers, auth providers, realtime, hooks, jobs, replication,
 
 Dependency rules, enforced by `depguard` in CI:
 
-1. `kernel` imports nothing outside stdlib and the SQLite driver.
+1. `kernel` imports nothing outside stdlib and `dbx` (the SQLite driver lives in `modules/store/sqlite`).
 2. Modules import `kernel` only; modules never import each other.
 3. `server` imports `kernel` and modules.
 
@@ -28,6 +28,7 @@ Goal: profile `solo` behaves identically to PocketBase v0.40.4.
 - [ ] Map every place SQLite leaks above the store layer (`docs/PHASE0_AUDIT.md`).
 - [x] Move `core/` pieces into `kernel/`, no behavior change (`docs/PHASE0_KERNEL_SPLIT.md`). `core` stays as the server facing compatibility package (type aliases + request hooks). Store interface is still to come.
 - [x] `depguard` rule for `kernel/**` in `golangci.yml` and `kernel/deps_test.go` (runs in CI with `go test`).
+- [x] Move the SQLite driver, connection setup, pragmas, maintenance, lock retry and error classification to `modules/store/sqlite` behind `kernel.DBOpener`/`kernel.DBConn` (`docs/PHASE0_SQLITE_STORE.md`). Typed record CRUD on the store is still to come.
 - [ ] CI job that runs `golangci-lint`.
 - [ ] CI: build matrix (linux/darwin/windows x amd64/arm64), `-s -w`, size budgets.
 - [ ] CI: official JS SDK and Dart SDK test suites against the binary.

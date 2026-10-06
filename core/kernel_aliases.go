@@ -2,7 +2,10 @@
 
 package core
 
-import "github.com/tokibase/tokibase/kernel"
+import (
+	"github.com/tokibase/tokibase/kernel"
+	"github.com/tokibase/tokibase/modules/store/sqlite"
+)
 
 // This file keeps the former core package API by aliasing the identifiers
 // that moved to the HTTP-free kernel package (see docs/PHASE0_KERNEL_SPLIT.md).
@@ -24,7 +27,10 @@ type (
 	Collection               = kernel.Collection
 	CollectionErrorEvent     = kernel.CollectionErrorEvent
 	CollectionEvent          = kernel.CollectionEvent
+	DBConfig                 = kernel.DBConfig
+	DBConn                   = kernel.DBConn
 	DBConnectFunc            = kernel.DBConnectFunc
+	DBOpener                 = kernel.DBOpener
 	DBExporter               = kernel.DBExporter
 	DateField                = kernel.DateField
 	DriverValuer             = kernel.DriverValuer
@@ -106,7 +112,7 @@ type (
 
 // Functions.
 var (
-	DefaultDBConnect               = kernel.DefaultDBConnect
+	DefaultDBConnect               = sqlite.DefaultConnect
 	DefaultFieldHelpValidationRule = kernel.DefaultFieldHelpValidationRule
 	DefaultFieldIdValidationRule   = kernel.DefaultFieldIdValidationRule
 	DefaultFieldNameValidationRule = kernel.DefaultFieldNameValidationRule

@@ -52,8 +52,9 @@ func TestBaseAppLoggerLevelDevPrint(t *testing.T) {
 			defer os.RemoveAll(testDataDir)
 
 			app := NewBaseApp(BaseAppConfig{
-				DataDir: testDataDir,
-				IsDev:   s.isDev,
+				DBOpener: testOpener{},
+				DataDir:  testDataDir,
+				IsDev:    s.isDev,
 			})
 			defer app.ClearBootstrap()
 

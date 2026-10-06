@@ -10,13 +10,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/tokibase/tokibase/cmd"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/modules/store/sqlite"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/list"
 	"github.com/tokibase/tokibase/tools/osutils"
 	"github.com/tokibase/tokibase/tools/routine"
-	"github.com/spf13/cobra"
 
 	_ "github.com/tokibase/tokibase/migrations"
 )
@@ -152,7 +153,7 @@ func NewWithConfig(config Config) *PocketBase {
 			// run separately to avoid blocking
 			app := be.App
 			routine.FireAndForget(func() {
-				checkModerncDeps(app)
+				sqlite.CheckModerncDeps(app)
 			})
 
 			return nil

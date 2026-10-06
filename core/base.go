@@ -2,6 +2,7 @@ package core
 
 import (
 	"github.com/tokibase/tokibase/kernel"
+	"github.com/tokibase/tokibase/modules/store/sqlite"
 	"github.com/tokibase/tokibase/tools/filesystem/fshttp"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/mailer"
@@ -29,6 +30,11 @@ func NewBaseApp(config BaseAppConfig) *BaseApp {
 	// wire the net/http dependent drivers that the kernel can't import
 	if config.MailClientFactory == nil {
 		config.MailClientFactory = newMailClient
+	}
+	if config.DBOpener == nil {
+		// wire the default (SQLite) store module; a custom DBConnect
+		// keeps working and is adapted to the same opener
+		config.DBOpener = sqlite.NewOpenerFunc(config.DBConnect)
 	}
 	if config.S3FilesystemFactory == nil {
 		config.S3FilesystemFactory = fshttp.NewS3

@@ -41,6 +41,10 @@ linters:
               desc: the kernel must not import the server packages
             - pkg: os/exec
               desc: the kernel must not spawn OS processes
+            - pkg: modernc.org/sqlite
+              desc: the SQLite driver lives in modules/store/sqlite (kernel uses the DBOpener interface)
+            - pkg: github.com/tokibase/tokibase/modules
+              desc: the kernel must not import modules (modules import the kernel)
   exclusions:
     rules:
       - path: _test\.go

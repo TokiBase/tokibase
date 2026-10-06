@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/tools/filesystem"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/security"
@@ -98,7 +97,7 @@ func (app *BaseApp) CreateBackup(ctx context.Context, name string) error {
 		// (it needs to be inside the current pb_data to avoid "cross-device link" errors)
 		// -----------------------------------------------------------
 		tempZipPath := filepath.Join(app.DataDir(), LocalTempDirName, "pb_backup_"+security.PseudorandomString(6))
-		err := createZip(e, tempZipPath)
+		err := createZip(app, e, tempZipPath)
 		if err != nil {
 			return err
 		}
@@ -135,7 +134,7 @@ func (app *BaseApp) CreateBackup(ctx context.Context, name string) error {
 	})
 }
 
-func createZip(be *BackupEvent, tempZipPath string) error {
+func createZip(app *BaseApp, be *BackupEvent, tempZipPath string) error {
 	logPrefix := "[" + be.Name + "] "
 
 	// make sure that the special temp directory exists
@@ -207,7 +206,7 @@ func createZip(be *BackupEvent, tempZipPath string) error {
 	dataStartTime := time.Now()
 	tempDataDBPath := filepath.Join(localTempDir, dataDBFilename)
 
-	_, err = be.App.ConcurrentDB().NewQuery("VACUUM INTO {:path}").Bind(dbx.Params{"path": tempDataDBPath}).Execute()
+	err = app.dataConn.VacuumInto(context.Background(), be.App.ConcurrentDB(), tempDataDBPath)
 	if err != nil {
 		return err
 	}
@@ -253,7 +252,7 @@ func createZip(be *BackupEvent, tempZipPath string) error {
 	auxStartTime := time.Now()
 	tempAuxDBPath := filepath.Join(localTempDir, auxDBFilename)
 
-	_, err = be.App.AuxConcurrentDB().NewQuery("VACUUM INTO {:path}").Bind(dbx.Params{"path": tempAuxDBPath}).Execute()
+	err = app.auxConn.VacuumInto(context.Background(), be.App.AuxConcurrentDB(), tempAuxDBPath)
 	if err != nil {
 		return err
 	}
@@ -278,8 +277,8 @@ func createZip(be *BackupEvent, tempZipPath string) error {
 	// previous VACUUM INTO are transferred and don't accumulate
 	// (errors are ignore because some drivers may not support the wal_checkpoint pragma)
 	// ---------------------------------------------------------------
-	_, _ = be.App.NonconcurrentDB().NewQuery("PRAGMA wal_checkpoint(TRUNCATE)").Execute()
-	_, _ = be.App.AuxNonconcurrentDB().NewQuery("PRAGMA wal_checkpoint(TRUNCATE)").Execute()
+	_ = app.dataConn.Checkpoint(context.Background(), be.App.NonconcurrentDB())
+	_ = app.auxConn.Checkpoint(context.Background(), be.App.AuxNonconcurrentDB())
 
 	// copy the rest of the pb_data
 	// ---------------------------------------------------------------

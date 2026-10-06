@@ -9,6 +9,7 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/kernel"
+	"github.com/tokibase/tokibase/modules/store/sqlite"
 	"github.com/tokibase/tokibase/tools/store"
 	"golang.org/x/sync/semaphore"
 )
@@ -25,14 +26,16 @@ func TestNotifyWatcher_SettingsUpdate(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	app1 := kernel.NewBaseApp(kernel.BaseAppConfig{
-		DataDir: tmpDir,
+		DBOpener: sqlite.NewOpener(),
+		DataDir:  tmpDir,
 	})
 	if err := app1.Bootstrap(); err != nil {
 		t.Fatal(err)
 	}
 
 	app2 := kernel.NewBaseApp(kernel.BaseAppConfig{
-		DataDir: tmpDir,
+		DBOpener: sqlite.NewOpener(),
+		DataDir:  tmpDir,
 	})
 	if err := app2.Bootstrap(); err != nil {
 		t.Fatal(err)
@@ -97,14 +100,16 @@ func TestNotifyWatcher_CollectionsUpdate(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	app1 := kernel.NewBaseApp(kernel.BaseAppConfig{
-		DataDir: tmpDir,
+		DBOpener: sqlite.NewOpener(),
+		DataDir:  tmpDir,
 	})
 	if err := app1.Bootstrap(); err != nil {
 		t.Fatal(err)
 	}
 
 	app2 := kernel.NewBaseApp(kernel.BaseAppConfig{
-		DataDir: tmpDir,
+		DBOpener: sqlite.NewOpener(),
+		DataDir:  tmpDir,
 	})
 	if err := app2.Bootstrap(); err != nil {
 		t.Fatal(err)

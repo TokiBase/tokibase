@@ -61,6 +61,16 @@ type DBConnectFunc func(dbPath string) (*dbx.DB, error)
 
 // BaseAppConfig defines a BaseApp configuration option
 type BaseAppConfig struct {
+	// DBOpener opens the data and auxiliary databases (see store.go).
+	//
+	// It is set by the outer package that wires the store module
+	// (core.NewBaseApp uses modules/store/sqlite by default).
+	DBOpener DBOpener
+
+	// DBConnect is the legacy custom connect function.
+	//
+	// It is adapted to a DBOpener by the outer package that wires the store
+	// module and is ignored if DBOpener is explicitly set.
 	DBConnect        DBConnectFunc
 	DataDir          string
 	EncryptionEnv    string
@@ -117,6 +127,8 @@ type BaseApp struct {
 	settings            *Settings
 	subscriptionsBroker *subscriptions.Broker
 	logger              *slog.Logger
+	dataConn            DBConn
+	auxConn             DBConn
 	concurrentDB        dbx.Builder
 	nonconcurrentDB     dbx.Builder
 	auxConcurrentDB     dbx.Builder
@@ -223,9 +235,6 @@ func NewBaseApp(config BaseAppConfig) *BaseApp {
 	}
 
 	// apply config defaults
-	if app.config.DBConnect == nil {
-		app.config.DBConnect = DefaultDBConnect
-	}
 	if app.config.DataMaxOpenConns <= 0 {
 		app.config.DataMaxOpenConns = DefaultDataMaxOpenConns
 	}
@@ -488,6 +497,17 @@ func (app *BaseApp) ClearBootstrap() error {
 
 		var errs []error
 
+		// the store connections own the handles
+		conns := []*DBConn{&app.dataConn, &app.auxConn}
+		for _, c := range conns {
+			if *c != nil {
+				if err := (*c).Close(); err != nil {
+					errs = append(errs, err)
+				}
+			}
+			*c = nil
+		}
+
 		dbs := []*dbx.Builder{
 			&app.concurrentDB,
 			&app.nonconcurrentDB,
@@ -499,6 +519,7 @@ func (app *BaseApp) ClearBootstrap() error {
 			if db == nil {
 				continue
 			}
+			// note: closing an already closed handle is no-op
 			if v, ok := (*db).(closer); ok {
 				if err := v.Close(); err != nil {
 					errs = append(errs, err)
@@ -529,10 +550,7 @@ func (app *BaseApp) DB() dbx.Builder {
 		return app.concurrentDB
 	}
 
-	return &dualDBBuilder{
-		concurrentDB:    app.concurrentDB,
-		nonconcurrentDB: app.nonconcurrentDB,
-	}
+	return app.dataConn.Route(app.concurrentDB, app.nonconcurrentDB)
 }
 
 // ConcurrentDB returns the concurrent app data.db builder instance.
@@ -578,10 +596,7 @@ func (app *BaseApp) AuxDB() dbx.Builder {
 		return app.auxConcurrentDB
 	}
 
-	return &dualDBBuilder{
-		concurrentDB:    app.auxConcurrentDB,
-		nonconcurrentDB: app.auxNonconcurrentDB,
-	}
+	return app.auxConn.Route(app.auxConcurrentDB, app.auxNonconcurrentDB)
 }
 
 // AuxConcurrentDB returns the concurrent app auxiliary.db builder instance.
@@ -1161,21 +1176,18 @@ func (app *BaseApp) OnSettingsReload() *hook.Hook[*SettingsReloadEvent] {
 func (app *BaseApp) initDataDB() error {
 	dbPath := filepath.Join(app.DataDir(), dataDBFilename)
 
-	concurrentDB, err := app.config.DBConnect(dbPath)
+	conn, err := app.openDB(DBConfig{
+		Path:               dbPath,
+		MaxOpenConns:       app.config.DataMaxOpenConns,
+		MaxIdleConns:       app.config.DataMaxIdleConns,
+		OptimizeOnMaintain: true,
+	})
 	if err != nil {
 		return err
 	}
-	concurrentDB.DB().SetMaxOpenConns(app.config.DataMaxOpenConns)
-	concurrentDB.DB().SetMaxIdleConns(app.config.DataMaxIdleConns)
-	concurrentDB.DB().SetConnMaxIdleTime(3 * time.Minute)
 
-	nonconcurrentDB, err := app.config.DBConnect(dbPath)
-	if err != nil {
-		return err
-	}
-	nonconcurrentDB.DB().SetMaxOpenConns(1)
-	nonconcurrentDB.DB().SetMaxIdleConns(1)
-	nonconcurrentDB.DB().SetConnMaxIdleTime(3 * time.Minute)
+	concurrentDB := conn.Concurrent()
+	nonconcurrentDB := conn.Nonconcurrent()
 
 	if app.IsDev() {
 		nonconcurrentDB.QueryLogFunc = func(ctx context.Context, t time.Duration, sql string, rows *sql.Rows, err error) {
@@ -1188,10 +1200,20 @@ func (app *BaseApp) initDataDB() error {
 		concurrentDB.ExecLogFunc = nonconcurrentDB.ExecLogFunc
 	}
 
+	app.dataConn = conn
 	app.concurrentDB = concurrentDB
 	app.nonconcurrentDB = nonconcurrentDB
 
 	return nil
+}
+
+// openDB opens a database using the configured store opener.
+func (app *BaseApp) openDB(cfg DBConfig) (DBConn, error) {
+	if app.config.DBOpener == nil {
+		return nil, errors.New("no DBOpener configured (use core.NewBaseApp or set BaseAppConfig.DBOpener)")
+	}
+
+	return app.config.DBOpener.Open(context.Background(), cfg)
 }
 
 var sqlLogReplacements = []struct {
@@ -1223,24 +1245,18 @@ func (app *BaseApp) initAuxDB() error {
 	// (see https://github.com/tokibase/tokibase/issues/5607)
 	dbPath := filepath.Join(app.DataDir(), auxDBFilename)
 
-	concurrentDB, err := app.config.DBConnect(dbPath)
+	conn, err := app.openDB(DBConfig{
+		Path:         dbPath,
+		MaxOpenConns: app.config.AuxMaxOpenConns,
+		MaxIdleConns: app.config.AuxMaxIdleConns,
+	})
 	if err != nil {
 		return err
 	}
-	concurrentDB.DB().SetMaxOpenConns(app.config.AuxMaxOpenConns)
-	concurrentDB.DB().SetMaxIdleConns(app.config.AuxMaxIdleConns)
-	concurrentDB.DB().SetConnMaxIdleTime(3 * time.Minute)
 
-	nonconcurrentDB, err := app.config.DBConnect(dbPath)
-	if err != nil {
-		return err
-	}
-	nonconcurrentDB.DB().SetMaxOpenConns(1)
-	nonconcurrentDB.DB().SetMaxIdleConns(1)
-	nonconcurrentDB.DB().SetConnMaxIdleTime(3 * time.Minute)
-
-	app.auxConcurrentDB = concurrentDB
-	app.auxNonconcurrentDB = nonconcurrentDB
+	app.auxConn = conn
+	app.auxConcurrentDB = conn.Concurrent()
+	app.auxNonconcurrentDB = conn.Nonconcurrent()
 
 	return nil
 }
@@ -1343,19 +1359,18 @@ func (app *BaseApp) registerBaseHooks() {
 	})
 
 	app.Cron().Add("__pbDBOptimize__", "0 0 * * *", func() {
-		_, execErr := app.NonconcurrentDB().NewQuery("PRAGMA wal_checkpoint(TRUNCATE)").Execute()
-		if execErr != nil {
-			app.Logger().Warn("Failed to run periodic PRAGMA wal_checkpoint for the main DB", slog.String("error", execErr.Error()))
+		ctx := context.Background()
+
+		if app.dataConn == nil || app.auxConn == nil {
+			return // not bootstrapped or already cleared
 		}
 
-		_, execErr = app.AuxNonconcurrentDB().NewQuery("PRAGMA wal_checkpoint(TRUNCATE)").Execute()
-		if execErr != nil {
-			app.Logger().Warn("Failed to run periodic PRAGMA wal_checkpoint for the auxiliary DB", slog.String("error", execErr.Error()))
+		if err := app.dataConn.Maintain(ctx); err != nil {
+			app.Logger().Warn("Failed to run periodic maintenance (WAL checkpoint, optimize) for the main DB", slog.String("error", err.Error()))
 		}
 
-		_, execErr = app.NonconcurrentDB().NewQuery("PRAGMA optimize").Execute()
-		if execErr != nil {
-			app.Logger().Warn("Failed to run periodic PRAGMA optimize", slog.String("error", execErr.Error()))
+		if err := app.auxConn.Maintain(ctx); err != nil {
+			app.Logger().Warn("Failed to run periodic maintenance (WAL checkpoint) for the auxiliary DB", slog.String("error", err.Error()))
 		}
 	})
 

@@ -2,8 +2,6 @@ package kernel_test
 
 import (
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -15,7 +13,10 @@ const kernelPkg = "github.com/tokibase/tokibase/kernel"
 func goList(t *testing.T, args ...string) []string {
 	t.Helper()
 
-	goBin := filepath.Join(runtime.GOROOT(), "bin", "go")
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("go binary not found in PATH: %v", err)
+	}
 
 	out, err := exec.Command(goBin, append([]string{"list"}, args...)...).CombinedOutput()
 	if err != nil {
@@ -52,5 +53,19 @@ func TestKernelDoesNotImportOSExec(t *testing.T) {
 
 	if slices.Contains(imports, "os/exec") {
 		t.Errorf("the kernel packages must not import os/exec directly")
+	}
+}
+
+// The SQLite driver lives in modules/store/sqlite: the kernel keeps only
+// github.com/pocketbase/dbx and must not (transitively) depend on modernc.org/sqlite.
+func TestKernelHasNoSQLiteDriverDependency(t *testing.T) {
+	deps := goList(t, "-deps", kernelPkg)
+
+	if slices.Contains(deps, "modernc.org/sqlite") {
+		t.Errorf("the kernel package must not depend on modernc.org/sqlite (go list -deps %s)", kernelPkg)
+	}
+
+	if !slices.Contains(deps, "github.com/pocketbase/dbx") {
+		t.Errorf("expected the kernel to keep using github.com/pocketbase/dbx")
 	}
 }
