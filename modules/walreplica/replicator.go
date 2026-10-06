@@ -47,6 +47,7 @@ type replicator struct {
 	store     *litestream.Store
 	dbs       []*dbState
 	startedAt time.Time
+	lease     *leaseManager
 }
 
 func newReplicator(app kernel.App, cfg Config) (*replicator, error) {
@@ -118,6 +119,9 @@ func (r *replicator) syncNow(ctx context.Context) error {
 // close syncs one last time and stops replication.
 // The app must have closed its own database connections first.
 func (r *replicator) close() error {
+	if r.lease != nil {
+		r.lease.release()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownSyncTimeout)
 	defer cancel()
 	return r.store.Close(ctx)

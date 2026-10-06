@@ -58,6 +58,9 @@ func healthCheck(e *core.RequestEvent) error {
 			if reason != "" {
 				replica["reason"] = reason
 			}
+			if lease := walreplica.LeaseInfo(e.App); lease != nil {
+				replica["lease"] = lease
+			}
 			resp.Data["replica"] = replica
 		}
 	} else {

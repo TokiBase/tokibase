@@ -71,6 +71,7 @@ Built-in backups (`/api/backups`, autobackup) keep working and are independent: 
 - Superusers get `data.replica` in `GET /api/health` while replication is active: `{healthy, reason?, databases: [{name, path, replicaUrl, localTxid, replicaTxid, lastSync, lagSeconds, lastError, lastErrorAt}]}`. Guests, regular users and superusers on a server without replication see the unchanged response (see `docs/COMPAT.md`).
 - `lagSeconds` is 0 while the replica holds every captured transaction, otherwise the seconds since the last successful sync. `healthy` turns false on an unresolved error or when pending changes are older than `max(30s, 10 x sync interval)`.
 - Sync failures are logged at Error (at most one line per 30 s) as `walreplica` entries; the first error also shows up as `lastError` until a later sync succeeds.
+- `replica.lease` (same object) shows the lease: `{held, supported, nodeId, hostname, pid, startedAt, heartbeatAt}`. When another node holds the lease and replication was refused, `healthy` is false with `reason` `lease held by <hostname> since <t>` and `lease.held` is false.
 - `toki replica status [--url <url>] [--json]` reads the replica itself (no running app needed): newest transaction and its age, snapshots, oldest restore point, file count and bytes per database.
 
 ## CLI
@@ -79,6 +80,7 @@ Built-in backups (`/api/backups`, autobackup) keep working and are independent: 
 toki replica status [--url URL] [--json]
 toki replica restore --dir <pb_data> [--url URL] [--timestamp RFC3339] [--overwrite]
 toki replica snapshot
+toki replica promote --url URL --dir <pb_data> [--timestamp RFC3339] [--force]
 ```
 
 `--url` defaults to `$TOKI_REPLICA_URL`. `status` and `restore` do not bootstrap the app. `--dir` is the global flag and is required for `restore`.
@@ -94,14 +96,43 @@ toki replica snapshot
    For a point in time (within the retention window): add `--timestamp 2026-10-07T10:00:00Z`.
 4. To replace the live directory instead, move it aside (`mv pb_data pb_data.old`) and restore into `pb_data`, or add `--overwrite` to delete the existing `data.db`/`auxiliary.db` (and their `-wal`/`-shm`) first. `--overwrite` destroys the local databases; use it only when they are known bad.
 5. Copy `pb_data/storage` back from your file backup if you use local file storage (it is not replicated).
-6. Start the server on the restored directory. If it should resume replicating into the same URL, set `TOKI_REPLICA_URL` again; to avoid mixing histories, point it at a new, empty URL (or clear the old prefix) after a restore from an older point in time. Replicating a restored database back into the URL it was restored from has not been verified.
+6. Start the server on the restored directory. If it should resume replicating into the same URL, set `TOKI_REPLICA_URL` again; to avoid mixing histories, point it at a new, empty URL (or clear the old prefix) after a restore from an older point in time. Do not replicate a restored database back into the URL it was restored from (see Failover).
 
 `auxiliary.db` is skipped silently when the replica holds no copy of it; `data.db` is required. Each restored file gets a quick integrity check.
+
+## Failover: promote a replica
+
+`toki replica promote` turns the replica into a standalone `pb_data` on a standby host. It restores both databases (`walreplica.Restore`), runs `PRAGMA integrity_check` on each, counts the collections, writes `<dir>/.toki-promoted.json` (`from_url`, `restored_txid` or `timestamp`, `promoted_at`, `hostname`, `collections`) and records a `replica.promote` audit entry (when the audit module is enabled, written into the promoted database). Exit code 0 on success, 1 when refused or failed.
+
+Procedure:
+
+1. Make sure the old primary is stopped or isolated (power off, firewall, or stop the service). If it may still be running, it can keep writing to the replica URL.
+2. On the standby host run `toki replica promote --url <replica url> --dir ./pb_data` (add `--timestamp 2026-10-07T10:00:00Z` for a point in time inside the retention window). It refuses when `<dir>/data.db` exists; `--force` first MOVES the directory to `<dir>.pre-promote-<unixts>` (nothing is deleted).
+3. Copy `pb_data/storage` from your file backup if you use local file storage (not replicated).
+4. Start the new primary with a NEW, empty replica URL: `TOKI_REPLICA_URL=<new url> toki serve --dir ./pb_data`.
+5. Point traffic (DNS, proxy) at the standby. Keep the old URL untouched until the old primary is confirmed dead; then archive or delete it.
+
+Why a new URL (Litestream caveat): replication is a linear history of LTX files per database. A node restored from the replica starts a new local history that continues at the restored transaction id. If the old primary is still alive, or later comes back, and both write to the same URL, the two histories interleave and the replica becomes unrestorable. Litestream's own guidance is the same: restore, then replicate to a fresh URL. The promoted node therefore must not reuse the URL it was restored from; the lease guard below is a second line of defence, not a replacement for this rule.
+
+## Lease: one replicator per URL
+
+When replication starts the node writes a lease object `<url>/.toki-lease.json`: `{node_id, hostname, pid, started_at, heartbeat_at}`. `node_id` is random, persisted in `<pb_data>/.toki-node-id`, so a restart of the same `pb_data` is never blocked. The heartbeat is refreshed every `max(10s, 10 x sync interval)`.
+
+- On start, a lease with a different `node_id` whose heartbeat is newer than `max(60s, 3 x heartbeat interval)` makes the module refuse to replicate: the server keeps serving, an Error is logged, and `/api/health` reports `replica.healthy=false`, reason `lease held by <hostname> since <t>`.
+- `TOKI_REPLICA_TAKEOVER=1` overrides the refusal (use it only after the other node is confirmed stopped).
+- A lease older than that threshold is treated as dead and replaced. A clean shutdown removes the lease.
+- The heartbeat never overwrites a lease another node took over; it logs an Error instead.
+- Backend support: the Litestream `ReplicaClient` has no generic object put/get, so the lease is implemented for `file://` replicas only. For `s3://` replicas the lease is NOT implemented yet (a warning is logged at start) and the single primary rule is on the operator.
+- The lease is advisory: it cannot stop a node that ignores it (for example one started before the lease existed) and file systems without atomic rename or shared visibility (some network mounts) weaken it.
+
+## Failover drill
+
+`tests/e2e/failover.sh` (CI job `failover`) builds the binary, starts a primary with `TOKI_REPLICA_URL=file://<tmp>/rep`, creates a superuser, a `posts` collection and 10 records, waits until `/api/health` shows the replica caught up, kills the primary with SIGKILL, runs `toki replica promote`, starts the standby on another port with a fresh replica URL, asserts the 10 records and prints the RTO (kill until the standby answers `/api/health`, promote included). It fails above `TOKI_RTO_MAX` seconds (default 30).
 
 ## RPO and RTO
 
 - RPO: about `TOKI_REPLICA_SYNC_INTERVAL` (default 1 s) plus upload time while the replica is reachable and healthy. With an S3 outage the primary keeps serving and the lag grows until the store is back (local LTX files are retained meanwhile; see `lagSeconds`/`/api/health`).
-- RTO: dominated by download and restore time (snapshot plus the LTX files since). Seconds for small databases; for large ones about the database size divided by your bandwidth. Restore is a manual procedure today.
+- RTO: dominated by download and restore time (snapshot plus the LTX files since). Seconds for small databases; for large ones about the database size divided by your bandwidth. Promotion is a manual command (no automatic failover). Measured by the drill on a small database (10 records, file:// replica, local disk): RTO about 0.2-1 s from kill to a healthy standby; RPO 0 records because the replica was in sync before the kill (in general up to the sync interval).
 
 ## Library notes
 
@@ -111,12 +142,12 @@ toki replica snapshot
 
 ## Limitations
 
-- Single primary: exactly one running process may replicate to a given URL.
+- Single primary: exactly one running process may replicate to a given URL. The lease guards `file://` replicas only.
 - The replica is a read-only copy of LTX files, not a live database you can query; there is no replica read mode.
-- No automatic promotion or failover yet: recovering means running the restore procedure and starting a server on the result.
+- No automatic failure detection or failover: a human or your orchestrator runs `toki replica promote`.
 - Only `data.db` and `auxiliary.db`; `pb_data/storage`, `backups/` and `pb_hooks` are not replicated.
 - `toki replica snapshot` cannot talk to a running server.
 
 ## Go API
 
-`walreplica.FromEnv()`, `walreplica.Register(app)`, `walreplica.RegisterWithConfig(app, cfg)`, `walreplica.Status(app)`, `walreplica.Healthy(app)`, `walreplica.Active(app)`, `walreplica.Snapshot(ctx, app)`, `walreplica.Inspect(ctx, url)`, `walreplica.Restore(ctx, url, destDataDir, RestoreOptions{Timestamp, Overwrite})`. `tokibase.New*` calls `Register`.
+`walreplica.FromEnv()`, `walreplica.Register(app)`, `walreplica.RegisterWithConfig(app, cfg)`, `walreplica.Status(app)`, `walreplica.Healthy(app)`, `walreplica.Active(app)`, `walreplica.Snapshot(ctx, app)`, `walreplica.Inspect(ctx, url)`, `walreplica.Restore(ctx, url, destDataDir, RestoreOptions{Timestamp, Overwrite})`, `walreplica.Promote(ctx, url, dir, PromoteOptions{Timestamp, Force})`, `walreplica.SetAuditSink(fn)`, `walreplica.LeaseInfo(app)`. `tokibase.New*` calls `Register`.
