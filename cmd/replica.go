@@ -28,6 +28,7 @@ func NewReplicaCommand(app core.App) *cobra.Command {
 	command.AddCommand(replicaStatusCommand())
 	command.AddCommand(replicaRestoreCommand())
 	command.AddCommand(replicaSnapshotCommand(app))
+	command.AddCommand(replicaPromoteCommand())
 	return command
 }
 
@@ -171,4 +172,60 @@ func replicaSnapshotCommand(app core.App) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func replicaPromoteCommand() *cobra.Command {
+	var urlFlag, timestamp string
+	var force bool
+
+	command := &cobra.Command{
+		Use:   "promote --dir <pb_data>",
+		Short: "Promote the replica into a standalone pb_data directory (failover)",
+		Long: "Restores data.db and auxiliary.db from the replica into --dir (required), runs PRAGMA integrity_check on both,\n" +
+			"counts the collections and writes <dir>/" + walreplica.PromotedMarker + ".\n" +
+			"Refuses when <dir>/data.db exists unless --force, which MOVES the directory to <dir>.pre-promote-<unixts> (never deletes).\n" +
+			"Stop the old primary first. Then start the promoted node with a NEW " + walreplica.EnvURL + ": it must not replicate back into\n" +
+			"the url it was restored from.",
+		Example:      "replica promote --url s3://bucket/prod --dir ./pb_data --timestamp 2026-10-07T10:00:00Z",
+		SilenceUsage: true,
+		Annotations:  map[string]string{AnnotationSkipBootstrap: "true"},
+		RunE: func(command *cobra.Command, args []string) error {
+			dirFlag := command.Flags().Lookup("dir")
+			if dirFlag == nil || !dirFlag.Changed || dirFlag.Value.String() == "" {
+				return errors.New("--dir <pb_data> is required")
+			}
+			dir := dirFlag.Value.String()
+
+			url, err := replicaURL(urlFlag)
+			if err != nil {
+				return err
+			}
+
+			opts := walreplica.PromoteOptions{Force: force}
+			if timestamp != "" {
+				if opts.Timestamp, err = time.Parse(time.RFC3339, timestamp); err != nil {
+					return fmt.Errorf("invalid --timestamp (want RFC3339, e.g. 2026-10-07T10:00:00Z): %w", err)
+				}
+			}
+
+			res, err := walreplica.Promote(command.Context(), url, dir, opts)
+			if err != nil {
+				return err
+			}
+
+			if res.MovedTo != "" {
+				fmt.Printf("moved the previous directory to %s\n", res.MovedTo)
+			}
+			fmt.Printf("promoted %s into %s: integrity ok, %d collections\n", res.FromURL, dir, res.Collections)
+			fmt.Printf("\nNext step: start the new primary on a NEW replica url:\n")
+			fmt.Printf("  %s=<new url, not %s> toki serve --dir %s\n", walreplica.EnvURL, res.FromURL, dir)
+			fmt.Printf("Do not reuse the old url: the old primary may still be writing to it, and two writers corrupt the replica history.\n")
+			return nil
+		},
+	}
+
+	command.Flags().StringVar(&urlFlag, "url", "", "replica url (default $"+walreplica.EnvURL+")")
+	command.Flags().StringVar(&timestamp, "timestamp", "", "promote the state as of this RFC3339 time (default latest)")
+	command.Flags().BoolVar(&force, "force", false, "move an existing --dir aside (<dir>.pre-promote-<unixts>) instead of refusing")
+	return command
 }

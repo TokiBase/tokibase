@@ -2,8 +2,10 @@ package walreplica
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/kernel"
@@ -61,6 +63,7 @@ func register(app core.App, explicit *Config) {
 		Id:       clearHookId,
 		Priority: -9999,
 		Func: func(e *core.BootstrapEvent) error {
+			e.App.Store().Remove(blockedKey)
 			r := get(e.App)
 			if r == nil {
 				return e.Next()
@@ -100,13 +103,39 @@ func fillDefaults(c *Config) {
 }
 
 func start(app kernel.App, cfg Config) error {
-	r, err := newReplicator(app, cfg)
+	lease, err := acquireLease(cfg.URL, app.DataDir(), cfg.SyncInterval, time.Now())
+	var held *leaseHeldError
+	if errors.As(err, &held) {
+		// another live node writes to this replica: serve, but do not replicate
+		reason := held.Error()
+		app.Store().Set(blockedKey, &blocked{reason: reason, holder: &held.holder})
+		app.Logger().Error("walreplica: replication NOT started: "+reason+" (stop the other node or set "+EnvTakeover+"=1 to take over)",
+			slog.String("url", redactURL(cfg.URL)), slog.String("holderNode", held.holder.NodeID))
+		return nil
+	}
 	if err != nil {
 		return err
 	}
+	if lease == nil {
+		app.Logger().Warn("walreplica: lease guard is only implemented for file:// replicas; nothing prevents a second replicator on this url")
+	}
+
+	r, err := newReplicator(app, cfg)
+	if err != nil {
+		if lease != nil {
+			lease.release()
+		}
+		return err
+	}
+	r.lease = lease
 	if err := r.open(context.Background()); err != nil {
 		_ = r.close()
 		return err
+	}
+	if lease != nil {
+		go lease.run(func(err error) {
+			app.Logger().Error("walreplica: lease heartbeat failed", "error", err)
+		})
 	}
 
 	app.Store().Set(storeKey, r)

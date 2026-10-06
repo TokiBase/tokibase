@@ -3,6 +3,7 @@ package tokibase
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -179,6 +180,27 @@ func NewWithConfig(config Config) *PocketBase {
 
 	// continuous WAL replication of data.db/auxiliary.db (inactive unless TOKI_REPLICA_URL is set)
 	walreplica.Register(pb.App.(core.App))
+	if auditLog != nil {
+		// `toki replica promote` runs without a bootstrapped app: write the entry into the promoted database
+		walreplica.SetAuditSink(func(r walreplica.PromoteResult) {
+			tmp := core.NewBaseApp(core.BaseAppConfig{DataDir: r.Dir})
+			if err := tmp.Bootstrap(); err != nil {
+				fmt.Fprintln(os.Stderr, "audit: failed to record replica.promote:", err)
+				return
+			}
+			defer tmp.ResetBootstrapState()
+			after, _ := json.Marshal(r)
+			afterStr := string(after)
+			l := audit.New(tmp)
+			err := l.Init()
+			if err == nil {
+				err = l.Append(&audit.Entry{ActorKind: "system", Action: "replica.promote", Record: r.FromURL, After: &afterStr})
+			}
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "audit: failed to record replica.promote:", err)
+			}
+		})
+	}
 
 	// hide the default help command (allow only `--help` flag)
 	pb.RootCmd.SetHelpCommand(&cobra.Command{Hidden: true})

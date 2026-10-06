@@ -57,7 +57,7 @@ Every deviation must be listed here with: what changed, why, migration path.
 
 ### Health response gains `data.replica` when WAL replication is active (phase 1, walreplica)
 
-- What: for superuser callers only, and only while `TOKI_REPLICA_URL` replication is running, `GET /api/health` adds `data.replica` (`healthy`, optional `reason`, per database `localTxid`, `replicaTxid`, `lastSync`, `lagSeconds`, `lastError`). Responses for guests and regular users, and for servers without replication, are byte for byte unchanged. Built-in nightly and pre-backup `wal_checkpoint(TRUNCATE)` are skipped while replication is active (Litestream owns checkpoints), and backups exclude `.data.db-litestream` / `.auxiliary.db-litestream`.
+- What: for superuser callers only, and only while `TOKI_REPLICA_URL` replication is running, `GET /api/health` adds `data.replica` (`healthy`, optional `reason`, `lease` (`held`, `nodeId`, `hostname`, `heartbeatAt`, ...; file:// replicas), per database `localTxid`, `replicaTxid`, `lastSync`, `lagSeconds`, `lastError`). Responses for guests and regular users, and for servers without replication, are byte for byte unchanged. Built-in nightly and pre-backup `wal_checkpoint(TRUNCATE)` are skipped while replication is active (Litestream owns checkpoints), and backups exclude `.data.db-litestream` / `.auxiliary.db-litestream`.
 - Why: replica lag is the signal operators need; an extra key in the superuser-only `data` map does not break the documented fields.
 - Migration: nothing needed; clients ignoring unknown `data` keys are unaffected.
 

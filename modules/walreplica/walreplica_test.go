@@ -268,3 +268,146 @@ func TestLagAndHealth(t *testing.T) {
 		return ok
 	})
 }
+
+// seedReplica replicates a small app into replicaDir, snapshots and stops it.
+func seedReplica(t *testing.T, replicaDir string) {
+	t.Helper()
+	app := newApp(t, t.TempDir(), &walreplica.Config{URL: fileURL(replicaDir), SyncInterval: 100 * time.Millisecond})
+	col := core.NewBaseCollection("notes")
+	col.Fields.Add(&core.TextField{Name: "title"})
+	if err := app.Save(col); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		r := core.NewRecord(col)
+		r.Set("title", "n")
+		if err := app.Save(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := walreplica.Snapshot(context.Background(), app); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, app)
+}
+
+func TestPromote(t *testing.T) {
+	replicaDir := t.TempDir()
+	seedReplica(t, replicaDir)
+
+	var audited *walreplica.PromoteResult
+	walreplica.SetAuditSink(func(r walreplica.PromoteResult) { audited = &r })
+	defer walreplica.SetAuditSink(nil)
+
+	dir := filepath.Join(t.TempDir(), "standby")
+	res, err := walreplica.Promote(context.Background(), fileURL(replicaDir), dir, walreplica.PromoteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Collections == 0 || res.MovedTo != "" || audited == nil {
+		t.Fatalf("unexpected result %+v audited=%v", res, audited)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, walreplica.PromotedMarker))
+	if err != nil {
+		t.Fatalf("marker not written: %v", err)
+	}
+	for _, key := range []string{`"from_url"`, `"restored_txid"`, `"promoted_at"`, `"hostname"`} {
+		if !strings.Contains(string(raw), key) {
+			t.Fatalf("marker lacks %s: %s", key, raw)
+		}
+	}
+
+	// non-empty dir is refused and left untouched
+	if _, err := walreplica.Promote(context.Background(), fileURL(replicaDir), dir, walreplica.PromoteOptions{}); err == nil {
+		t.Fatal("expected refusal for a non-empty dir")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "data.db")); err != nil {
+		t.Fatalf("refused promote must not touch the dir: %v", err)
+	}
+
+	// --force moves aside instead of deleting
+	res, err = walreplica.Promote(context.Background(), fileURL(replicaDir), dir, walreplica.PromoteOptions{Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.MovedTo == "" || !strings.Contains(res.MovedTo, ".pre-promote-") {
+		t.Fatalf("expected moved dir, got %q", res.MovedTo)
+	}
+	if _, err := os.Stat(filepath.Join(res.MovedTo, "data.db")); err != nil {
+		t.Fatalf("old data.db must survive in %s: %v", res.MovedTo, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "data.db")); err != nil {
+		t.Fatal(err)
+	}
+
+	// empty replica: nothing to promote
+	if _, err := walreplica.Promote(context.Background(), fileURL(t.TempDir()), filepath.Join(t.TempDir(), "x"), walreplica.PromoteOptions{}); err == nil {
+		t.Fatal("expected error for an empty replica")
+	}
+}
+
+func TestLeaseBlocksSecondReplicator(t *testing.T) {
+	t.Setenv(walreplica.EnvTakeover, "")
+	replicaDir := t.TempDir()
+	cfg := &walreplica.Config{URL: fileURL(replicaDir), SyncInterval: 100 * time.Millisecond}
+
+	a := newApp(t, t.TempDir(), cfg)
+	if !walreplica.Active(a) {
+		t.Fatal("first replicator must start")
+	}
+	li := walreplica.LeaseInfo(a)
+	if li == nil || !li.Held {
+		t.Fatalf("expected held lease, got %+v", li)
+	}
+	if _, err := os.Stat(filepath.Join(replicaDir, ".toki-lease.json")); err != nil {
+		t.Fatalf("lease object missing: %v", err)
+	}
+
+	// second node (different pb_data => different node id) is refused
+	b := newApp(t, t.TempDir(), cfg)
+	if ok, reason := walreplica.Healthy(b); ok || !strings.HasPrefix(reason, "lease held by ") {
+		t.Fatalf("expected unhealthy lease reason, got %v %q", ok, reason)
+	}
+	if li := walreplica.LeaseInfo(b); li == nil || li.Held || li.NodeID != walreplica.LeaseInfo(a).NodeID {
+		t.Fatalf("blocked node must show the foreign lease, got %+v", li)
+	}
+	if st := walreplica.Status(b); len(st) != 0 {
+		t.Fatalf("blocked node must not replicate: %+v", st)
+	}
+	stop(t, b)
+
+	// takeover override
+	t.Setenv(walreplica.EnvTakeover, "1")
+	c := newApp(t, t.TempDir(), cfg)
+	if ok, reason := walreplica.Healthy(c); !ok {
+		t.Fatalf("takeover must start replication: %q", reason)
+	}
+	stop(t, c)
+	stop(t, a)
+	t.Setenv(walreplica.EnvTakeover, "")
+
+	// same node (same pb_data) restarting is never blocked
+	dir := t.TempDir()
+	d := newApp(t, dir, cfg)
+	stop(t, d)
+	e := newApp(t, dir, cfg)
+	if ok, reason := walreplica.Healthy(e); !ok {
+		t.Fatalf("same node must restart: %q", reason)
+	}
+	stop(t, e)
+}
+
+func TestLeaseStaleIsIgnored(t *testing.T) {
+	t.Setenv(walreplica.EnvTakeover, "")
+	replicaDir := t.TempDir()
+	old := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	lease := `{"node_id":"dead","hostname":"old","pid":1,"started_at":"` + old + `","heartbeat_at":"` + old + `"}`
+	if err := os.WriteFile(filepath.Join(replicaDir, ".toki-lease.json"), []byte(lease), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app := newApp(t, t.TempDir(), &walreplica.Config{URL: fileURL(replicaDir), SyncInterval: 100 * time.Millisecond})
+	defer stop(t, app)
+	if ok, reason := walreplica.Healthy(app); !ok || walreplica.LeaseInfo(app) == nil || !walreplica.LeaseInfo(app).Held {
+		t.Fatalf("stale lease must not block: %v %q", ok, reason)
+	}
+}

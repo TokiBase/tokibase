@@ -59,14 +59,23 @@ func get(app kernel.App) *replicator {
 	return nil
 }
 
-// Active reports whether replication is running for app.
-func Active(app kernel.App) bool { return get(app) != nil }
+func getBlocked(app kernel.App) *blocked {
+	b, _ := app.Store().Get(blockedKey).(*blocked)
+	return b
+}
+
+// Active reports whether replication is configured for app: running, or
+// refused because another node holds the lease (then Healthy is false).
+func Active(app kernel.App) bool { return get(app) != nil || getBlocked(app) != nil }
 
 // Status returns the per database replication status.
 // It returns nil when replication is not active.
 func Status(app kernel.App) []DBStatus {
 	r := get(app)
 	if r == nil {
+		if getBlocked(app) != nil {
+			return []DBStatus{}
+		}
 		return nil
 	}
 
@@ -106,6 +115,9 @@ func Status(app kernel.App) []DBStatus {
 func Healthy(app kernel.App) (bool, string) {
 	r := get(app)
 	if r == nil {
+		if b := getBlocked(app); b != nil {
+			return false, b.reason
+		}
 		return true, ""
 	}
 
