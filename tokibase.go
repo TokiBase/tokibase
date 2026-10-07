@@ -19,6 +19,7 @@ import (
 	"github.com/tokibase/tokibase/modules/adminlock"
 	"github.com/tokibase/tokibase/modules/audit"
 	"github.com/tokibase/tokibase/modules/backupcheck"
+	"github.com/tokibase/tokibase/modules/denylog"
 	"github.com/tokibase/tokibase/modules/lockout"
 	"github.com/tokibase/tokibase/modules/ruleguard"
 	"github.com/tokibase/tokibase/modules/store/sqlite"
@@ -200,6 +201,9 @@ func NewWithConfig(config Config) *PocketBase {
 	// date values without a time zone: TOKI_TIMELINT=off|warn|strict (default warn)
 	timelint.Register(pb.App.(core.App))
 
+	// structured logs for every 401/403/429 response (TOKI_DENYLOG=off disables)
+	denylog.Register(pb.App.(core.App))
+
 	// verify every created backup by restoring it to a temp dir (TOKI_BACKUP_VERIFY=off disables)
 	backupcheck.Register(pb.App.(core.App))
 	if auditLog != nil {
@@ -286,6 +290,7 @@ func (pb *PocketBase) Start() error {
 	}
 	pb.RootCmd.AddCommand(cmd.NewLockoutCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewTimeCommand(pb))
+	pb.RootCmd.AddCommand(cmd.NewDenyCommand(pb))
 
 	return pb.Execute()
 }

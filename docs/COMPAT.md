@@ -61,6 +61,12 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: zoneless values are silently read as UTC, a common cause of "+N hours per sync" bugs.
 - Migration: nothing needed (default `warn`). Before enabling `strict`, make clients send ISO 8601 with an offset or `Z`; stock PocketBase SDKs that send `Date.toISOString()` already comply.
 
+### Structured denial logs (phase 1, denylog)
+
+- What: `modules/denylog` writes one extra Warn log entry (message `denylog: request denied`, attribute `toki.deny=true`) for every 401, 403 and 429 response, with `status`, `method`, `path`, `ip`, `auth_kind`, `auth_id`, `collection`, `reason`, `rule_kind`, `rate_limited`. Log attributes and the `_logs` table content only: responses, status codes, headers and schemas are unchanged. New CLI `toki deny tail`.
+- Why: denials were only visible as generic request logs without a machine-readable reason.
+- Migration: nothing needed. `TOKI_DENYLOG=off` stops the extra entries (they count toward the logs retention like any other log).
+
 ### Backup verification after create, `toki backup` CLI (phase 1, backupcheck)
 
 - What: `modules/backupcheck` verifies every created backup asynchronously (restore to a temp dir, `PRAGMA integrity_check`, counts, sampled files) and logs the result. New `toki backup create|list|verify|verify-all` commands (no `backup` CLI existed). Nothing changes in REST endpoints, backup file format or settings.
