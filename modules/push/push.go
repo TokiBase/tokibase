@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,7 +33,40 @@ const (
 
 	defaultMaxFanout = 100000
 	defaultMaxJobTry = 8
+
+	// maxDevicesPerUser is the number of devices kept per auth record; the
+	// least recently seen are evicted on registration.
+	maxDevicesPerUser = 20
+	// maxSubsPerDevice caps the topic subscriptions of one device.
+	maxSubsPerDevice = 100
+	// maxTTLSeconds is the FCM maximum (28 days).
+	maxTTLSeconds = 2419200
+
+	// VisibilityPublic topics can be listed and joined by any authenticated
+	// user; everything else (the default) is private (superuser/server only).
+	VisibilityPublic  = "public"
+	VisibilityPrivate = "private"
+
+	// ActionProviderError is the audit action of provider configuration/credential failures.
+	ActionProviderError = "push.provider_error"
+
+	// breaker: stop disabling devices when this many were disabled within a minute.
+	breakerMax    = 200
+	breakerWindow = time.Minute
 )
+
+var appIDRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`)
+
+// allowedAppIDs returns the optional allowlist TOKI_PUSH_APP_IDS (comma list).
+func allowedAppIDs() []string {
+	var out []string
+	for _, v := range strings.Split(os.Getenv("TOKI_PUSH_APP_IDS"), ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
 
 // Enabled reports whether the module is enabled (env TOKI_PUSH=off disables).
 func Enabled() bool {
@@ -73,8 +109,12 @@ func audit(action, collection, record string, details map[string]any) {
 type Module struct {
 	app core.App
 
-	mu        sync.Mutex
-	override  map[string]Provider
+	mu       sync.Mutex
+	override map[string]Provider
+
+	noteMu    sync.Mutex
+	noteLast  map[string]time.Time // rate limit of provider_error audits
+	disabledT []time.Time          // recent device disables (circuit breaker)
 	env       map[string]Provider
 	envErr    map[string]error
 	envLoaded bool
@@ -228,11 +268,18 @@ func ensureCollections(app core.App) error {
 		c.Fields.Add(
 			&core.TextField{Name: "name", Required: true, Max: 64},
 			&core.TextField{Name: "description", Max: 500},
+			&core.SelectField{Name: "visibility", Values: []string{VisibilityPublic, VisibilityPrivate}, MaxSelect: 1},
 			&core.AutodateField{Name: "created", OnCreate: true},
 			&core.AutodateField{Name: "updated", OnCreate: true, OnUpdate: true},
 		)
 		c.AddIndex("idx_toki_push_topics_name", true, "name", "")
 		if err := app.Save(c); err != nil {
+			return err
+		}
+	} else if tc, _ := app.FindCollectionByNameOrId(TopicsCollection); tc != nil && tc.Fields.GetByName("visibility") == nil {
+		// upgrade: existing topics have no visibility and therefore stay private
+		tc.Fields.Add(&core.SelectField{Name: "visibility", Values: []string{VisibilityPublic, VisibilityPrivate}, MaxSelect: 1})
+		if err := app.Save(tc); err != nil {
 			return err
 		}
 	}
@@ -350,7 +397,45 @@ func RegisterDevice(app kernel.App, authCollection *core.Collection, recordID, t
 	if err := app.Save(r); err != nil {
 		return nil, err
 	}
+	if err := evictOldDevices(app, authCollection.Id, recordID, r.Id); err != nil {
+		app.Logger().Warn("push: failed to evict old devices", "error", err)
+	}
 	return deviceOf(app, r), nil
+}
+
+// evictOldDevices keeps at most maxDevicesPerUser devices per record,
+// deleting the least recently seen ones (never keep).
+func evictOldDevices(app kernel.App, collectionID, recordID, keep string) error {
+	recs, err := app.FindAllRecords(DevicesCollection, dbx.HashExp{"collection": collectionID, "record": recordID})
+	if err != nil || len(recs) <= maxDevicesPerUser {
+		return err
+	}
+	sort.Slice(recs, func(i, j int) bool {
+		return recs[i].GetDateTime("last_seen").Time().Before(recs[j].GetDateTime("last_seen").Time())
+	})
+	for _, r := range recs {
+		if len(recs) <= maxDevicesPerUser {
+			break
+		}
+		if r.Id == keep {
+			continue
+		}
+		if err := app.Delete(r); err != nil {
+			return err
+		}
+		recs = removeRec(recs, r.Id)
+	}
+	return nil
+}
+
+func removeRec(recs []*core.Record, id string) []*core.Record {
+	out := recs[:0:0]
+	for _, r := range recs {
+		if r.Id != id {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func validateDevice(token, platform, appID, locale string) error {
@@ -362,6 +447,20 @@ func validateDevice(token, platform, appID, locale string) error {
 	}
 	if len(appID) > 200 {
 		return errors.New("app_id is too long")
+	}
+	if appID != "" {
+		if !appIDRe.MatchString(appID) {
+			return errors.New("app_id must be a bundle/package id ([A-Za-z0-9._-], starting and ending alphanumeric)")
+		}
+		if allow := allowedAppIDs(); len(allow) > 0 {
+			ok := false
+			for _, a := range allow {
+				ok = ok || a == appID
+			}
+			if !ok {
+				return errors.New("app_id is not allowed")
+			}
+		}
 	}
 	if len(locale) > 35 {
 		return errors.New("locale is too long")
@@ -418,11 +517,22 @@ func ListDevices(app kernel.App, collection, recordID string) ([]*Device, error)
 
 // DisableDevice marks a device as disabled (invalid token) and audits it.
 func DisableDevice(app kernel.App, deviceID, reason string) error {
+	return disableDeviceIfNotSeenSince(app, deviceID, reason, time.Time{})
+}
+
+// disableDeviceIfNotSeenSince disables the device unless it (re-)registered
+// after since (a zero since disables unconditionally): a provider answer for
+// a job that was enqueued before the app re-registered the token must not
+// kill the fresh registration.
+func disableDeviceIfNotSeenSince(app kernel.App, deviceID, reason string, since time.Time) error {
 	r, err := app.FindRecordById(DevicesCollection, deviceID)
 	if err != nil {
 		return nil // already gone
 	}
 	if !r.GetBool("enabled") {
+		return nil
+	}
+	if !since.IsZero() && r.GetDateTime("last_seen").Time().After(since) {
 		return nil
 	}
 	r.Set("enabled", false)
@@ -467,13 +577,30 @@ func ValidTopic(name string) bool {
 	return true
 }
 
-// CreateTopic creates a topic (idempotent).
+// CreateTopic creates a private topic (idempotent).
 func CreateTopic(app kernel.App, name, description string) error {
+	return CreateTopicVisibility(app, name, description, VisibilityPrivate)
+}
+
+// CreateTopicVisibility creates a topic with visibility "public" (users may
+// list and subscribe) or "private" (default; only server-side sends). An
+// existing topic gets its visibility updated.
+func CreateTopicVisibility(app kernel.App, name, description, visibility string) error {
+	if visibility == "" {
+		visibility = VisibilityPrivate
+	}
+	if visibility != VisibilityPublic && visibility != VisibilityPrivate {
+		return errors.New("visibility must be public or private")
+	}
 	if !ValidTopic(name) {
 		return errors.New("topic name must be 1-64 characters of [A-Za-z0-9_.-]")
 	}
-	if _, err := app.FindFirstRecordByData(TopicsCollection, "name", name); err == nil {
-		return nil
+	if r, err := app.FindFirstRecordByData(TopicsCollection, "name", name); err == nil {
+		if r.GetString("visibility") == visibility {
+			return nil
+		}
+		r.Set("visibility", visibility)
+		return app.Save(r)
 	}
 	col, err := app.FindCachedCollectionByNameOrId(TopicsCollection)
 	if err != nil {
@@ -482,6 +609,7 @@ func CreateTopic(app kernel.App, name, description string) error {
 	r := core.NewRecord(col)
 	r.Set("name", name)
 	r.Set("description", description)
+	r.Set("visibility", visibility)
 	return app.Save(r)
 }
 
@@ -489,17 +617,30 @@ func CreateTopic(app kernel.App, name, description string) error {
 type Topic struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	Visibility  string `json:"visibility"`
 }
 
 // ListTopics returns all topics sorted by name.
-func ListTopics(app kernel.App) ([]Topic, error) {
+func ListTopics(app kernel.App) ([]Topic, error) { return listTopics(app, false) }
+
+// ListPublicTopics returns the topics users may list and subscribe to.
+func ListPublicTopics(app kernel.App) ([]Topic, error) { return listTopics(app, true) }
+
+func listTopics(app kernel.App, publicOnly bool) ([]Topic, error) {
 	recs, err := app.FindAllRecords(TopicsCollection)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]Topic, 0, len(recs))
 	for _, r := range recs {
-		out = append(out, Topic{Name: r.GetString("name"), Description: r.GetString("description")})
+		v := r.GetString("visibility")
+		if v != VisibilityPublic {
+			v = VisibilityPrivate
+		}
+		if publicOnly && v != VisibilityPublic {
+			continue
+		}
+		out = append(out, Topic{Name: r.GetString("name"), Description: r.GetString("description"), Visibility: v})
 	}
 	sortTopics(out)
 	return out, nil
@@ -513,7 +654,17 @@ func sortTopics(t []Topic) {
 	}
 }
 
+// SubscribePublic is Subscribe for end users: private topics answer as missing.
+func SubscribePublic(app kernel.App, deviceID, topic string) error {
+	t, err := app.FindFirstRecordByData(TopicsCollection, "name", topic)
+	if err != nil || t.GetString("visibility") != VisibilityPublic {
+		return errTopicNotFound
+	}
+	return Subscribe(app, deviceID, topic)
+}
+
 // Subscribe adds the device to a topic (idempotent). The topic must exist.
+// It does not look at the visibility (server side use); see SubscribePublic.
 func Subscribe(app kernel.App, deviceID, topic string) error {
 	t, err := app.FindFirstRecordByData(TopicsCollection, "name", topic)
 	if err != nil {
@@ -522,6 +673,9 @@ func Subscribe(app kernel.App, deviceID, topic string) error {
 	if _, err := app.FindFirstRecordByFilter(SubscriptionsCollection, "device = {:d} && topic = {:t}",
 		dbx.Params{"d": deviceID, "t": t.Id}); err == nil {
 		return nil
+	}
+	if existing, err := app.FindAllRecords(SubscriptionsCollection, dbx.HashExp{"device": deviceID}); err == nil && len(existing) >= maxSubsPerDevice {
+		return errTooManySubs
 	}
 	col, err := app.FindCachedCollectionByNameOrId(SubscriptionsCollection)
 	if err != nil {
@@ -533,7 +687,10 @@ func Subscribe(app kernel.App, deviceID, topic string) error {
 	return app.Save(r)
 }
 
-var errTopicNotFound = errors.New("topic not found")
+var (
+	errTopicNotFound = errors.New("topic not found")
+	errTooManySubs   = errors.New("too many subscriptions for this device")
+)
 
 // Unsubscribe removes the device from a topic (idempotent).
 func Unsubscribe(app kernel.App, deviceID, topic string) error {
@@ -576,6 +733,11 @@ type Message struct {
 
 type jobPayload struct {
 	Device string `json:"device"`
+	// Enqueued (unix ms) is when the job was created; a disable caused by this
+	// job is skipped when the device re-registered afterwards.
+	Enqueued int64 `json:"enqueued,omitempty"`
+	// ExpiresAt (unix seconds, 0 = none) is the absolute end of the TTL.
+	ExpiresAt int64 `json:"expires_at,omitempty"`
 	Notification
 }
 
@@ -636,8 +798,8 @@ func (n *Notification) validate() error {
 	default:
 		return errors.New("priority must be high or normal")
 	}
-	if n.TTLSeconds < 0 {
-		return errors.New("ttl_seconds must be >= 0")
+	if n.TTLSeconds < 0 || n.TTLSeconds > maxTTLSeconds {
+		return fmt.Errorf("ttl_seconds must be between 0 and %d", maxTTLSeconds)
 	}
 	if len(n.CollapseKey) > 200 {
 		return errors.New("collapse_key is too long")
@@ -670,9 +832,15 @@ func sendFrom(app kernel.App, msg Message, source string) (int, error) {
 	}
 	q := kernel.Jobs(app)
 	ctx := context.Background()
+	now := time.Now()
+	jp := jobPayload{Enqueued: now.UnixMilli(), Notification: msg.Notification}
+	if msg.TTLSeconds > 0 {
+		jp.ExpiresAt = now.Add(time.Duration(msg.TTLSeconds) * time.Second).Unix()
+	}
 	n := 0
 	for _, d := range devs {
-		if _, err := q.Enqueue(ctx, JobKind, jobPayload{Device: d.ID, Notification: msg.Notification},
+		jp.Device = d.ID
+		if _, err := q.Enqueue(ctx, JobKind, jp,
 			kernel.MaxAttempts(defaultMaxJobTry)); err != nil {
 			audit("push.send", "", "", map[string]any{"source": source, "queued": n, "recipients": len(devs), "error": err.Error()})
 			return n, err
@@ -691,6 +859,15 @@ func (m *Module) handleJob(ctx context.Context, app kernel.App, job *kernel.Job)
 	if err := jsonUnmarshal(job.Payload, &p); err != nil {
 		return nil // corrupt payload cannot succeed later
 	}
+	// the TTL is absolute: a retry after an outage must not get a fresh window
+	if p.ExpiresAt > 0 {
+		remaining := p.ExpiresAt - time.Now().Unix()
+		if remaining <= 0 {
+			app.Logger().Info("push: notification expired before delivery, dropped", "device", p.Device)
+			return nil
+		}
+		p.TTLSeconds = int(remaining)
+	}
 	r, err := app.FindRecordById(DevicesCollection, p.Device)
 	if err != nil || !r.GetBool("enabled") {
 		return nil // device removed or disabled after enqueue
@@ -698,23 +875,117 @@ func (m *Module) handleJob(ctx context.Context, app kernel.App, job *kernel.Job)
 	d := deviceOf(app, r)
 	prov, err := m.ProviderFor(d.Platform)
 	if err != nil {
+		m.providerError(d.Platform, err)
 		return err // visible in `toki jobs` until configured
 	}
-	return m.deliver(ctx, prov, d, &p.Notification)
+	if d.Platform == PlatformAPNs && d.AppID != "" {
+		p.Topic = d.AppID
+	}
+	var since time.Time
+	if p.Enqueued > 0 {
+		since = time.UnixMilli(p.Enqueued)
+	}
+	return m.deliver(ctx, prov, d, &p.Notification, since)
 }
 
-func (m *Module) deliver(ctx context.Context, prov Provider, d *Device, n *Notification) error {
-	err := prov.Send(ctx, n, d.Token)
+// providerError logs loudly and audits a provider/configuration failure, at
+// most once a minute per platform and message (a 100k fan-out would flood).
+func (m *Module) providerError(platform string, err error) {
+	msg := err.Error()
+	key := platform + "|" + msg
+	m.noteMu.Lock()
+	if m.noteLast == nil {
+		m.noteLast = map[string]time.Time{}
+	}
+	if len(m.noteLast) > 100 {
+		m.noteLast = map[string]time.Time{}
+	}
+	last, seen := m.noteLast[key]
+	now := time.Now()
+	if seen && now.Sub(last) < time.Minute {
+		m.noteMu.Unlock()
+		return
+	}
+	m.noteLast[key] = now
+	m.noteMu.Unlock()
+	m.app.Logger().Error("push: provider error (jobs are retried, devices are NOT disabled)", "platform", platform, "error", msg)
+	audit(ActionProviderError, "", "", map[string]any{"platform": platform, "error": msg})
+}
+
+// allowDisable is the circuit breaker: when breakerMax devices were disabled
+// within breakerWindow something is systematically wrong (sandbox/prod mix-up,
+// wrong key), so further disables are suppressed and audited.
+func (m *Module) allowDisable() bool {
+	m.noteMu.Lock()
+	defer m.noteMu.Unlock()
+	now := time.Now()
+	cut := now.Add(-breakerWindow)
+	i := 0
+	for i < len(m.disabledT) && m.disabledT[i].Before(cut) {
+		i++
+	}
+	m.disabledT = m.disabledT[i:]
+	if len(m.disabledT) >= breakerMax {
+		return false
+	}
+	m.disabledT = append(m.disabledT, now)
+	return true
+}
+
+var (
+	deviceURLRe = regexp.MustCompile(`/3/device/[^\s"']+`)
+)
+
+// sanitizedError hides secrets in the message while keeping the error chain
+// (errors.Is / errors.As) of the original.
+type sanitizedError struct {
+	msg string
+	err error
+}
+
+func (e *sanitizedError) Error() string { return e.msg }
+func (e *sanitizedError) Unwrap() error { return e.err }
+
+// sanitizeErr removes the device token and token-bearing URLs from err's text
+// (the text ends up in `last_error` of the job and in logs).
+func sanitizeErr(err error, token string) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	out := deviceURLRe.ReplaceAllString(msg, "/3/device/"+"***")
+	if token != "" {
+		out = strings.ReplaceAll(out, token, MaskToken(token))
+		if esc := url.PathEscape(token); esc != token {
+			out = strings.ReplaceAll(out, esc, MaskToken(token))
+		}
+	}
+	if out == msg {
+		return err
+	}
+	return &sanitizedError{msg: out, err: err}
+}
+
+func (m *Module) deliver(ctx context.Context, prov Provider, d *Device, n *Notification, since time.Time) error {
+	err := sanitizeErr(prov.Send(ctx, n, d.Token), d.Token)
 	if err == nil {
 		return nil
 	}
 	var perm *PermanentError
+	var cfg *ConfigError
 	switch {
 	case errors.Is(err, ErrInvalidToken):
-		if derr := DisableDevice(m.app, d.ID, err.Error()); derr != nil {
+		if !m.allowDisable() {
+			m.providerError(d.Platform, fmt.Errorf("device-token rejections exceed %d per %s, no longer disabling devices (check sandbox/production and credentials): %w", breakerMax, breakerWindow, err))
+			return &RetryableError{Err: err}
+		}
+		if derr := disableDeviceIfNotSeenSince(m.app, d.ID, err.Error(), since); derr != nil {
 			m.app.Logger().Warn("push: failed to disable device", "device", d.ID, "error", derr)
 		}
 		return nil
+	case errors.As(err, &cfg):
+		m.providerError(d.Platform, err)
+		return err // retried with backoff, visible in `toki jobs`
 	case errors.As(err, &perm):
 		m.app.Logger().Warn("push: notification rejected", "device", d.ID, "platform", d.Platform, "error", err)
 		return nil

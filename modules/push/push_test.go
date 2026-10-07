@@ -153,7 +153,7 @@ func TestDeviceOwnershipAndSubscribe(t *testing.T) {
 	e := setup(t)
 	a, ta := e.user(t, "a@example.com")
 	_, tb := e.user(t, "b@example.com")
-	if err := CreateTopic(e.app, "news", ""); err != nil {
+	if err := CreateTopicVisibility(e.app, "news", "", VisibilityPublic); err != nil {
 		t.Fatal(err)
 	}
 
@@ -220,7 +220,7 @@ func TestDeviceOwnershipAndSubscribe(t *testing.T) {
 
 func TestSendTopicEnqueuesAndHandlerCallsProvider(t *testing.T) {
 	e := setup(t)
-	_ = CreateTopic(e.app, "news", "")
+	_ = CreateTopicVisibility(e.app, "news", "", VisibilityPublic)
 	su := e.superuser(t)
 	_, ta := e.user(t, "a@example.com")
 	_, tb := e.user(t, "b@example.com")
@@ -476,7 +476,7 @@ func TestFCMOAuthExchangeAndSend(t *testing.T) {
 		t.Fatalf("token not refreshed: %d", tokenCalls)
 	}
 	// error mapping
-	sendStatus = 404
+	sendStatus = 404 // body carries errorCode UNREGISTERED
 	if err := f.Send(context.Background(), n, "gone"); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("want ErrInvalidToken, got %v", err)
 	}
@@ -586,6 +586,7 @@ func TestAPNsRequestShapeAndClassification(t *testing.T) {
 	if err := classifyAPNs(a, 400, []byte(`{"reason":"PayloadEmpty"}`)); !errors.As(err, &pe) {
 		t.Fatalf("400: %v", err)
 	}
+	now = now.Add(21 * time.Minute) // Apple rate limits provider token refreshes (< 20 min)
 	if err := classifyAPNs(a, 403, []byte(`{"reason":"ExpiredProviderToken"}`)); !errors.As(err, &re) || a.jwt != "" {
 		t.Fatalf("403: %v jwt=%q", err, a.jwt)
 	}

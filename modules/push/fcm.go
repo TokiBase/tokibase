@@ -91,7 +91,8 @@ func (f *FCM) accessToken(ctx context.Context) (string, error) {
 		map[string]string{"alg": "RS256", "typ": "JWT"},
 		map[string]any{
 			"iss": f.sa.ClientEmail, "scope": fcmScope, "aud": f.sa.TokenURI,
-			"iat": now.Unix(), "exp": now.Add(time.Hour).Unix(),
+			// iat is backdated to tolerate a host clock slightly ahead of Google
+			"iat": now.Add(-30 * time.Second).Unix(), "exp": now.Add(-30 * time.Second).Add(time.Hour).Unix(),
 		})
 	if err != nil {
 		return "", permanent("fcm: sign assertion: %v", err)
@@ -112,7 +113,8 @@ func (f *FCM) accessToken(ctx context.Context) (string, error) {
 		return "", retryable("fcm: oauth token endpoint HTTP %d", res.StatusCode)
 	}
 	if res.StatusCode != 200 {
-		return "", permanent("fcm: oauth token endpoint HTTP %d: %s", res.StatusCode, truncate(string(body), 200))
+		// invalid_grant, revoked key, disabled API...: operator-fixable
+		return "", configErr("fcm: oauth token endpoint HTTP %d: %s", res.StatusCode, truncate(string(body), 200))
 	}
 	var tr struct {
 		AccessToken string `json:"access_token"`
@@ -199,21 +201,35 @@ func classifyFCM(f *FCM, status int, body []byte) error {
 			Status  string `json:"status"`
 			Message string `json:"message"`
 			Details []struct {
-				ErrorCode string `json:"errorCode"`
+				ErrorCode       string `json:"errorCode"`
+				FieldViolations []struct {
+					Field string `json:"field"`
+				} `json:"fieldViolations"`
 			} `json:"details"`
 		} `json:"error"`
 	}
 	_ = json.Unmarshal(body, &e)
 	code := e.Error.Status
+	tokenViolation := false
 	for _, d := range e.Error.Details {
 		if d.ErrorCode != "" {
 			code = d.ErrorCode
 		}
+		for _, v := range d.FieldViolations {
+			if v.Field == "message.token" {
+				tokenViolation = true
+			}
+		}
 	}
 	msg := fmt.Sprintf("fcm: HTTP %d %s %s", status, code, truncate(e.Error.Message, 200))
 	switch {
-	case code == "UNREGISTERED" || status == 404 || code == "NOT_FOUND":
+	case code == "UNREGISTERED" || (code == "INVALID_ARGUMENT" && tokenViolation):
+		// only these identify one dead token. NOT_FOUND / 404 is the project
+		// path (wrong project_id, FCM API disabled): a configuration error.
 		return fmt.Errorf("%w (%s)", ErrInvalidToken, msg)
+	case status == 404 || code == "NOT_FOUND" || status == 403 || code == "PERMISSION_DENIED" || code == "SENDER_ID_MISMATCH":
+		f.dropToken()
+		return &ConfigError{Err: errors.New(msg)}
 	case status == 401:
 		f.dropToken() // expired or revoked: next attempt re-exchanges
 		return &RetryableError{Err: errors.New(msg)}
