@@ -63,7 +63,7 @@ Exit gate: all modules on by default in profile `solo`, failover drill RTO under
 - [x] passkey: WebAuthn/FIDO2 passkeys on any auth collection, discoverable login returning the standard auth response, `_passkeys` + clone detection, lockout/audit sinks, `toki passkey` (`docs/modules/passkey.md`).
 - [ ] mcp (PR 2): streamable HTTP transport, `@request.auth.kind = "agent"` in rules, sandbox mode.
 
-## Size budgets (stripped; CI enforces solo 40 MiB, no_ui 37 MiB, solo+replica_s3 50 MiB; phase 2 modules add about 1 MB each, mcp 2 MB)
+## Size budgets (stripped; CI enforces solo 46 MiB, no_ui 43 MiB, solo+replica_s3 56 MiB). The full-featured `solo` build has reached the 45 MB design budget with passkey (+2.1 MB, go-webauthn/TPM/CBOR), mcp (+2 MB) and push; `edge`/`nano` profiles will exclude these via build tags (`no_mcp` exists; `no_passkey`, `no_push`, `no_crypto` to follow).
 
 | Profile | Budget |
 | --- | --- |
