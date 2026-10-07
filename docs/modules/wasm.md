@@ -90,7 +90,7 @@ A non-zero exit, a trap, an out-of-memory, a timeout, empty or invalid stdout al
 
 A module that lists `batch.before`, `batch.after` or `batch.*` in `events` is called by the same emitter as `kernel.OnBatchFor(app)` ([batchguard](batchguard.md), which must be registered; it is in every default build). Additive to `toki/1`: the ABI string is unchanged, old guests never see the new `kind`.
 
-- `batch.before` runs inside the batch transaction before any sub-request, with the submitted bodies. `batch.after` runs inside the same transaction after the last sub-request, with the STORED values read back (defaults, hooks and `computed` rollups applied; `body` is absent for deleted records). Same structure as the batchguard `assert` / `assert_post` phases.
+- `batch.before` runs inside the batch transaction before any sub-request, with the submitted bodies. `batch.after` runs inside the same transaction after the last sub-request, with the STORED values read back (defaults, hooks and `computed` rollups applied; `body` is absent for deleted records). Like record events, hidden fields and the system credential fields (`tokenKey`, `passwordHash`) are omitted in `batch.after`; `batch.before` shows the submitted body as sent. Same structure as the batchguard `assert` / `assert_post` phases.
 - Event: `kind: "batch"`, `phase: "before"|"after"`, `actor` as usual, and
 
 ```json
@@ -105,9 +105,9 @@ A module that lists `batch.before`, `batch.after` or `batch.*` in `events` is ca
 - Reply `{"ok": false, "status": 422, "message": "..."}` to reject the WHOLE batch: the transaction rolls back and the client gets that status (default 400) and message, with `data` shaped like other rejections. `ok: true` lets it continue; `record` is ignored for batches.
 - **Fails closed**: a trap, non-zero exit, timeout (`timeout_ms`), invalid output, or a batch whose payload exceeds 4 MiB answers `500 {"message":"Hook failed."}` (`413` for the size) and rolls back. Several modules run in name order; the first rejection wins.
 - **Redaction**: bodies are copied before the guest sees them. The keys `password`, `passwordConfirm`, `oldPassword`, `token`, `secret` are removed at any depth (as in `request_info`), and fields registered with `kernel.RegisterSensitiveField` (crypto) are replaced by `[encrypted]` when non-empty, including the modifier forms `field+`, `+field`, `field-`, `field:x`.
-- Host calls inside the event use the transaction app, so `records_*` reads and writes commit or roll back with the batch. Time and memory limits are those of the module. The handler is bound only while some loaded module declares a batch event, so a server without one adds no work to `/api/batch`.
+- Host calls inside the event use the transaction app, so `records_*` reads and writes commit or roll back with the batch. Time and memory limits are those of the module, and in addition ALL modules and both phases of one batch share a budget of `TOKI_WASM_BATCH_BUDGET` (Go duration, default `10s`); exceeding it answers `500 Hook failed.` and rolls back. The batch transaction holds the single SQLite write connection while guests run, so keep batch guests fast and avoid `http_fetch` in batch events. With any batch hook bound, matching batches are buffered and `,id` is appended to `fields=` internally (removed from the response again). The handler is bound only while some loaded module declares a batch event, so a server without one adds no work to `/api/batch`.
 
-Example (Go guest, sidecar `events = ["batch.before"]`):
+Example (Go guest, sidecar `events = ["batch.after"]`, so the STORED quantities are summed):
 
 ```go
 toki.Run(func(ev *toki.Event) (*toki.Result, error) {
@@ -118,7 +118,7 @@ toki.Run(func(ev *toki.Event) (*toki.Result, error) {
 })
 ```
 
-Use `batch.after` for money, stock and quota checks (the body in `batch.before` is the raw submission, so modifier keys such as `qty+` are not resolved).
+Use `batch.after` for money, stock and quota checks. The body in `batch.before` is the raw submission: modifier keys such as `qty+` are not resolved there (`Batch.Sum` adds `qty+`/`+qty` and subtracts `qty-`, but cannot know the stored value a modifier applies to).
 
 ### Result (stdout)
 

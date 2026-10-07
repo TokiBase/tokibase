@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -191,8 +192,12 @@ func (e *env) kindCollections() *kernel.Record {
 	}
 	mk("only_agents", `@request.auth.kind = "agent"`)
 	mk("only_users", `@request.auth.kind = "user"`)
-	mk("only_readers", `@request.auth.kind = "agent" && @request.auth.role = "reader"`)
-	mk("only_writers", `@request.auth.kind = "agent" && @request.auth.role = "writer"`)
+	mk("only_readers", `@request.auth.kind = "agent" && @request.auth.agent.role = "reader"`)
+	mk("only_writers", `@request.auth.kind = "agent" && @request.auth.agent.role = "writer"`)
+	// user-field rules must not match an agent (namespaced attributes)
+	mk("plain_role_writer", `@request.auth.role = "writer"`)
+	mk("plain_name", `@request.auth.name != ""`)
+	mk("plain_key_hash", `@request.auth.agent.key_hash != ""`)
 	mk("any_auth", `@request.auth.id != ""`)
 
 	members := kernel.NewAuthCollection("members")
@@ -221,6 +226,7 @@ func TestAuthKindInRules(t *testing.T) {
 	}
 	for col, want := range map[string]float64{
 		"only_agents": 1, "only_users": 0, "only_readers": 1, "only_writers": 0, "any_auth": 1,
+		"plain_role_writer": 0, "plain_name": 0, "plain_key_hash": 0,
 	} {
 		if got := count(col); got != want {
 			t.Errorf("agent on %s: got %v items, want %v", col, got, want)
@@ -231,6 +237,11 @@ func TestAuthKindInRules(t *testing.T) {
 	out := mustOK(t, ws, "records.query", map[string]any{"collection": "only_writers"})
 	if out["totalItems"].(float64) != 1 {
 		t.Fatalf("writer on only_writers: %v", out)
+	}
+	// `@request.auth.role = "writer"` must NOT match a writer agent
+	out = mustOK(t, ws, "records.query", map[string]any{"collection": "plain_role_writer"})
+	if out["totalItems"].(float64) != 0 {
+		t.Fatalf("writer agent matched @request.auth.role: %v", out)
 	}
 	// get honours the same rule
 	rec, _ := e.app.FindFirstRecordByData("only_users", "title", "only_users")
@@ -333,6 +344,108 @@ func TestParseExpires(t *testing.T) {
 	for in, ok := range map[string]bool{"": true, "90d": true, "2026-12-31": true, "2026-12-31T10:00:00Z": true, "soon": false, "0d": false} {
 		if _, err := parseExpires(in, now); (err == nil) != ok {
 			t.Errorf("%q: err=%v", in, err)
+		}
+	}
+}
+
+func TestHTTPHostBehindProxy(t *testing.T) {
+	e := setup(t)
+	_, key := e.agentKey("proxied", RoleReader, AgentOptions{})
+	srv := httptest.NewServer(NewHTTPHandler(e.app)) // loopback listener
+	defer srv.Close()
+	do := func(host string) int {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL, strings.NewReader(initBody))
+		req.Host = host
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		return res.StatusCode
+	}
+	if got := do("evil.example.org"); got != 403 {
+		t.Fatalf("unknown public host: %d", got)
+	}
+	if got := do("localhost:8090"); got != 200 {
+		t.Fatalf("loopback host: %d", got)
+	}
+	e.app.Settings().Meta.AppURL = "https://mcp.example.com"
+	if got := do("mcp.example.com"); got != 200 {
+		t.Fatalf("host of the app URL: %d", got)
+	}
+	t.Setenv(EnvAllowedHosts, "other.example.net, x.test")
+	if got := do("other.example.net"); got != 200 {
+		t.Fatalf("allowlisted host: %d", got)
+	}
+	if got := do("evil.example.org"); got != 403 {
+		t.Fatalf("still unknown: %d", got)
+	}
+}
+
+func TestHTTPThrottleKeying(t *testing.T) {
+	e := setup(t)
+	_, key := e.agentKey("thr", RoleReader, AgentOptions{})
+	h := NewHTTPHandler(e.app)
+	do := func(k, remote string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/mcp", strings.NewReader(initBody))
+		req.RemoteAddr = remote
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		if k != "" {
+			req.Header.Set("Authorization", "Bearer "+k)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	// requests without a header never count
+	for i := 0; i < failMax+5; i++ {
+		if got := do("", "10.0.0.1:1"); got != 401 {
+			t.Fatalf("no header: %d", got)
+		}
+	}
+	bad := "tka_" + strings.Repeat("z", 40)
+	for i := 0; i < failMax; i++ {
+		do(bad, "10.0.0.1:1")
+	}
+	if got := do(bad, "10.0.0.1:2"); got != 429 {
+		t.Fatalf("bad key over the limit: %d", got)
+	}
+	// a valid key from the same saturated address still passes
+	if got := do(key, "10.0.0.1:3"); got != 200 {
+		t.Fatalf("valid key must not be throttled: %d", got)
+	}
+	// another address has its own bucket
+	if got := do(bad, "10.0.0.2:1"); got != 401 {
+		t.Fatalf("other address: %d", got)
+	}
+	// IPv6 addresses of one /64 share a bucket
+	for i := 0; i < failMax; i++ {
+		do(bad, "[2001:db8::1]:1")
+	}
+	if got := do(bad, "[2001:db8::ffff]:1"); got != 429 {
+		t.Fatalf("same /64: %d", got)
+	}
+}
+
+func TestFailMapIsBounded(t *testing.T) {
+	h := &httpHandler{now: time.Now, fails: map[string]*failState{}}
+	for i := 0; i < failMaxEntries*3; i++ {
+		h.fail(fmt.Sprintf("ip:%d", i))
+	}
+	if len(h.fails) > failMaxEntries {
+		t.Fatalf("fails map grew to %d", len(h.fails))
+	}
+}
+
+func TestParseExpiresStrict(t *testing.T) {
+	now := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
+	for _, in := range []string{"7xd", "2020-01-01", "2020-01-01T00:00:00Z", "-3d"} {
+		if _, err := parseExpires(in, now); err == nil {
+			t.Errorf("%q must be rejected", in)
 		}
 	}
 }

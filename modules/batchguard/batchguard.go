@@ -442,18 +442,55 @@ func (m *Module) loadRules(app core.App) ([]Rule, error) {
 }
 
 // fieldsWithID appends `id` to the `fields` query param of a records URL so
-// the batch response always carries the id of a written record.
-func fieldsWithID(raw string) string {
+// the batch response always carries the id of a written record. added reports
+// whether the client did not ask for `id` itself (the flushed response then
+// has it stripped again, see stripAddedIDs).
+func fieldsWithID(raw string) (out string, added bool) {
 	i := strings.Index(raw, "?")
 	if i < 0 {
-		return raw
+		return raw, false
 	}
 	q, err := url.ParseQuery(raw[i+1:])
 	if err != nil || q.Get("fields") == "" {
-		return raw
+		return raw, false
+	}
+	for _, f := range strings.Split(q.Get("fields"), ",") {
+		if f = strings.TrimSpace(f); f == "id" || f == "*" {
+			return raw, false
+		}
 	}
 	q.Set("fields", q.Get("fields")+",id")
-	return raw[:i] + "?" + q.Encode()
+	return raw[:i] + "?" + q.Encode(), true
+}
+
+// stripAddedIDs removes the top-level `id` from the successful results whose
+// `fields=` was extended by fieldsWithID, so the client gets exactly the
+// fields it asked for. On any decoding problem the response is left as is.
+func stripAddedIDs(resp []byte, idx map[int]bool) []byte {
+	if len(idx) == 0 {
+		return resp
+	}
+	var results []map[string]json.RawMessage
+	if err := json.Unmarshal(resp, &results); err != nil {
+		return resp
+	}
+	for i := range results {
+		if !idx[i] {
+			continue
+		}
+		var body map[string]json.RawMessage
+		if json.Unmarshal(results[i]["body"], &body) != nil || body == nil {
+			continue
+		}
+		delete(body, "id")
+		if b, err := json.Marshal(body); err == nil {
+			results[i]["body"] = b
+		}
+	}
+	if b, err := json.Marshal(results); err == nil {
+		return b
+	}
+	return resp
 }
 
 func (m *Module) onBatch(e *core.BatchRequestEvent) error {
@@ -481,17 +518,14 @@ func (m *Module) onBatch(e *core.BatchRequestEvent) error {
 	}
 
 	origApp, origResp := e.App, e.Response
-	var bw *bufWriter
-	needPost := hooks.Length() > 0
-	for _, r := range rules {
-		if r.Enabled && r.AssertPost != "" {
-			needPost = true
-		}
-	}
-	if needPost {
-		bw = &bufWriter{h: e.Response}
-		e.Response = bw
-	}
+	// one snapshot per request: a hot reload that binds the first batch hook
+	// mid-request must not make `before` and `after` disagree
+	nHooks := hooks.Length()
+	// Once past the pre-filter the response is always buffered: a failure
+	// after the sub-requests ran (a hook bound mid-request) must not let the
+	// client see a success for a rolled back batch.
+	bw := &bufWriter{h: e.Response}
+	e.Response = bw
 	defer func() { e.App, e.Response = origApp, origResp }()
 
 	err = origApp.RunInTransaction(func(txKernel kernel.App) error {
@@ -506,7 +540,7 @@ func (m *Module) onBatch(e *core.BatchRequestEvent) error {
 				active = append(active, r)
 			}
 		}
-		hasPost := hooks.Length() > 0
+		hasPost := nHooks > 0
 		for _, r := range active {
 			if r.AssertPost != "" {
 				hasPost = true
@@ -515,11 +549,19 @@ func (m *Module) onBatch(e *core.BatchRequestEvent) error {
 		if err := modifierConflict(active, reqs); err != nil {
 			return err
 		}
+		var stripID map[int]bool
 		if hasPost {
 			// the response must carry record ids even when a sub-request picks `fields`
-			for _, ir := range e.Batch {
+			for i, ir := range e.Batch {
 				if recordsURL.MatchString(ir.URL) {
-					ir.URL = fieldsWithID(ir.URL)
+					var added bool
+					ir.URL, added = fieldsWithID(ir.URL)
+					if added {
+						if stripID == nil {
+							stripID = map[int]bool{}
+						}
+						stripID[i] = true
+					}
 				}
 			}
 		}
@@ -530,7 +572,7 @@ func (m *Module) onBatch(e *core.BatchRequestEvent) error {
 				return err
 			}
 		}
-		if err := m.emit(kernel.BatchBefore, txApp, reqs, e.Auth); err != nil {
+		if err := m.emit(kernel.BatchBefore, txApp, reqs, e.Auth, nHooks > 0); err != nil {
 			return err
 		}
 
@@ -538,7 +580,13 @@ func (m *Module) onBatch(e *core.BatchRequestEvent) error {
 			return err
 		}
 
-		if !hasPost || bw == nil {
+		if !hasPost {
+			if nHooks == 0 && hooks.Length() > 0 {
+				// a batch hook was bound while this request ran (hot reload):
+				// `batch.after` can not run, so fail closed instead of skipping it
+				m.app.Logger().Error("batchguard: batch hooks were loaded during the request, batch refused")
+				return router.NewApiError(http.StatusServiceUnavailable, "Batch validation hooks changed during the request, retry.", nil)
+			}
 			return nil
 		}
 		// phase 2: after the last sub-request, still inside the transaction
@@ -552,26 +600,36 @@ func (m *Module) onBatch(e *core.BatchRequestEvent) error {
 				return err
 			}
 		}
-		return m.emit(kernel.BatchAfter, txApp, post, e.Auth)
+		if err := m.emit(kernel.BatchAfter, txApp, post, e.Auth, nHooks > 0); err != nil {
+			return err
+		}
+		if len(stripID) > 0 {
+			stripped := stripAddedIDs(bw.buf.Bytes(), stripID)
+			bw.buf.Reset()
+			bw.buf.Write(stripped)
+		}
+		return nil
 	})
 	if err != nil {
 		return err
 	}
-	if bw != nil {
-		e.Response = origResp
-		bw.flush()
-	}
+	e.Response = origResp
+	bw.flush()
 	return nil
 }
 
-func (m *Module) emit(name string, app core.App, reqs []reqView, auth *core.Record) error {
+func (m *Module) emit(name string, app core.App, reqs []reqView, auth *core.Record, on bool) error {
 	hooks := kernel.OnBatchFor(m.app)
-	if hooks.Length() == 0 {
+	if !on || hooks.Length() == 0 {
 		return nil
 	}
 	ev := &kernel.BatchEvent{Name: name, App: app, Auth: auth, Requests: make([]kernel.BatchRequest, len(reqs))}
 	for i, r := range reqs {
 		ev.Requests[i] = kernel.BatchRequest{Index: r.Index, Collection: r.Collection, Method: r.Method, ID: r.ID, Body: r.Data, Deleted: r.Deleted}
+		if name == kernel.BatchAfter {
+			// stored records: same visibility as record events (PublicExport)
+			ev.Requests[i].Body = publicData(app, r.Collection, r.Data)
+		}
 	}
 	err := hooks.Trigger(ev)
 	if err == nil {
@@ -623,4 +681,27 @@ func (m *Module) readBack(app core.App, reqs []reqView, resp []byte) ([]reqView,
 		out[i] = r
 	}
 	return out, nil
+}
+
+// publicData drops the hidden fields (and the system credential fields) of
+// the stored record data handed to batch.after hooks, like PublicExport does
+// for record events.
+func publicData(app core.App, collection string, data map[string]any) map[string]any {
+	if data == nil || collection == "" {
+		return data
+	}
+	out := make(map[string]any, len(data))
+	for k, v := range data {
+		out[k] = v
+	}
+	delete(out, "tokenKey")
+	delete(out, "passwordHash")
+	if col, err := app.FindCachedCollectionByNameOrId(collection); err == nil && col != nil {
+		for _, f := range col.Fields {
+			if f.GetHidden() {
+				delete(out, f.GetName())
+			}
+		}
+	}
+	return out
 }

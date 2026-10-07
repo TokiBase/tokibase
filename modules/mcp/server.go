@@ -275,9 +275,11 @@ var (
 )
 
 // agentInfo is the request info used to evaluate rules for non-operator
-// agents: the auth is the `_agents` record, so `@request.auth.kind = "agent"`,
-// `@request.auth.id` and `@request.auth.role` resolve. A nil record (agents
-// built by hand in tests) degrades to guest.
+// agents: the auth is the `_agents` record. Only `@request.auth.id`,
+// `.collectionId`, `.collectionName` and `.kind` (= "agent") resolve at the top
+// level; the attributes of the agent are under `@request.auth.agent.*`
+// (role, name, ...). Any other `@request.auth.<field>` is empty. A nil record
+// (agents built by hand in tests) degrades to guest.
 func agentInfo(a *Agent) *kernel.RequestInfo {
 	info := guestInfo()
 	if a != nil && a.rec != nil {

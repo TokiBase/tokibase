@@ -96,22 +96,29 @@ func (b *Batch) For(collection string) []BatchRequest {
 }
 
 // Sum adds the numeric (or numeric string) field over the non-DELETE requests
-// of collection; missing or non numeric values count as 0.
+// of collection; missing or non numeric values count as 0. The modifier forms
+// `field+` / `+field` (add) and `field-` (subtract) of the raw submission are
+// counted too, so `{"qty+": 1000}` can not slip past a limit. Prefer
+// batch.after, where the stored values are final.
 func (b *Batch) Sum(collection, field string) float64 {
+	num := func(v any) float64 {
+		switch t := v.(type) {
+		case float64:
+			return t
+		case string:
+			var f float64
+			if _, err := fmt.Sscanf(t, "%g", &f); err == nil {
+				return f
+			}
+		}
+		return 0
+	}
 	var total float64
 	for _, r := range b.For(collection) {
 		if r.Deleted || r.Method == "DELETE" {
 			continue
 		}
-		switch v := r.Body[field].(type) {
-		case float64:
-			total += v
-		case string:
-			var f float64
-			if _, err := fmt.Sscanf(v, "%g", &f); err == nil {
-				total += f
-			}
-		}
+		total += num(r.Body[field]) + num(r.Body[field+"+"]) + num(r.Body["+"+field]) - num(r.Body[field+"-"])
 	}
 	return total
 }
