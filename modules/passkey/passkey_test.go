@@ -32,6 +32,11 @@ type softAuth struct {
 	credID []byte
 	count  uint32
 	handle []byte
+
+	noUV        bool   // authenticator does not set the UV flag on assertions
+	rpID        string // override of the RP ID hash (default testRPID)
+	origin      string // override of the client data origin
+	crossOrigin bool
 }
 
 func newSoftAuth(t *testing.T) *softAuth {
@@ -45,7 +50,11 @@ func newSoftAuth(t *testing.T) *softAuth {
 }
 
 func (a *softAuth) authData(flags byte, attested bool) []byte {
-	h := sha256.Sum256([]byte(testRPID))
+	rp := testRPID
+	if a.rpID != "" {
+		rp = a.rpID
+	}
+	h := sha256.Sum256([]byte(rp))
 	out := append([]byte{}, h[:]...)
 	out = append(out, flags)
 	out = binary.BigEndian.AppendUint32(out, a.count)
@@ -61,17 +70,25 @@ func (a *softAuth) authData(flags byte, attested bool) []byte {
 	return out
 }
 
-func clientData(typ, challenge string) []byte {
-	b, _ := json.Marshal(map[string]any{"type": typ, "challenge": challenge, "origin": testOrigin, "crossOrigin": false})
+func (a *softAuth) clientData(typ, challenge string) []byte {
+	o := testOrigin
+	if a.origin != "" {
+		o = a.origin
+	}
+	b, _ := json.Marshal(map[string]any{"type": typ, "challenge": challenge, "origin": o, "crossOrigin": a.crossOrigin})
 	return b
 }
 
 func (a *softAuth) register(t *testing.T, opts map[string]any) json.RawMessage {
 	t.Helper()
-	cd := clientData("webauthn.create", opts["challenge"].(string))
+	cd := a.clientData("webauthn.create", opts["challenge"].(string))
 	user := opts["user"].(map[string]any)
 	a.handle = []byte(user["id"].(string)) // base64url string; only echoed back on login
-	att, _ := cbor.Marshal(map[string]any{"fmt": "none", "attStmt": map[string]any{}, "authData": a.authData(0x01|0x04|0x40|0x08|0x10, true)})
+	rf := byte(0x01 | 0x04 | 0x40 | 0x08 | 0x10)
+	if a.noUV {
+		rf = 0x01 | 0x40 | 0x08 | 0x10
+	}
+	att, _ := cbor.Marshal(map[string]any{"fmt": "none", "attStmt": map[string]any{}, "authData": a.authData(rf, true)})
 	return mustJSON(map[string]any{
 		"id": b64.EncodeToString(a.credID), "rawId": b64.EncodeToString(a.credID), "type": "public-key",
 		"response": map[string]any{
@@ -84,8 +101,12 @@ func (a *softAuth) register(t *testing.T, opts map[string]any) json.RawMessage {
 
 func (a *softAuth) assert(t *testing.T, opts map[string]any, userHandle string) json.RawMessage {
 	t.Helper()
-	cd := clientData("webauthn.get", opts["challenge"].(string))
-	ad := a.authData(0x01|0x04|0x08|0x10, false)
+	cd := a.clientData("webauthn.get", opts["challenge"].(string))
+	flags := byte(0x01 | 0x04 | 0x08 | 0x10)
+	if a.noUV {
+		flags = 0x01 | 0x08 | 0x10
+	}
+	ad := a.authData(flags, false)
 	ch := sha256.Sum256(cd)
 	sum := sha256.Sum256(append(append([]byte{}, ad...), ch[:]...))
 	sig, err := ecdsa.SignASN1(rand.Reader, a.key, sum[:])
@@ -223,10 +244,13 @@ func TestRegisterThenLogin(t *testing.T) {
 	// the token works
 	e.do(t, "POST", "/api/collections/clients/auth-refresh", nil, out["token"].(string), 200)
 
-	// identity-restricted login lists the credential
+	// the identity is ignored: no allowCredentials, UV required (K1, K2)
 	opts = e.loginOpts(t, "test@example.com")
-	if len(opts["allowCredentials"].([]any)) != 1 {
-		t.Fatalf("%v", opts)
+	if ac, _ := opts["allowCredentials"].([]any); len(ac) != 0 {
+		t.Fatalf("identity must not produce allowCredentials: %v", opts)
+	}
+	if opts["userVerification"] != "required" {
+		t.Fatalf("login must require UV: %v", opts)
 	}
 	a.count++
 	e.do(t, "POST", base+"/login/verify", map[string]any{"credential": a.assert(t, opts, userHandle(e))}, "", 200)
@@ -244,7 +268,7 @@ func TestRegisterThenLogin(t *testing.T) {
 func TestLoginUnknownCredentialFails(t *testing.T) {
 	e := setup(t, true)
 	var failures int
-	SetFailureSink(func(string, string) { failures++ })
+	SetFailureSink(func(string, *core.Record) { failures++ })
 	t.Cleanup(func() { SetFailureSink(nil) })
 
 	stranger := newSoftAuth(t)
@@ -261,7 +285,7 @@ func TestLoginUnknownCredentialFails(t *testing.T) {
 func TestBadSignatureCountsFailure(t *testing.T) {
 	e := setup(t, true)
 	var got []string
-	SetFailureSink(func(c, id string) { got = append(got, c+":"+id) })
+	SetFailureSink(func(c string, r *core.Record) { got = append(got, c+":"+r.Id) })
 	t.Cleanup(func() { SetFailureSink(nil) })
 
 	a, _ := e.enroll(t, e.password(t))
@@ -283,7 +307,7 @@ func TestSignCountRegressionFlagged(t *testing.T) {
 	a, _ := e.enroll(t, e.password(t))
 	a.count = 10
 	e.do(t, "POST", base+"/login/verify", map[string]any{"credential": a.assert(t, e.loginOpts(t, ""), userHandle(e))}, "", 200)
-	a.count = 5 // regression
+	a.count = 5                                                                                                                  // regression
 	e.do(t, "POST", base+"/login/verify", map[string]any{"credential": a.assert(t, e.loginOpts(t, ""), userHandle(e))}, "", 200) // policy warn
 	rows, _ := e.app.FindAllRecords(CollectionName, dbx.NewExp("1=1"))
 	if !rows[0].GetBool("clone_suspected") || rows[0].GetInt("sign_count") != 10 {

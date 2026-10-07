@@ -94,7 +94,14 @@ func toCredential(r *core.Record) (*webauthn.Credential, error) {
 }
 
 func (m *Module) findByCredentialID(collectionId string, rawID []byte) (*core.Record, error) {
-	return m.app.FindFirstRecordByData(CollectionName, "credential_id", b64.EncodeToString(rawID))
+	p, err := m.app.FindFirstRecordByData(CollectionName, "credential_id", b64.EncodeToString(rawID))
+	if err != nil {
+		return nil, err
+	}
+	if p.GetString("collection") != collectionId {
+		return nil, errors.New("credential belongs to another collection")
+	}
+	return p, nil
 }
 
 func (m *Module) savePasskey(rec *core.Record, c *webauthn.Credential, name string) (*core.Record, error) {
@@ -120,6 +127,7 @@ func (m *Module) savePasskey(rec *core.Record, c *webauthn.Credential, name stri
 	r.Set("transports", ts)
 	r.Set("backup_eligible", c.Flags.BackupEligible)
 	r.Set("backup_state", c.Flags.BackupState)
+	r.Set("uv_capable", c.Flags.UserVerified)
 	r.Set("name", name)
 	if err := m.app.Save(r); err != nil {
 		return nil, err
@@ -146,6 +154,7 @@ func view(r *core.Record) map[string]any {
 		"backupEligible": r.GetBool("backup_eligible"),
 		"backupState":    r.GetBool("backup_state"),
 		"cloneSuspected": r.GetBool("clone_suspected"),
+		"uvCapable":      r.GetBool("uv_capable"),
 	}
 }
 
@@ -163,21 +172,30 @@ func (m *Module) touch(r *core.Record, c *webauthn.Credential) error {
 
 var errChallenge = errors.New("unknown, expired or already used challenge")
 
-func (m *Module) putChallenge(kind, collectionId, recordId string, s *webauthn.SessionData) error {
+// putChallenge stores a pending challenge. ip (may be empty) is the client
+// IP: at most maxChallengesPerIP pending challenges are kept per IP (the
+// oldest are evicted) and at most maxChallenges per collection.
+func (m *Module) putChallenge(kind, collectionId, recordId, ip string, s *webauthn.SessionData) error {
 	now := m.now()
 	db := m.app.AuxDB()
 	_, _ = db.NewQuery("DELETE FROM {{_passkey_challenges}} WHERE [[expires]] < {:n}").Bind(dbx.Params{"n": now.UnixMilli()}).Execute()
 	var n int
-	if err := db.NewQuery("SELECT COUNT(*) FROM {{_passkey_challenges}}").Row(&n); err == nil && n >= maxChallenges {
+	if err := db.NewQuery("SELECT COUNT(*) FROM {{_passkey_challenges}} WHERE [[collection]]={:c}").Bind(dbx.Params{"c": collectionId}).Row(&n); err == nil && n >= maxChallenges {
 		return errors.New("too many pending challenges")
+	}
+	if ip != "" {
+		// keep room for the new row: evict the oldest of this IP beyond the cap
+		_, _ = db.NewQuery(`DELETE FROM {{_passkey_challenges}} WHERE [[ip]]={:ip} AND [[challenge]] IN (
+			SELECT [[challenge]] FROM {{_passkey_challenges}} WHERE [[ip]]={:ip} ORDER BY [[expires]] DESC, rowid DESC LIMIT -1 OFFSET {:keep})`).
+			Bind(dbx.Params{"ip": ip, "keep": maxChallengesPerIP - 1}).Execute()
 	}
 	s.Expires = now.Add(ChallengeTTL)
 	data, err := json.Marshal(s)
 	if err != nil {
 		return err
 	}
-	_, err = db.NewQuery(`INSERT INTO {{_passkey_challenges}} ([[challenge]],[[kind]],[[collection]],[[record]],[[data]],[[expires]]) VALUES ({:c},{:k},{:col},{:r},{:d},{:e})`).
-		Bind(dbx.Params{"c": s.Challenge, "k": kind, "col": collectionId, "r": recordId, "d": string(data), "e": now.Add(ChallengeTTL).UnixMilli()}).Execute()
+	_, err = db.NewQuery(`INSERT INTO {{_passkey_challenges}} ([[challenge]],[[kind]],[[collection]],[[record]],[[ip]],[[data]],[[expires]]) VALUES ({:c},{:k},{:col},{:r},{:ip},{:d},{:e})`).
+		Bind(dbx.Params{"c": s.Challenge, "k": kind, "col": collectionId, "r": recordId, "ip": ip, "d": string(data), "e": now.Add(ChallengeTTL).UnixMilli()}).Execute()
 	return err
 }
 

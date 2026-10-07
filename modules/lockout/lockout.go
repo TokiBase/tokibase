@@ -156,6 +156,52 @@ func RecordFailure(collection, identity string) {
 	}
 }
 
+// IdentityOf returns the identity string the password flow keys a record on:
+// its lowercased email, else its lowercased username.
+func IdentityOf(rec *core.Record) string {
+	if rec == nil {
+		return ""
+	}
+	if v := strings.ToLower(strings.TrimSpace(rec.Email())); v != "" {
+		return v
+	}
+	return strings.ToLower(strings.TrimSpace(rec.GetString("username")))
+}
+
+// IdentityKey returns the storage key of rec for the password flow
+// (<collection>:<lowercased email or username>), identical to Key(collection, identity).
+func IdentityKey(collection string, rec *core.Record) string {
+	return Key(collection, IdentityOf(rec))
+}
+
+// IsLocked reports whether rec is currently locked, under either of the
+// identities a password login can use (email or username). It is a no-op
+// (false) when the module is not registered.
+func IsLocked(collection string, rec *core.Record) bool {
+	m := active.Load()
+	if m == nil || rec == nil {
+		return false
+	}
+	keys := []string{IdentityKey(collection, rec)}
+	if u := strings.ToLower(strings.TrimSpace(rec.GetString("username"))); u != "" {
+		keys = append(keys, Key(collection, u))
+	}
+	for _, k := range keys {
+		if m.lockedFor(k) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// RecordFailureFor counts one failure for rec under IdentityKey (same key as
+// failed password logins with its email).
+func RecordFailureFor(collection string, rec *core.Record) {
+	if id := IdentityOf(rec); id != "" {
+		RecordFailure(collection, id)
+	}
+}
+
 // Register binds the lockout hooks to app.
 func Register(app core.App) *Module {
 	m := New(app, LoadPolicy())
