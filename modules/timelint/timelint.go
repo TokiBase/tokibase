@@ -1,3 +1,5 @@
+//go:build !no_timelint
+
 // Package timelint detects date values submitted through the API without a
 // time zone (a classic source of "+N hours per sync" bugs) and offers a scan
 // of stored values.

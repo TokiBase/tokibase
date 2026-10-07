@@ -1,3 +1,5 @@
+//go:build !no_ruleguard
+
 package cmd
 
 import (

@@ -1,3 +1,5 @@
+//go:build !no_replica
+
 // Package walreplica continuously replicates data.db and auxiliary.db to a
 // local path or an S3 compatible bucket by embedding Litestream as a library.
 //

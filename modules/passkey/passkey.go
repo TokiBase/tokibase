@@ -1,3 +1,5 @@
+//go:build !no_passkey
+
 // Package passkey adds WebAuthn/FIDO2 passkeys to every auth collection:
 // registration for logged-in users, passwordless login with discoverable
 // credentials and management. The login result is the standard PocketBase

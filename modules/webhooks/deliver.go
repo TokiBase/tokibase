@@ -1,3 +1,5 @@
+//go:build !no_webhooks
+
 package webhooks
 
 import (

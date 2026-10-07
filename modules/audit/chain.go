@@ -1,3 +1,5 @@
+//go:build !no_audit
+
 // Package audit implements an append-only, hash-chained audit log of
 // privileged and schema-changing actions (see docs/modules/audit.md).
 package audit

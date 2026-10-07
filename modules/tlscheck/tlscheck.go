@@ -1,3 +1,5 @@
+//go:build !no_tlscheck
+
 // Package tlscheck warns (or refuses to start) when the server listens on
 // plain HTTP on a non-loopback address without any trusted proxy header
 // configured, which usually means clients reach it unencrypted.

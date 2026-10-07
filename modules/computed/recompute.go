@@ -1,3 +1,5 @@
+//go:build !no_computed
+
 package computed
 
 import (

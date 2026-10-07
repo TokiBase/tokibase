@@ -1,3 +1,5 @@
+//go:build !no_ruleguard
+
 // Package ruleguard makes public ("") API rules explicit and visible.
 //
 // In PocketBase an empty string rule means "public to anyone" while null

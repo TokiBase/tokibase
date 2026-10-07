@@ -42,7 +42,10 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/COMPAT.md](docs/COMPA
 
 ```sh
 go build ./examples/base   # requires Go 1.27 (GOTOOLCHAIN=auto downloads it)
+make edge                  # or: solo, team, cluster, nano (build tag sets, see docs/PROFILES.md)
 ```
+
+Every optional module can be removed at build time with `-tags no_<module>`; profiles are tag sets listed in [docs/PROFILES.md](docs/PROFILES.md).
 
 ## License
 

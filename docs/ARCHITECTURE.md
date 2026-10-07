@@ -65,11 +65,14 @@ Exit gate: all modules on by default in profile `solo`, failover drill RTO under
 - [x] geo: radius/bbox queries and distance ordering on `geoPoint` via `GET /api/collections/{c}/records/near`, optional SQLite R*Tree index, `toki geo index|rebuild|drop` (`docs/modules/geo.md`).
 - [ ] mcp (PR 2): streamable HTTP transport, `@request.auth.kind = "agent"` in rules, sandbox mode.
 
-## Size budgets (stripped; CI enforces solo 46 MiB, no_ui 43 MiB, solo+replica_s3 56 MiB). The full-featured `solo` build has reached the 45 MB design budget with passkey (+2.1 MB, go-webauthn/TPM/CBOR), mcp (+2 MB) and push; `edge`/`nano` profiles will exclude these via build tags (`no_mcp` exists; `no_passkey`, `no_push`, `no_crypto` to follow).
+## Size budgets (stripped; CI enforces the numbers in `profiles.txt`: solo 46 MiB, no_ui 43 MiB, solo+replica_s3 56 MiB, edge 34 MiB, nano 31 MiB). The full-featured `solo` build has reached the 45 MB design budget with passkey (+2.1 MB, go-webauthn/TPM/CBOR), mcp (+2 MB) and push; the `edge`/`nano` profiles exclude these through build tags (`no_mcp`, `no_passkey`, `no_push`, `no_webhooks`, `no_crypto`, ... see `docs/PROFILES.md`).
 
-| Profile | Budget |
-| --- | --- |
-| nano | 14 MB per arch |
-| edge | 28 MB |
-| solo | 45 MB |
-| team / cluster | 60 MB |
+| Profile | Design budget | Measured linux/amd64 (arm64) | CI budget |
+| --- | --- | --- | --- |
+| nano | 14 MB per arch | 29.1 MiB (27.4) | 31 MiB |
+| edge | 28 MB | 32.2 MiB (30.3) | 34 MiB |
+| solo | 45 MB | 39.8 MiB (37.6) | 46 MiB |
+| team | 60 MB | 39.8 MiB (= solo) | 46 MiB |
+| cluster | 60 MB | 48.0 MiB (44.8) | 56 MiB |
+
+TODO: nano and edge miss their design budgets because `./examples/base` links the JS plugin set (about 7.4 MiB); a main without `plugins/jsvm` measures nano 21.6 MiB and edge 24.8 MiB. The CI budgets are measured + 2 MiB until a no-plugin example binary exists.

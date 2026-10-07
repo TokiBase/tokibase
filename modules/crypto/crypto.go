@@ -1,3 +1,5 @@
+//go:build !no_crypto
+
 // Package crypto adds per-field encryption at rest (AES-256-GCM, envelope
 // keys) without touching the collection JSON schema: the configuration lives
 // in the system collection `_crypto_fields`, the wrapped data keys in

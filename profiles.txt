@@ -1,0 +1,8 @@
+# Build profiles: one per line, "<name> <size budget MiB> [build tags...]".
+# Single source of truth for the Makefile, CI (.github/workflows/ci.yml) and profiles_test.go.
+# Budgets are for the stripped linux binary of ./examples/base (see docs/PROFILES.md).
+solo    46
+team    46
+cluster 56 replica_s3
+edge    34 no_mcp no_passkey no_push no_webhooks no_ui no_adminlock
+nano    31 no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_replica no_backupcheck no_audit
