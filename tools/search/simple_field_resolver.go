@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ganigeorgiev/fexpr"
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/tools/inflector"
 	"github.com/tokibase/tokibase/tools/list"
@@ -42,6 +43,16 @@ type ResolverResult struct {
 	// AfterBuild is an optional function that will be called after building
 	// and combining the result of both resolved operands/sides in a single expression.
 	AfterBuild func(expr dbx.Expression) dbx.Expression
+
+	// BeforeBuild is an optional function that will be called by the
+	// expression builder with the opposite operand and the comparison
+	// operator, right before the operator expression is built.
+	//
+	// It lets a resolver adapt its own Identifier and Params to the other
+	// side (eg. the blind-index equality of modules/crypto, which needs the
+	// plaintext value to compute the lookup). It must not touch other and
+	// is called at most once per result. Returning an error aborts the build.
+	BeforeBuild func(other *ResolverResult, op fexpr.SignOp) error
 }
 
 // FieldResolver defines an interface for managing search fields.

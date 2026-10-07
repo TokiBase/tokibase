@@ -348,7 +348,7 @@ func TestFilterAndSortRejected(t *testing.T) {
 	cases := []string{
 		"filter=" + `diagnosis="flu"`,
 		"filter=" + `name="Ann"%20%26%26%20diagnosis~"f"`,
-		"filter=" + `ssn="123-45"`, // blind-index too in PR 1
+		"filter=" + `ssn~"123"`, // blind-index: only equality is rewritten
 		"filter=" + `(email!="")`,
 		"sort=-diagnosis",
 		"sort=name,%2Bssn",

@@ -206,6 +206,22 @@ func buildResolversExpr(
 ) (dbx.Expression, error) {
 	var expr dbx.Expression
 
+	if left.BeforeBuild != nil {
+		hook := left.BeforeBuild
+		left.BeforeBuild = nil
+		if err := hook(right, op); err != nil {
+			return nil, err
+		}
+	}
+
+	if right.BeforeBuild != nil {
+		hook := right.BeforeBuild
+		right.BeforeBuild = nil
+		if err := hook(left, op); err != nil {
+			return nil, err
+		}
+	}
+
 	switch op {
 	case fexpr.SignEq, fexpr.SignAnyEq:
 		expr = resolveEqualExpr(d, true, left, right)
