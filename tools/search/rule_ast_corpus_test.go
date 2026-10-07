@@ -1,6 +1,9 @@
 package search_test
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // handCorpus is the hand written differential corpus: every operator,
 // modifier, macro and function plus nasty cases. Field names refer to the
@@ -111,6 +114,26 @@ func handCorpus() []string {
 		`created >= '2022-01-01 00:00:00.000Z' && created <= '2030-01-01 00:00:00.000Z'`, `id ~ 'a' || id ~ 'b' || id ~ 'c'`, `id != '' && created != ''`,
 		`username:lower = @request.body.username:lower`, `email != '' && emailVisibility = true`, `verified = true && email ~ '@example.com'`,
 	}
+
+	// --- depth/length limits (both paths must agree), aliased @collection with
+	// modifiers, geoPoint (view1.point) and numeric literal edge forms
+	c = append(c,
+		strings.Repeat("(", 63)+`text = 'a'`+strings.Repeat(")", 63),
+		strings.Repeat("(", 64)+`text = 'a'`+strings.Repeat(")", 64),
+		strings.Repeat("(", 65)+`text = 'a'`+strings.Repeat(")", 65),
+		strings.Repeat("(", 20000)+`text = 'a'`+strings.Repeat(")", 20000),
+		strings.Repeat("(", 5000),
+		`text = '`+strings.Repeat("(", 500)+`'`,
+		`text = 'a' `+strings.Repeat(`&& text = 'a' `, 1000),
+		`text = '`+strings.Repeat("x", 70000)+`'`,
+		`@collection.demo2:a.title:lower = 'x'`, `@collection.demo2:a.title:length > 1`, `@collection.demo1.select_many:each = 'optionA'`,
+		`@collection.demo1.select_many:each ?= 'optionA'`, `@collection.demo2:alias:length = 1`, `@collection.demo2:a.id = @collection.demo2:b.id`,
+		`@collection.demo2:a.title:lower ?= @request.body.text:lower`,
+		`point = ''`, `point != null`, `point:isset = true`, `point.lon ?= 1`, `point.lat > 1 && point.lon <= 2`, `point = point`, `point:length = 1`,
+		`@request.body.json:length = 1`, `@request.body.json:each ?= 'x'`, `json = json`, `json:length = 1`, `json:each ?= 1`,
+		`number = +1`, `number = .5`, `number = 1.`, `number = 0x10`, `number = 1_000`, `number = 9007199254740993`, `number = 1e400`, `number = -0`,
+		`number = 123456789012345678901234567890`, `number = 1e-400`, `number = 00012`, `number = 1E3`,
+	)
 
 	// generated operator x operand matrix
 	ops := []string{"=", "!=", ">", ">=", "<", "<=", "~", "!~", "?=", "?!=", "?>", "?>=", "?<", "?<=", "?~", "?!~"}

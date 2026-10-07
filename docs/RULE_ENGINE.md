@@ -95,6 +95,8 @@ A PostgreSQL emitter needs the resolver split first (resolution into a typed ref
   when building fails. Corpus: hand written expressions, an operator x operand matrix, every string literal in
   `*_test.go` files that parses as a filter, and every rule of the `tests/data` collections; run against every
   collection with and without request info and with hidden fields allowed. Also covers placeholder params and the limit.
-- CI job `test-rule-ast` runs `./kernel/rule/... ./tools/search/... ./kernel/... ./apis/...` with `TOKI_RULE_AST=1`.
+- CI job `test-rule-ast` runs `./kernel/rule/... ./tools/search/... ./kernel/... ./apis/... ./modules/...` with `TOKI_RULE_AST=1`.
 
-The test seam `security.SeedPseudorandomForTest` makes `PseudorandomString` deterministic; it is for tests only.
+The test seam `security.SeedPseudorandomForTest` makes `PseudorandomString` deterministic; it is for tests only (it panics outside a test binary).
+
+The switch is read once at process start (changing the variable later has no effect). Both paths reject expressions longer than 65536 bytes or nested deeper than 64 groups (`rule.CheckLimits`).

@@ -17,3 +17,10 @@ func IdentifierMacroNames() []string {
 	}
 	return names
 }
+
+// SetRuleASTForTest switches the AST compiler path on or off.
+func SetRuleASTForTest(on bool) (restore func()) {
+	prev := ruleASTOn.Load()
+	ruleASTOn.Store(on)
+	return func() { ruleASTOn.Store(prev) }
+}

@@ -9,9 +9,10 @@ import (
 
 	"github.com/ganigeorgiev/fexpr"
 	"github.com/pocketbase/dbx"
+	"github.com/spf13/cast"
+	"github.com/tokibase/tokibase/kernel/rule"
 	"github.com/tokibase/tokibase/tools/security"
 	"github.com/tokibase/tokibase/tools/store"
-	"github.com/spf13/cast"
 )
 
 // FilterData is a filter expression string following the `fexpr` package grammar.
@@ -100,6 +101,11 @@ func (f FilterData) BuildExprWithLimit(
 
 	if data, ok := parsedFilterData.GetOk(cacheKey); ok {
 		return buildParsedFilterExpr(data, fieldResolver, &maxExpressions)
+	}
+
+	// same length/nesting limits as the AST path (rule.Parse)
+	if err := rule.CheckLimits(raw); err != nil {
+		return nil, err
 	}
 
 	data, err := fexpr.Parse(raw)

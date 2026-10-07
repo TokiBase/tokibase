@@ -3,6 +3,7 @@ package rule_test
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ganigeorgiev/fexpr"
@@ -127,6 +128,39 @@ func TestTokenRoundTrip(t *testing.T) {
 			if back := rule.ToToken(op); !reflect.DeepEqual(back, tok) {
 				t.Errorf("round trip mismatch: %#v vs %#v", back, tok)
 			}
+		}
+	}
+}
+
+func TestParseLimits(t *testing.T) {
+	deep := func(n int) string {
+		return strings.Repeat("(", n) + "a = 1" + strings.Repeat(")", n)
+	}
+
+	if _, err := rule.Parse(deep(rule.MaxGroupDepth)); err != nil {
+		t.Fatalf("depth %d must be accepted: %v", rule.MaxGroupDepth, err)
+	}
+	for _, s := range []string{deep(rule.MaxGroupDepth + 1), strings.Repeat("(", 200000)} {
+		if _, err := rule.Parse(s); !errors.Is(err, rule.ErrExprTooDeep) {
+			t.Fatalf("expected ErrExprTooDeep, got %v", err)
+		}
+	}
+
+	// parentheses inside quoted text are not groups
+	if _, err := rule.Parse(`a = '` + strings.Repeat("(", 500) + `' && b = "\"` + strings.Repeat("(", 500) + `"`); err != nil {
+		t.Fatalf("quoted parens must not count: %v", err)
+	}
+
+	long := `a = '` + strings.Repeat("x", rule.MaxExprLen) + `'`
+	if _, err := rule.Parse(long); !errors.Is(err, rule.ErrExprTooLong) {
+		t.Fatalf("expected ErrExprTooLong, got %v", err)
+	}
+}
+
+func TestParseCollectionModifierIdents(t *testing.T) {
+	for _, s := range []string{`@collection.x:lower = 1`, `@collection.x:alias:length = 1`, `@collection.x:a.f:lower = 1`} {
+		if _, err := rule.Parse(s); err != nil {
+			t.Errorf("%q: %v", s, err)
 		}
 	}
 }

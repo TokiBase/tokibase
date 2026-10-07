@@ -15,9 +15,9 @@ make edge GOOS=linux GOARCH=arm64   # cross-compile
 
 | Profile | Tags | Size linux/amd64 | linux/arm64 | Budget |
 | --- | --- | --- | --- | --- |
-| solo | none | 42.8 MiB | 40.4 MiB | 45 MiB |
-| team | none (= solo) | 42.8 MiB | 40.4 MiB | 45 MiB |
-| cluster | `replica_s3` | 51.1 MiB | 47.6 MiB | 54 MiB |
+| solo | none | 42.8 MiB | 40.4 MiB | 46 MiB |
+| team | none (= solo) | 42.8 MiB | 40.4 MiB | 46 MiB |
+| cluster | `replica_s3` | 51.1 MiB | 47.6 MiB | 55 MiB |
 | edge | `no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd` | 25.0 MiB | 23.5 MiB | 28 MiB |
 | nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo` | 21.7 MiB | 20.4 MiB | 24 MiB |
 
@@ -82,7 +82,7 @@ If anything is found the process refuses to start with an error listing the modu
 | `no_migratecmd` | `plugins/migratecmd` | no `migrate` command, no automigrate; the `--migrationsDir`/`--automigrate` flags are still accepted and ignored |
 | `no_ghupdate` | `plugins/ghupdate` | no `update` command |
 
-Without any of these tags (solo, team, cluster) the binary, its flags and its behavior are unchanged. The three plugins weigh about 7 MiB together; with them removed, edge reaches 25.0 MiB and nano 21.7 MiB (linux/amd64), under the design targets of this phase (edge 30 MiB, nano 22 MiB). nano also drops `totp` and `geo`. The original 28 MiB (edge) and 14 MiB (nano) design goals of the architecture doc are not met by `./examples/base`.
+Without any of these tags (solo, team, cluster) the binary, its flags and its behavior are unchanged. The three plugins weigh about 7 MiB together; with them removed, edge reaches 25.0 MiB and nano 21.7 MiB (linux/amd64), under the CI budgets of this phase (edge 28 MiB, nano 24 MiB, measured + 2 MiB). nano also drops `totp` and `geo`. The original 28 MiB (edge) and 14 MiB (nano) design goals of the architecture doc are not met by `./examples/base`.
 
 Like the module tags, a binary without `no_migratecmd`/`no_jsvm` removed features: databases migrated by JS migrations (`pb_migrations/*.js`) are not migrated by a build with `no_jsvm`.
 
