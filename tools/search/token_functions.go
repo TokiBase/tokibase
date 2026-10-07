@@ -4,16 +4,22 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/ganigeorgiev/fexpr"
 	"github.com/pocketbase/dbx"
+	"github.com/tokibase/tokibase/kernel/rule"
 )
 
-var TokenFunctions = map[string]func(
+type tokenFunc = func(
 	argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error),
 	args ...fexpr.Token,
-) (*ResolverResult, error){
+) (*ResolverResult, error)
+
+// TokenFunctions are the SQLite filter functions (custom ones can be registered).
+//
+// The built-in geoDistance and strftime are implemented per [rule.Dialect]
+// (see [tokenFunctionsFor]); other dialects expose only those two.
+var TokenFunctions = map[string]tokenFunc{
 	// geoDistance(lonA, latA, lonB, latB) calculates the Haversine
 	// distance between 2 points in kilometres (https://www.movable-type.co.uk/scripts/latlong.html).
 	//
@@ -25,41 +31,7 @@ var TokenFunctions = map[string]func(
 	// Or in other words, if a collection has "orgs" multiple relation field pointing to "orgs" collection that has "office" as "geoPoint" field,
 	// then the filter: `geoDistance(orgs.office.lon, orgs.office.lat, 1, 2) < 200`
 	// will evaluate to true if for at-least-one of the "orgs.office" records the function result in a value satisfying the condition (aka. "result < 200").
-	"geoDistance": func(argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error), args ...fexpr.Token) (*ResolverResult, error) {
-		if len(args) != 4 {
-			return nil, fmt.Errorf("[geoDistance] expected 4 arguments, got %d", len(args))
-		}
-
-		resolvedArgs := make([]*ResolverResult, 4)
-		for i, arg := range args {
-			if arg.Type != fexpr.TokenIdentifier && arg.Type != fexpr.TokenNumber {
-				return nil, fmt.Errorf("[geoDistance] argument %d must be an identifier or number", i)
-			}
-			resolved, err := argTokenResolverFunc(arg)
-			if err != nil {
-				return nil, fmt.Errorf("[geoDistance] failed to resolve argument %d: %w", i, err)
-			}
-			resolvedArgs[i] = resolved
-		}
-
-		lonA := resolvedArgs[0].Identifier
-		latA := resolvedArgs[1].Identifier
-		lonB := resolvedArgs[2].Identifier
-		latB := resolvedArgs[3].Identifier
-
-		return &ResolverResult{
-			NullFallback: NullFallbackDisabled,
-			// the clamping is to prevent floating point rounding errors for values like
-			// "1.0002" that could occur for example when comparing identical points
-			// (see the NULL note for arccosine in https://sqlite.org/lang_mathfunc.html#overview)
-			Identifier: `(6371 * acos(min(1, max(-1, ` +
-				`cos(radians(` + latA + `)) * cos(radians(` + latB + `)) * ` +
-				`cos(radians(` + lonB + `) - radians(` + lonA + `)) + ` +
-				`sin(radians(` + latA + `)) * sin(radians(` + latB + `))` +
-				`))))`,
-			Params: mergeParams(resolvedArgs[0].Params, resolvedArgs[1].Params, resolvedArgs[2].Params, resolvedArgs[3].Params),
-		}, nil
-	},
+	"geoDistance": geoDistanceFunc(sqliteDialect),
 
 	// strftime(format, [timeValue, modifier1, modifier2, ...]) returns
 	// a date string formatted according to the specified format argument.
@@ -81,7 +53,61 @@ var TokenFunctions = map[string]func(
 	//
 	// A multi-match constraint will be also applied in case the time-value
 	// is an identifier as a result of a multi-value relation field.
-	"strftime": func(argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error), args ...fexpr.Token) (*ResolverResult, error) {
+	"strftime": strftimeFunc(sqliteDialect),
+}
+
+// tokenFunctionsFor returns the filter functions available for dialect d.
+// For SQLite it is the (extensible) [TokenFunctions] map; custom functions are
+// SQLite SQL by definition, so other dialects only get the built-ins.
+func tokenFunctionsFor(d rule.Dialect) map[string]tokenFunc {
+	if d == sqliteDialect {
+		return TokenFunctions
+	}
+
+	return map[string]tokenFunc{
+		"geoDistance": geoDistanceFunc(d),
+		"strftime":    strftimeFunc(d),
+	}
+}
+
+func geoDistanceFunc(d rule.Dialect) tokenFunc {
+	return func(argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error), args ...fexpr.Token) (*ResolverResult, error) {
+		if len(args) != 4 {
+			return nil, fmt.Errorf("[geoDistance] expected 4 arguments, got %d", len(args))
+		}
+
+		resolvedArgs := make([]*ResolverResult, 4)
+		for i, arg := range args {
+			if arg.Type != fexpr.TokenIdentifier && arg.Type != fexpr.TokenNumber {
+				return nil, fmt.Errorf("[geoDistance] argument %d must be an identifier or number", i)
+			}
+			resolved, err := argTokenResolverFunc(arg)
+			if err != nil {
+				return nil, fmt.Errorf("[geoDistance] failed to resolve argument %d: %w", i, err)
+			}
+			resolvedArgs[i] = resolved
+		}
+
+		lonA := resolvedArgs[0].Identifier
+		latA := resolvedArgs[1].Identifier
+		lonB := resolvedArgs[2].Identifier
+		latB := resolvedArgs[3].Identifier
+
+		identifier, err := d.GeoDistance(lonA, latA, lonB, latB)
+		if err != nil {
+			return nil, fmt.Errorf("[geoDistance] %w", err)
+		}
+
+		return &ResolverResult{
+			NullFallback: NullFallbackDisabled,
+			Identifier:   identifier,
+			Params:       mergeParams(resolvedArgs[0].Params, resolvedArgs[1].Params, resolvedArgs[2].Params, resolvedArgs[3].Params),
+		}, nil
+	}
+}
+
+func strftimeFunc(d rule.Dialect) tokenFunc {
+	return func(argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error), args ...fexpr.Token) (*ResolverResult, error) {
 		totalArgs := len(args)
 
 		if totalArgs < 1 {
@@ -107,7 +133,10 @@ var TokenFunctions = map[string]func(
 		// no further arguments
 		if totalArgs == 1 {
 			formatArgResult.NullFallback = NullFallbackEnforced
-			formatArgResult.Identifier = "strftime(" + formatArgResult.Identifier + ")"
+			formatArgResult.Identifier, err = d.Strftime([]string{formatArgResult.Identifier})
+			if err != nil {
+				return nil, fmt.Errorf("[strftime] %w", err)
+			}
 			return formatArgResult, nil
 		}
 
@@ -166,13 +195,19 @@ var TokenFunctions = map[string]func(
 			}
 		}
 
-		result.Identifier = "strftime(" + strings.Join(identifiers, ",") + ")"
+		result.Identifier, err = d.Strftime(identifiers)
+		if err != nil {
+			return nil, fmt.Errorf("[strftime] %w", err)
+		}
 
 		if timeValueArgResult.MultiMatchSubQuery != nil {
 			// replace the regular time-value identifier with the multi-match one
 			identifiers[1] = timeValueArgResult.MultiMatchSubQuery.ValueIdentifier
 			result.MultiMatchSubQuery = timeValueArgResult.MultiMatchSubQuery
-			result.MultiMatchSubQuery.ValueIdentifier = "strftime(" + strings.Join(identifiers, ",") + ")"
+			result.MultiMatchSubQuery.ValueIdentifier, err = d.Strftime(identifiers)
+			if err != nil {
+				return nil, fmt.Errorf("[strftime] %w", err)
+			}
 
 			err = concatUniqueParams(result.MultiMatchSubQuery.Params, result.Params)
 			if err != nil {
@@ -181,7 +216,7 @@ var TokenFunctions = map[string]func(
 		}
 
 		return result, nil
-	},
+	}
 }
 
 func concatUniqueParams(destParams, newParams dbx.Params) error {

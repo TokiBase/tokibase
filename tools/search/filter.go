@@ -94,13 +94,22 @@ func (f FilterData) BuildExprWithLimit(
 
 	cacheKey := raw + "/" + strconv.Itoa(maxExpressions)
 
+	// a resolver for another dialect always goes through the AST path
+	// (the legacy compiler is SQLite only)
+	d := sqliteDialect
+	if dr, ok := fieldResolver.(DialectResolver); ok {
+		if rd := dr.Dialect(); rd != nil {
+			d = rd
+		}
+	}
+
 	// experimental rule AST path (see docs/RULE_ENGINE.md)
-	if RuleASTEnabled() {
-		return buildExprViaAST(raw, cacheKey, fieldResolver, maxExpressions)
+	if RuleASTEnabled() || d != sqliteDialect {
+		return buildExprViaAST(d, raw, cacheKey, fieldResolver, maxExpressions)
 	}
 
 	if data, ok := parsedFilterData.GetOk(cacheKey); ok {
-		return buildParsedFilterExpr(data, fieldResolver, &maxExpressions)
+		return buildParsedFilterExpr(sqliteDialect, data, fieldResolver, &maxExpressions)
 	}
 
 	// same length/nesting limits as the AST path (rule.Parse)
@@ -124,10 +133,10 @@ func (f FilterData) BuildExprWithLimit(
 	// (the limit size is arbitrary and it is there to prevent the cache growing too big)
 	parsedFilterData.SetIfLessThanLimit(cacheKey, data, 500)
 
-	return buildParsedFilterExpr(data, fieldResolver, &maxExpressions)
+	return buildParsedFilterExpr(sqliteDialect, data, fieldResolver, &maxExpressions)
 }
 
-func buildParsedFilterExpr(data []fexpr.ExprGroup, fieldResolver FieldResolver, maxExpressions *int) (dbx.Expression, error) {
+func buildParsedFilterExpr(d rule.Dialect, data []fexpr.ExprGroup, fieldResolver FieldResolver, maxExpressions *int) (dbx.Expression, error) {
 	if len(data) == 0 {
 		return nil, fexpr.ErrEmpty
 	}
@@ -146,11 +155,11 @@ func buildParsedFilterExpr(data []fexpr.ExprGroup, fieldResolver FieldResolver, 
 
 			*maxExpressions--
 
-			expr, exprErr = resolveTokenizedExpr(item, fieldResolver)
+			expr, exprErr = resolveTokenizedExpr(d, item, fieldResolver)
 		case fexpr.ExprGroup:
-			expr, exprErr = buildParsedFilterExpr([]fexpr.ExprGroup{item}, fieldResolver, maxExpressions)
+			expr, exprErr = buildParsedFilterExpr(d, []fexpr.ExprGroup{item}, fieldResolver, maxExpressions)
 		case []fexpr.ExprGroup:
-			expr, exprErr = buildParsedFilterExpr(item, fieldResolver, maxExpressions)
+			expr, exprErr = buildParsedFilterExpr(d, item, fieldResolver, maxExpressions)
 		default:
 			exprErr = errors.New("unsupported expression item")
 		}
@@ -175,21 +184,22 @@ func buildParsedFilterExpr(data []fexpr.ExprGroup, fieldResolver FieldResolver, 
 	return result, nil
 }
 
-func resolveTokenizedExpr(expr fexpr.Expr, fieldResolver FieldResolver) (dbx.Expression, error) {
-	lResult, lErr := resolveToken(expr.Left, fieldResolver)
+func resolveTokenizedExpr(d rule.Dialect, expr fexpr.Expr, fieldResolver FieldResolver) (dbx.Expression, error) {
+	lResult, lErr := resolveToken(d, expr.Left, fieldResolver)
 	if lErr != nil || lResult.Identifier == "" {
 		return nil, fmt.Errorf("invalid left operand %q - %v", expr.Left.Literal, lErr)
 	}
 
-	rResult, rErr := resolveToken(expr.Right, fieldResolver)
+	rResult, rErr := resolveToken(d, expr.Right, fieldResolver)
 	if rErr != nil || rResult.Identifier == "" {
 		return nil, fmt.Errorf("invalid right operand %q - %v", expr.Right.Literal, rErr)
 	}
 
-	return buildResolversExpr(lResult, expr.Op, rResult)
+	return buildResolversExpr(d, lResult, expr.Op, rResult)
 }
 
 func buildResolversExpr(
+	d rule.Dialect,
 	left *ResolverResult,
 	op fexpr.SignOp,
 	right *ResolverResult,
@@ -198,23 +208,13 @@ func buildResolversExpr(
 
 	switch op {
 	case fexpr.SignEq, fexpr.SignAnyEq:
-		expr = resolveEqualExpr(true, left, right)
+		expr = resolveEqualExpr(d, true, left, right)
 	case fexpr.SignNeq, fexpr.SignAnyNeq:
-		expr = resolveEqualExpr(false, left, right)
+		expr = resolveEqualExpr(d, false, left, right)
 	case fexpr.SignLike, fexpr.SignAnyLike:
-		// the right side is a column and therefor wrap it with "%" for contains like behavior
-		if len(right.Params) == 0 {
-			expr = dbx.NewExp(fmt.Sprintf("%s LIKE ('%%' || %s || '%%') ESCAPE '\\'", left.Identifier, right.Identifier), left.Params)
-		} else {
-			expr = dbx.NewExp(fmt.Sprintf("%s LIKE %s ESCAPE '\\'", left.Identifier, right.Identifier), mergeParams(left.Params, wrapLikeParams(right.Params)))
-		}
+		expr = buildLikeExpr(d, false, left, right)
 	case fexpr.SignNlike, fexpr.SignAnyNlike:
-		// the right side is a column and therefor wrap it with "%" for not-contains like behavior
-		if len(right.Params) == 0 {
-			expr = dbx.NewExp(fmt.Sprintf("%s NOT LIKE ('%%' || %s || '%%') ESCAPE '\\'", left.Identifier, right.Identifier), left.Params)
-		} else {
-			expr = dbx.NewExp(fmt.Sprintf("%s NOT LIKE %s ESCAPE '\\'", left.Identifier, right.Identifier), mergeParams(left.Params, wrapLikeParams(right.Params)))
-		}
+		expr = buildLikeExpr(d, true, left, right)
 	case fexpr.SignLt, fexpr.SignAnyLt:
 		expr = dbx.NewExp(fmt.Sprintf("%s < %s", left.Identifier, right.Identifier), mergeParams(left.Params, right.Params))
 	case fexpr.SignLte, fexpr.SignAnyLte:
@@ -233,6 +233,7 @@ func buildResolversExpr(
 	if !isAnyMatchOp(op) {
 		if left.MultiMatchSubQuery != nil && right.MultiMatchSubQuery != nil {
 			mm := &manyVsManyExpr{
+				d:     d,
 				left:  left,
 				right: right,
 				op:    op,
@@ -241,6 +242,7 @@ func buildResolversExpr(
 			expr = dbx.Enclose(dbx.And(expr, mm))
 		} else if left.MultiMatchSubQuery != nil {
 			mm := &manyVsOneExpr{
+				d:            d,
 				nullFallback: left.NullFallback,
 				subQuery:     left.MultiMatchSubQuery,
 				op:           op,
@@ -250,6 +252,7 @@ func buildResolversExpr(
 			expr = dbx.Enclose(dbx.And(expr, mm))
 		} else if right.MultiMatchSubQuery != nil {
 			mm := &manyVsOneExpr{
+				d:            d,
 				nullFallback: right.NullFallback,
 				subQuery:     right.MultiMatchSubQuery,
 				op:           op,
@@ -272,16 +275,32 @@ func buildResolversExpr(
 	return expr, nil
 }
 
-var normalizedIdentifiers = map[string]string{
-	// if `null` field is missing, treat `null` identifier as NULL token
-	"null": "NULL",
-	// if `true` field is missing, treat `true` identifier as TRUE token
-	"true": "1",
-	// if `false` field is missing, treat `false` identifier as FALSE token
-	"false": "0",
+// buildLikeExpr builds the ~ and !~ comparison.
+func buildLikeExpr(d rule.Dialect, negate bool, left, right *ResolverResult) dbx.Expression {
+	// if the right side is a column wrap it with "%" for contains like behavior
+	if len(right.Params) == 0 {
+		return dbx.NewExp(d.Like(left.Identifier, right.Identifier, negate, true), left.Params)
+	}
+
+	return dbx.NewExp(d.Like(left.Identifier, right.Identifier, negate, false), mergeParams(left.Params, wrapLikeParams(right.Params)))
 }
 
-func resolveToken(token fexpr.Token, fieldResolver FieldResolver) (*ResolverResult, error) {
+// keywordIdentifiers are the identifiers that, if no field of that name exists,
+// resolve to the dialect literal (see [rule.Dialect.Keyword]).
+var keywordIdentifiers = []string{"null", "true", "false"}
+
+// normalizeKeyword returns the literal for a missing `null`, `true` or `false` field.
+func normalizeKeyword(d rule.Dialect, name string) (string, bool) {
+	for _, k := range keywordIdentifiers {
+		if strings.EqualFold(k, name) {
+			return d.Keyword(k)
+		}
+	}
+
+	return "", false
+}
+
+func resolveToken(d rule.Dialect, token fexpr.Token, fieldResolver FieldResolver) (*ResolverResult, error) {
 	switch token.Type {
 	case fexpr.TokenIdentifier:
 		// check for macros
@@ -304,10 +323,8 @@ func resolveToken(token fexpr.Token, fieldResolver FieldResolver) (*ResolverResu
 		// ---
 		result, err := fieldResolver.Resolve(token.Literal)
 		if err != nil || result.Identifier == "" {
-			for k, v := range normalizedIdentifiers {
-				if strings.EqualFold(k, token.Literal) {
-					return &ResolverResult{Identifier: v}, nil
-				}
+			if v, ok := normalizeKeyword(d, token.Literal); ok {
+				return &ResolverResult{Identifier: v}, nil
 			}
 			return nil, err
 		}
@@ -328,14 +345,14 @@ func resolveToken(token fexpr.Token, fieldResolver FieldResolver) (*ResolverResu
 			Params:     dbx.Params{placeholder: cast.ToFloat64(token.Literal)},
 		}, nil
 	case fexpr.TokenFunction:
-		fn, ok := TokenFunctions[token.Literal]
+		fn, ok := tokenFunctionsFor(d)[token.Literal]
 		if !ok {
 			return nil, fmt.Errorf("unknown function %q", token.Literal)
 		}
 
 		args, _ := token.Meta.([]fexpr.Token)
 		return fn(func(argToken fexpr.Token) (*ResolverResult, error) {
-			return resolveToken(argToken, fieldResolver)
+			return resolveToken(d, argToken, fieldResolver)
 		}, args...)
 	}
 
@@ -348,19 +365,25 @@ func resolveToken(token fexpr.Token, fieldResolver FieldResolver) (*ResolverResu
 // The expression `a = "" OR a is null` tends to perform better than
 // `COALESCE(a, "") = ""` since the direct match can be accomplished
 // with a seek while the COALESCE will induce a table scan.
-func resolveEqualExpr(equal bool, left, right *ResolverResult) dbx.Expression {
-	equalOp := "="
-	nullEqualOp := "IS"
+func resolveEqualExpr(d rule.Dialect, equal bool, left, right *ResolverResult) dbx.Expression {
 	concatOp := "OR"
 	nullExpr := "IS NULL"
 	if !equal {
-		// always use `IS NOT` instead of `!=` because direct non-equal comparisons
-		// to nullable column values that are actually NULL yields to NULL instead of TRUE, eg.:
-		// `'example' != nullableColumn` -> NULL even if nullableColumn row value is NULL
-		equalOp = "IS NOT"
-		nullEqualOp = equalOp
 		concatOp = "AND"
 		nullExpr = "IS NOT NULL"
+	}
+
+	// cmp is the comparison of 2 operands.
+	//
+	// For non-equal it is always the null-safe form (`IS NOT` in SQLite)
+	// instead of `!=` because direct non-equal comparisons
+	// to nullable column values that are actually NULL yields to NULL instead of TRUE, eg.:
+	// `'example' != nullableColumn` -> NULL even if nullableColumn row value is NULL
+	cmp := func(l, r string) string {
+		if equal {
+			return l + " = " + r
+		}
+		return d.NullSafeEq(l, r, false)
 	}
 
 	// no coalesce fallback (eg. compare to a json field)
@@ -369,7 +392,7 @@ func resolveEqualExpr(equal bool, left, right *ResolverResult) dbx.Expression {
 	if left.NullFallback == NullFallbackDisabled ||
 		right.NullFallback == NullFallbackDisabled {
 		return dbx.NewExp(
-			fmt.Sprintf("%s %s %s", left.Identifier, nullEqualOp, right.Identifier),
+			d.NullSafeEq(left.Identifier, right.Identifier, equal),
 			mergeParams(left.Params, right.Params),
 		)
 	}
@@ -382,7 +405,7 @@ func resolveEqualExpr(equal bool, left, right *ResolverResult) dbx.Expression {
 
 	// both operands are empty
 	if isLeftEmpty && isRightEmpty {
-		return dbx.NewExp(fmt.Sprintf("'' %s ''", equalOp), mergeParams(left.Params, right.Params))
+		return dbx.NewExp(cmp("''", "''"), mergeParams(left.Params, right.Params))
 	}
 
 	// direct compare since at least one of the operands is known to be non-empty
@@ -397,7 +420,7 @@ func resolveEqualExpr(equal bool, left, right *ResolverResult) dbx.Expression {
 			rightIdentifier = "''"
 		}
 		return dbx.NewExp(
-			fmt.Sprintf("%s %s %s", leftIdentifier, equalOp, rightIdentifier),
+			cmp(leftIdentifier, rightIdentifier),
 			mergeParams(left.Params, right.Params),
 		)
 	}
@@ -406,7 +429,7 @@ func resolveEqualExpr(equal bool, left, right *ResolverResult) dbx.Expression {
 	// "" IS NOT b AND b IS NOT NULL
 	if isLeftEmpty {
 		return dbx.NewExp(
-			fmt.Sprintf("('' %s %s %s %s %s)", equalOp, right.Identifier, concatOp, right.Identifier, nullExpr),
+			"("+cmp("''", d.TextOf(right.Identifier))+" "+concatOp+" "+right.Identifier+" "+nullExpr+")",
 			mergeParams(left.Params, right.Params),
 		)
 	}
@@ -415,19 +438,14 @@ func resolveEqualExpr(equal bool, left, right *ResolverResult) dbx.Expression {
 	// a IS NOT "" AND a IS NOT NULL
 	if isRightEmpty {
 		return dbx.NewExp(
-			fmt.Sprintf("(%s %s '' %s %s %s)", left.Identifier, equalOp, concatOp, left.Identifier, nullExpr),
+			"("+cmp(d.TextOf(left.Identifier), "''")+" "+concatOp+" "+left.Identifier+" "+nullExpr+")",
 			mergeParams(left.Params, right.Params),
 		)
 	}
 
 	// fallback to a COALESCE comparison
 	return dbx.NewExp(
-		fmt.Sprintf(
-			"COALESCE(%s, '') %s COALESCE(%s, '')",
-			left.Identifier,
-			equalOp,
-			right.Identifier,
-		),
+		cmp(d.CoalesceEmpty(left.Identifier), d.CoalesceEmpty(right.Identifier)),
 		mergeParams(left.Params, right.Params),
 	)
 }
@@ -644,6 +662,7 @@ var _ dbx.Expression = (*manyVsManyExpr)(nil)
 // Expects leftSubQuery and rightSubQuery to return a subquery with a
 // single "multiMatchValue" column.
 type manyVsManyExpr struct {
+	d     rule.Dialect
 	left  *ResolverResult
 	right *ResolverResult
 	op    fexpr.SignOp
@@ -661,6 +680,7 @@ func (e *manyVsManyExpr) Build(db *dbx.DB, params dbx.Params) string {
 	rAlias := "__mr" + security.PseudorandomString(8)
 
 	whereExpr, buildErr := buildResolversExpr(
+		e.d,
 		&ResolverResult{
 			NullFallback: e.left.NullFallback,
 			Identifier:   "[[" + lAlias + ".multiMatchValue]]",
@@ -679,8 +699,7 @@ func (e *manyVsManyExpr) Build(db *dbx.DB, params dbx.Params) string {
 		return "0=1"
 	}
 
-	return fmt.Sprintf(
-		"NOT EXISTS (SELECT 1 FROM (%s) {{%s}} LEFT JOIN (%s) {{%s}} WHERE %s)",
+	return e.d.ExistsNoneMany(
 		e.left.MultiMatchSubQuery.Build(db, params),
 		lAlias,
 		e.right.MultiMatchSubQuery.Build(db, params),
@@ -699,6 +718,7 @@ var _ dbx.Expression = (*manyVsOneExpr)(nil)
 //
 // You can set inverse=false to reverse the condition sides (aka. one<->many).
 type manyVsOneExpr struct {
+	d            rule.Dialect
 	otherOperand *ResolverResult
 	subQuery     dbx.Expression
 	op           fexpr.SignOp
@@ -731,17 +751,16 @@ func (e *manyVsOneExpr) Build(db *dbx.DB, params dbx.Params) string {
 	var buildErr error
 
 	if e.inverse {
-		whereExpr, buildErr = buildResolversExpr(r2, e.op, r1)
+		whereExpr, buildErr = buildResolversExpr(e.d, r2, e.op, r1)
 	} else {
-		whereExpr, buildErr = buildResolversExpr(r1, e.op, r2)
+		whereExpr, buildErr = buildResolversExpr(e.d, r1, e.op, r2)
 	}
 
 	if buildErr != nil {
 		return "0=1"
 	}
 
-	return fmt.Sprintf(
-		"NOT EXISTS (SELECT 1 FROM (%s) {{%s}} WHERE %s)",
+	return e.d.ExistsNone(
 		e.subQuery.Build(db, params),
 		alias,
 		whereExpr.Build(db, params),

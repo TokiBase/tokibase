@@ -1,15 +1,16 @@
 package search
 
 import (
+	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"sync/atomic"
 
 	"github.com/ganigeorgiev/fexpr"
 	"github.com/pocketbase/dbx"
 	"github.com/spf13/cast"
 	"github.com/tokibase/tokibase/kernel/rule"
+	rulesqlite "github.com/tokibase/tokibase/kernel/rule/sqlite"
 	"github.com/tokibase/tokibase/tools/security"
 	"github.com/tokibase/tokibase/tools/store"
 )
@@ -36,10 +37,13 @@ func RuleASTEnabled() bool {
 	return ruleASTOn.Load()
 }
 
+// sqliteDialect is the dialect of the legacy path and the default of the AST path.
+var sqliteDialect = rulesqlite.Dialect
+
 // parsedFilterAST caches parsed ASTs (same role as parsedFilterData).
 var parsedFilterAST = store.New(make(map[string]*rule.AST, 50))
 
-func buildExprViaAST(raw, cacheKey string, fieldResolver FieldResolver, maxExpressions int) (dbx.Expression, error) {
+func buildExprViaAST(d rule.Dialect, raw, cacheKey string, fieldResolver FieldResolver, maxExpressions int) (dbx.Expression, error) {
 	ast, ok := parsedFilterAST.GetOk(cacheKey)
 	if !ok {
 		var err error
@@ -56,7 +60,7 @@ func buildExprViaAST(raw, cacheKey string, fieldResolver FieldResolver, maxExpre
 		}
 	}
 
-	return EmitAST(ast, fieldResolver, maxExpressions)
+	return EmitASTWithDialect(ast, fieldResolver, maxExpressions, d)
 }
 
 // EmitAST is the SQLite emitter for a [rule.AST]. It produces exactly the
@@ -66,14 +70,35 @@ func buildExprViaAST(raw, cacheKey string, fieldResolver FieldResolver, maxExpre
 //
 // Prefer calling it through kernel/rule/sql.Emit.
 func EmitAST(ast *rule.AST, fieldResolver FieldResolver, maxExpressions int) (dbx.Expression, error) {
+	return EmitASTWithDialect(ast, fieldResolver, maxExpressions, sqliteDialect)
+}
+
+// DialectResolver is optionally implemented by a [FieldResolver] that produces
+// dialect specific SQL; the emitters use it to reject a mismatching pair.
+type DialectResolver interface {
+	Dialect() rule.Dialect
+}
+
+// EmitASTWithDialect is like [EmitAST] for an arbitrary [rule.Dialect].
+//
+// The fieldResolver must resolve identifiers for the same dialect.
+func EmitASTWithDialect(ast *rule.AST, fieldResolver FieldResolver, maxExpressions int, d rule.Dialect) (dbx.Expression, error) {
 	if ast == nil || ast.Root == nil {
 		return nil, rule.ErrEmpty
 	}
 
-	return emitGroup(ast.Root, fieldResolver, &maxExpressions)
+	if d == nil {
+		d = sqliteDialect
+	}
+
+	if dr, ok := fieldResolver.(DialectResolver); ok && dr.Dialect().Name() != d.Name() {
+		return nil, fmt.Errorf("the field resolver dialect %q doesn't match the emitter dialect %q", dr.Dialect().Name(), d.Name())
+	}
+
+	return emitGroup(d, ast.Root, fieldResolver, &maxExpressions)
 }
 
-func emitGroup(g *rule.Group, fieldResolver FieldResolver, maxExpressions *int) (dbx.Expression, error) {
+func emitGroup(d rule.Dialect, g *rule.Group, fieldResolver FieldResolver, maxExpressions *int) (dbx.Expression, error) {
 	if len(g.Items) == 0 {
 		return nil, rule.ErrEmpty
 	}
@@ -92,9 +117,9 @@ func emitGroup(g *rule.Group, fieldResolver FieldResolver, maxExpressions *int) 
 
 			*maxExpressions--
 
-			expr, exprErr = emitComparison(n, fieldResolver)
+			expr, exprErr = emitComparison(d, n, fieldResolver)
 		case *rule.Group:
-			expr, exprErr = emitGroup(n, fieldResolver, maxExpressions)
+			expr, exprErr = emitGroup(d, n, fieldResolver, maxExpressions)
 		default:
 			exprErr = rule.ErrUnsupportedNode
 		}
@@ -117,22 +142,32 @@ func emitGroup(g *rule.Group, fieldResolver FieldResolver, maxExpressions *int) 
 	return result, nil
 }
 
-func emitComparison(c *rule.Comparison, fieldResolver FieldResolver) (dbx.Expression, error) {
-	lResult, lErr := resolveOperand(c.Left, fieldResolver)
+func emitComparison(d rule.Dialect, c *rule.Comparison, fieldResolver FieldResolver) (dbx.Expression, error) {
+	lResult, lErr := resolveOperand(d, c.Left, fieldResolver)
 	if lErr != nil || lResult.Identifier == "" {
-		return nil, fmt.Errorf("invalid left operand %q - %v", c.Left.Raw(), lErr)
+		return nil, operandError("left", c.Left.Raw(), lErr)
 	}
 
-	rResult, rErr := resolveOperand(c.Right, fieldResolver)
+	rResult, rErr := resolveOperand(d, c.Right, fieldResolver)
 	if rErr != nil || rResult.Identifier == "" {
-		return nil, fmt.Errorf("invalid right operand %q - %v", c.Right.Raw(), rErr)
+		return nil, operandError("right", c.Right.Raw(), rErr)
 	}
 
-	return buildResolversExpr(lResult, fexprOp(c.Op), rResult)
+	return buildResolversExpr(d, lResult, fexprOp(c.Op), rResult)
+}
+
+// operandError formats like the legacy path (the text is identical) but keeps
+// [rule.ErrUnsupported] reachable with errors.Is.
+func operandError(side, raw string, err error) error {
+	if errors.Is(err, rule.ErrUnsupported) {
+		return fmt.Errorf("invalid %s operand %q - %w", side, raw, err)
+	}
+
+	return fmt.Errorf("invalid %s operand %q - %v", side, raw, err)
 }
 
 // resolveOperand is the AST counterpart of resolveToken.
-func resolveOperand(operand rule.Operand, fieldResolver FieldResolver) (*ResolverResult, error) {
+func resolveOperand(d rule.Dialect, operand rule.Operand, fieldResolver FieldResolver) (*ResolverResult, error) {
 	switch o := operand.(type) {
 	case *rule.Ident:
 		// time macros
@@ -153,10 +188,8 @@ func resolveOperand(operand rule.Operand, fieldResolver FieldResolver) (*Resolve
 		// custom resolver
 		result, err := fieldResolver.Resolve(o.Name)
 		if err != nil || result.Identifier == "" {
-			for k, v := range normalizedIdentifiers {
-				if strings.EqualFold(k, o.Name) {
-					return &ResolverResult{Identifier: v}, nil
-				}
+			if v, ok := normalizeKeyword(d, o.Name); ok {
+				return &ResolverResult{Identifier: v}, nil
 			}
 			return nil, err
 		}
@@ -177,7 +210,7 @@ func resolveOperand(operand rule.Operand, fieldResolver FieldResolver) (*Resolve
 			Params:     dbx.Params{placeholder: o.Value},
 		}, nil
 	case *rule.Call:
-		fn, ok := TokenFunctions[o.Name]
+		fn, ok := tokenFunctionsFor(d)[o.Name]
 		if !ok {
 			return nil, fmt.Errorf("unknown function %q", o.Name)
 		}
@@ -192,7 +225,7 @@ func resolveOperand(operand rule.Operand, fieldResolver FieldResolver) (*Resolve
 			if err != nil {
 				return nil, err
 			}
-			return resolveOperand(argOperand, fieldResolver)
+			return resolveOperand(d, argOperand, fieldResolver)
 		}, tokens...)
 	}
 
