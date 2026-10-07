@@ -26,12 +26,13 @@ const planTTL = 5 * time.Minute
 
 // Server is an MCP server bound to one agent identity.
 type Server struct {
-	app     core.App
-	agentID string
-	session string
-	sdk     *sdk.Server
-	now     func() time.Time
-	bucket  bucket
+	app       core.App
+	agentID   string
+	session   string
+	transport string // "stdio" or "http", recorded in the audit details
+	sdk       *sdk.Server
+	now       func() time.Time
+	bucket    bucket
 
 	mu    sync.Mutex
 	plans map[string]*plan
@@ -75,7 +76,7 @@ func (c *call) set(k string, v any) {
 // NewServer builds the MCP server (tools, resources, prompts) for an agent.
 func NewServer(app core.App, agent *Agent, version string) *Server {
 	s := &Server{
-		app: app, agentID: agent.ID, now: time.Now,
+		app: app, agentID: agent.ID, now: time.Now, transport: "stdio",
 		session: security.RandomString(16),
 		plans:   map[string]*plan{},
 		denied:  map[string]*deniedState{},
@@ -192,7 +193,10 @@ func (s *Server) auditDenied(c *call, err error) {
 func (s *Server) audit(c *call, err error, denied bool) {
 	d := map[string]any{
 		"agent": c.agent.Name, "agent_id": c.agent.ID, "role": string(c.agent.Role),
-		"session": s.session,
+		"session": s.session, "transport": s.transport,
+	}
+	if c.agent.Sandbox {
+		d["sandbox"] = true
 	}
 	for k, v := range c.details {
 		d[k] = v
@@ -270,7 +274,19 @@ var (
 	secretKeyRe = regexp.MustCompile(`(?i)(password|secret|token|key|authorization|cookie|headers)`)
 )
 
-// guestInfo is the request info used to evaluate rules for non-operator agents.
+// agentInfo is the request info used to evaluate rules for non-operator
+// agents: the auth is the `_agents` record, so `@request.auth.kind = "agent"`,
+// `@request.auth.id` and `@request.auth.role` resolve. A nil record (agents
+// built by hand in tests) degrades to guest.
+func agentInfo(a *Agent) *kernel.RequestInfo {
+	info := guestInfo()
+	if a != nil && a.rec != nil {
+		info.Auth = a.rec
+	}
+	return info
+}
+
+// guestInfo is the request info of an unauthenticated request.
 func guestInfo() *kernel.RequestInfo {
 	return &kernel.RequestInfo{
 		Context: kernel.RequestInfoContextDefault, Method: "GET",
@@ -308,12 +324,50 @@ func (s *Server) visibleCollections(a *Agent) ([]*kernel.Collection, error) {
 }
 
 // canRead evaluates a collection rule for the agent: operators bypass,
-// everyone else is evaluated as a guest.
+// everyone else is evaluated as an agent (see agentInfo).
 func (s *Server) canRead(a *Agent, rec *kernel.Record, rule *string) (bool, error) {
+	return s.canReadApp(s.app, a, rec, rule)
+}
+
+// canReadApp is canRead on a given app (a sandbox transaction sees its own writes).
+func (s *Server) canReadApp(app kernel.App, a *Agent, rec *kernel.Record, rule *string) (bool, error) {
 	if a.Role == RoleOperator {
 		return true, nil
 	}
-	return s.app.CanAccessRecord(rec, guestInfo(), rule)
+	return app.CanAccessRecord(rec, agentInfo(a), rule)
+}
+
+// errSandboxRollback ends a sandbox transaction; it is never shown to agents.
+var errSandboxRollback = errors.New("sandbox: rolled back")
+
+// mutate runs fn on the app, or, for a sandbox agent, inside a transaction
+// that is always rolled back after fn succeeded (dry run: nothing persists,
+// the result computed inside fn is what the write would have returned).
+func (s *Server) mutate(c *call, fn func(app kernel.App) error) error {
+	if !c.agent.Sandbox {
+		return fn(s.app)
+	}
+	c.set("dry_run", true)
+	err := s.app.RunInTransaction(func(tx kernel.App) error {
+		if err := fn(tx); err != nil {
+			return err
+		}
+		return errSandboxRollback
+	})
+	if errors.Is(err, errSandboxRollback) {
+		return nil
+	}
+	return err
+}
+
+// sandboxNote marks the result of a sandbox write.
+func sandboxNote(c *call, out map[string]any) map[string]any {
+	if c.agent != nil && c.agent.Sandbox && out != nil {
+		out["sandbox"] = true
+		out["dry_run"] = true
+		out["rolled_back"] = true
+	}
+	return out
 }
 
 func ruleState(rule *string) string {

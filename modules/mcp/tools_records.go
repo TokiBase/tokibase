@@ -90,7 +90,7 @@ func ruleFor(c *kernel.Collection, op string) *string {
 }
 
 func (s *Server) registerRecordTools() {
-	addTool(s, "records.query", "List records of a collection. Non-operator agents are evaluated as guest against the collection list rule (locked rule = no access); operators bypass rules. Hidden fields are never returned.",
+	addTool(s, "records.query", "List records of a collection. Non-operator agents are evaluated as an agent (kind agent) against the collection list rule (locked rule = no access); operators bypass rules. Hidden fields are never returned.",
 		RoleReader, false, func(c *call, in queryIn) (map[string]any, error) {
 			col, err := s.collection(c.agent, in.Collection, false)
 			if err != nil {
@@ -120,7 +120,7 @@ func (s *Server) registerRecordTools() {
 			ctx, cancel := context.WithTimeout(c.ctx, queryTimeout)
 			defer cancel()
 			query := s.app.RecordQuery(col).WithContext(ctx)
-			resolver := kernel.NewRecordFieldResolver(s.app, col, guestInfo(), true)
+			resolver := kernel.NewRecordFieldResolver(s.app, col, agentInfo(c.agent), true)
 			if c.agent.Role != RoleOperator && rule != nil && *rule != "" {
 				expr, err := search.FilterData(*rule).BuildExpr(resolver)
 				if err != nil {
@@ -165,7 +165,7 @@ func (s *Server) registerRecordTools() {
 			}, nil
 		})
 
-	addTool(s, "records.get", "Fetch one record by id. Non-operator agents are evaluated as guest against the view rule.",
+	addTool(s, "records.get", "Fetch one record by id. Non-operator agents are evaluated as an agent (kind agent) against the view rule.",
 		RoleReader, false, func(c *call, in getIn) (map[string]any, error) {
 			col, err := s.collection(c.agent, in.Collection, false)
 			if err != nil {
@@ -203,12 +203,20 @@ func (s *Server) registerRecordTools() {
 			}
 			c.set("reason", reason)
 			c.set("data", sanitize(in.Data, 200))
-			rec, err := s.createRecord(c, c.agent, s.app, col, in.Data)
+			var out map[string]any
+			err = s.mutate(c, func(app kernel.App) error {
+				rec, err := s.createRecord(c, c.agent, app, col, in.Data)
+				if err != nil {
+					return err
+				}
+				c.record = rec.Id
+				out = map[string]any{"record": s.exportVisibleApp(app, c.agent, col, rec)}
+				return nil
+			})
 			if err != nil {
 				return nil, err
 			}
-			c.record = rec.Id
-			return map[string]any{"record": s.exportVisible(c.agent, col, rec)}, nil
+			return sandboxNote(c, out), nil
 		})
 
 	addTool(s, "records.update", "Update a record. Needs role writer or operator and the collection in the agent allowlist. The change is audited with the reason.",
@@ -224,11 +232,19 @@ func (s *Server) registerRecordTools() {
 			}
 			c.set("reason", reason)
 			c.set("data", sanitize(in.Data, 200))
-			rec, err := s.updateRecord(c, c.agent, s.app, col, in.ID, in.Data)
+			var out map[string]any
+			err = s.mutate(c, func(app kernel.App) error {
+				rec, err := s.updateRecord(c, c.agent, app, col, in.ID, in.Data)
+				if err != nil {
+					return err
+				}
+				out = map[string]any{"record": s.exportVisibleApp(app, c.agent, col, rec)}
+				return nil
+			})
 			if err != nil {
 				return nil, err
 			}
-			return map[string]any{"record": s.exportVisible(c.agent, col, rec)}, nil
+			return sandboxNote(c, out), nil
 		})
 
 	addTool(s, "records.delete", "Delete a record in two steps: call without confirm_token to get a plan (what would be deleted, cascade warnings) and a token valid 5 minutes, then call again with the same arguments and the token.",
@@ -279,10 +295,11 @@ func (s *Server) registerRecordTools() {
 				return nil, err
 			}
 			c.set("before", sanitize(exportRedacted(rec), 200))
-			if err := s.app.Delete(rec); err != nil {
+			err = s.mutate(c, func(app kernel.App) error { return app.Delete(rec) })
+			if err != nil {
 				return nil, s.internal(c, "delete failed", err)
 			}
-			return map[string]any{"deleted": true, "collection": col.Name, "id": in.ID}, nil
+			return sandboxNote(c, map[string]any{"deleted": true, "collection": col.Name, "id": in.ID}), nil
 		})
 
 	addTool(s, "records.batch", "Apply create/update/delete operations atomically (all or nothing). Batches with any delete or more than 100 operations are two-step: without confirm_token you get a plan and a token valid 5 minutes; pass the same ops and the token to execute.",
@@ -389,14 +406,21 @@ func (s *Server) registerRecordTools() {
 					}
 					results = append(results, r)
 				}
+				if c.agent.Sandbox {
+					c.set("dry_run", true)
+					return errSandboxRollback
+				}
 				return nil
 			})
+			if errors.Is(err, errSandboxRollback) {
+				err = nil
+			}
 			if err != nil {
 				return nil, fmt.Errorf("batch rolled back: %w", err)
 			}
 			c.record = "batch"
 			c.set("results", capList(results, 50))
-			return map[string]any{"applied": len(results), "results": results}, nil
+			return sandboxNote(c, map[string]any{"applied": len(results), "results": results}), nil
 		})
 }
 
@@ -479,7 +503,7 @@ func (s *Server) expand(a *Agent, recs []*kernel.Record, expand string) {
 		}
 		q := s.app.RecordQuery(rc).AndWhere(dbx.In(rc.Name+".id", args...))
 		if a.Role != RoleOperator && *rc.ViewRule != "" {
-			resolver := kernel.NewRecordFieldResolver(s.app, rc, guestInfo(), true)
+			resolver := kernel.NewRecordFieldResolver(s.app, rc, agentInfo(a), true)
 			expr, err := search.FilterData(*rc.ViewRule).BuildExpr(resolver)
 			if err != nil {
 				return nil, err

@@ -428,8 +428,9 @@ func NewWithConfig(config Config) *PocketBase {
 		})
 	}
 
-	// MCP server for AI agents: `_agents` identities, stdio transport (no env switch in PR 1; TOKI_MCP=off is reserved for the HTTP transport)
+	// MCP server for AI agents: `_agents` identities, stdio transport always, streamable HTTP at /api/mcp with TOKI_MCP=on
 	mcp.Register(pb.App.(core.App))
+	mcp.RegisterHTTP(pb.App.(core.App)) // /api/mcp, only with TOKI_MCP=on
 	if auditLog != nil {
 		mcp.SetAuditSink(func(action, collection, record string, details map[string]any) {
 			after, _ := json.Marshal(details)
