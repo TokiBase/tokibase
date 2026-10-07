@@ -5,11 +5,14 @@ import (
 	"time"
 
 	"github.com/pocketbase/dbx"
+	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
+	"github.com/tokibase/tokibase/tools/subscriptions"
 )
 
 // resolveCollection accepts a collection name or id and returns its id.
-func resolveCollection(app core.App, nameOrId string) (*core.Collection, error) {
+func resolveCollection(app kernel.App, nameOrId string) (*core.Collection, error) {
 	c, err := app.FindCachedCollectionByNameOrId(nameOrId)
 	if err != nil {
 		return nil, err
@@ -21,7 +24,7 @@ func resolveCollection(app core.App, nameOrId string) (*core.Collection, error) 
 }
 
 // List returns the sessions of one user, newest first (collection name or id).
-func List(app core.App, collection, userId string) ([]Session, error) {
+func List(app kernel.App, collection, userId string) ([]Session, error) {
 	if !app.HasTable(TableName) {
 		return nil, nil
 	}
@@ -37,7 +40,7 @@ func List(app core.App, collection, userId string) ([]Session, error) {
 
 // RevokeUser revokes every active session of a user and returns how many were revoked.
 // collection may be a name or an id.
-func RevokeUser(app core.App, collection, userId, reason string) (int64, error) {
+func RevokeUser(app kernel.App, collection, userId, reason string) (int64, error) {
 	if !app.HasTable(TableName) {
 		return 0, nil
 	}
@@ -52,6 +55,10 @@ func RevokeUser(app core.App, collection, userId, reason string) (int64, error) 
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
+	dropRealtime(app, func(cl subscriptions.Client) bool {
+		a, _ := cl.Get(apis.RealtimeClientAuthKey).(*core.Record)
+		return a != nil && a.Id == userId && a.Collection().Id == c.Id
+	})
 	if n > 0 {
 		audit(ActionRevokeAll, c.Id, userId, map[string]any{"reason": reason, "revoked": n})
 	}
@@ -59,7 +66,7 @@ func RevokeUser(app core.App, collection, userId, reason string) (int64, error) 
 }
 
 // Revoke revokes one session by its row id (or token id) and reports whether an active one was revoked.
-func Revoke(app core.App, id, reason string) (bool, error) {
+func Revoke(app kernel.App, id, reason string) (bool, error) {
 	if !app.HasTable(TableName) {
 		return false, nil
 	}
@@ -75,6 +82,7 @@ func Revoke(app core.App, id, reason string) (bool, error) {
 		return false, err
 	}
 	n, _ := res.RowsAffected()
+	dropRealtime(app, func(cl subscriptions.Client) bool { return sidIn([]string{s.TokenId}, cl) })
 	if n > 0 {
 		audit(ActionRevoke, s.Collection, s.Record, map[string]any{"reason": reason, "session": s.Id, "device": s.Device})
 	}
@@ -82,7 +90,7 @@ func Revoke(app core.App, id, reason string) (bool, error) {
 }
 
 // PurgeExpired deletes sessions whose token already expired and returns the count.
-func PurgeExpired(app core.App) (int64, error) {
+func PurgeExpired(app kernel.App) (int64, error) {
 	if !app.HasTable(TableName) {
 		return 0, nil
 	}

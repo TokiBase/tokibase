@@ -32,8 +32,13 @@ const ActionDenied = "field.denied"
 const EnvSuperuser = "TOKI_FIELDPERM_SUPERUSER"
 
 // cacheTTL bounds the staleness of the in-memory cache for changes made by
-// another process (for example the CLI while a server is running).
-const cacheTTL = 30 * time.Second
+// another process (for example the CLI while a server is running). Changes
+// made through this process invalidate the cache immediately.
+const cacheTTL = 5 * time.Second
+
+// failTTL is how long a failed rule load is remembered before it is retried
+// (avoids a retry storm and keeps the exclusive lock out of the request path).
+const failTTL = 5 * time.Second
 
 // auditEvery is the sampling window per (collection, field, user).
 const auditEvery = time.Minute
@@ -56,10 +61,18 @@ type Module struct {
 	app core.App
 	now func() time.Time
 
-	mu      sync.RWMutex
-	byColl  map[string]map[string]*Rule
-	loaded  time.Time
-	invalid bool
+	mu         sync.RWMutex
+	byColl     map[string]map[string]*Rule
+	loaded     time.Time
+	invalid    bool
+	gen        uint64    // bumped by Invalidate, so a load racing with it stays invalid
+	loadedOnce bool      // rules were loaded successfully at least once
+	failUntil  time.Time // do not retry a failed load before this time
+
+	loadMu sync.Mutex             // serializes reloads (DB I/O happens outside mu)
+	load   func() ([]Rule, error) // overridable in tests
+
+	reqCache sync.Map // *core.RequestInfo -> *reqEntry (see eval cache in hooks.go)
 
 	auditMu   sync.Mutex
 	auditLast map[string]time.Time
@@ -86,6 +99,7 @@ func EnforceSuperuser() bool {
 // Register creates the collection (if needed), binds the hooks and returns the module.
 func Register(app core.App) *Module {
 	m := &Module{app: app, now: time.Now, invalid: true, auditLast: map[string]time.Time{}}
+	m.load = func() ([]Rule, error) { return List(app, "") }
 
 	ensure := func() {
 		if err := EnsureCollection(app); err != nil {
@@ -144,39 +158,62 @@ func EnsureCollection(app core.App) error {
 func (m *Module) Invalidate() {
 	m.mu.Lock()
 	m.invalid = true
+	m.failUntil = time.Time{}
+	m.gen++
 	m.mu.Unlock()
 }
 
-func (m *Module) rulesFor(c *core.Collection) map[string]*Rule {
-	m.mu.RLock()
-	fresh := !m.invalid && m.now().Sub(m.loaded) < cacheTTL
-	if fresh {
-		r := m.lookup(c)
-		m.mu.RUnlock()
-		return r
+// rulesFor returns the rules of c. closed is true when the rules could not be
+// loaded even once: the caller must then fail CLOSED (it cannot know which
+// fields are protected). After a good load, a failed refresh keeps serving
+// the previous rules.
+func (m *Module) rulesFor(c *core.Collection) (rules map[string]*Rule, closed bool) {
+	if r, c2, ok := m.cached(c); ok {
+		return r, c2
 	}
-	m.mu.RUnlock()
 
+	m.loadMu.Lock()
+	defer m.loadMu.Unlock()
+	if r, c2, ok := m.cached(c); ok { // someone else reloaded while we waited
+		return r, c2
+	}
+
+	m.mu.RLock()
+	gen := m.gen
+	m.mu.RUnlock()
+	rs, err := m.load()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.invalid || m.now().Sub(m.loaded) >= cacheTTL {
-		rules, err := List(m.app, "")
-		if err != nil {
-			// keep serving the previous cache (or none) and retry next time
-			m.app.Logger().Warn("fieldperm: failed to load rules", "error", err)
-			return m.lookup(c)
-		}
-		by := map[string]map[string]*Rule{}
-		for i := range rules {
-			r := rules[i]
-			if by[r.Collection] == nil {
-				by[r.Collection] = map[string]*Rule{}
-			}
-			by[r.Collection][r.Field] = &r
-		}
-		m.byColl, m.loaded, m.invalid = by, m.now(), false
+	if err != nil {
+		m.failUntil = m.now().Add(failTTL)
+		m.app.Logger().Warn("fieldperm: failed to load rules", "error", err, "failClosed", !m.loadedOnce)
+		return m.lookup(c), !m.loadedOnce
 	}
-	return m.lookup(c)
+	by := map[string]map[string]*Rule{}
+	for i := range rs {
+		r := rs[i]
+		if by[r.Collection] == nil {
+			by[r.Collection] = map[string]*Rule{}
+		}
+		by[r.Collection][r.Field] = &r
+	}
+	m.byColl, m.loaded, m.loadedOnce, m.failUntil = by, m.now(), true, time.Time{}
+	m.invalid = m.gen != gen
+	return m.lookup(c), false
+}
+
+// cached answers from memory when the cache is fresh or a failed load is still backing off.
+func (m *Module) cached(c *core.Collection) (map[string]*Rule, bool, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	now := m.now()
+	if !m.invalid && now.Sub(m.loaded) < cacheTTL {
+		return m.lookup(c), false, true
+	}
+	if now.Before(m.failUntil) {
+		return m.lookup(c), !m.loadedOnce, true
+	}
+	return nil, false, false
 }
 
 func (m *Module) lookup(c *core.Collection) map[string]*Rule {
