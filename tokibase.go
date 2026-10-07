@@ -85,6 +85,11 @@ type Config struct {
 	AuxMaxOpenConns  int                // default to core.DefaultAuxMaxOpenConns
 	AuxMaxIdleConns  int                // default to core.DefaultAuxMaxIdleConns
 	DBConnect        core.DBConnectFunc // default to core.dbConnect
+
+	// SkipFlagParse disables the eager parsing of os.Args for the global
+	// flags (--dir, --dev, ...). Used by embedders (package embed) so the
+	// host process arguments never leak into the app config.
+	SkipFlagParse bool
 }
 
 // New creates a new PocketBase instance with the default configuration.
@@ -148,7 +153,12 @@ func NewWithConfig(config Config) *PocketBase {
 
 	// parse base flags
 	// (errors are ignored, since the full flags parsing happens on Execute())
-	pb.eagerParseFlags(&config)
+	if config.SkipFlagParse {
+		pb.RootCmd.PersistentFlags().StringVar(&pb.dataDirFlag, "dir", config.DefaultDataDir, "the data directory")
+		pb.RootCmd.PersistentFlags().IntVar(&pb.queryTimeout, "queryTimeout", int(config.DefaultQueryTimeout.Seconds()), "")
+	} else {
+		pb.eagerParseFlags(&config)
+	}
 
 	// initialize the app instance
 	pb.App = core.NewBaseApp(core.BaseAppConfig{

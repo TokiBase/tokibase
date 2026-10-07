@@ -64,6 +64,19 @@ jobs:
       - name: stub builds (every module removed, each module removed)
         if: matrix.goarch == 'amd64' && matrix.profile == 'edge'
         run: go test -run 'TestProfile|TestEachStub' -count=1 .
+  embed:
+    # in-process Go API + gomobile facade, nano tag set from profiles.txt; gomobile itself is not run in CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: go test ./embed/... ./mobile/... -short -race
+      - name: nano tags
+        run: |
+          tags=$(awk '$1=="nano" {for (i=3;i<=NF;i++) printf "%s%s", (i>3?",":""), $i}' profiles.txt)
+          go vet -structtag=false -tags "$tags" ./embed/... ./mobile/... ./examples/embed/...
+          go test -tags "$tags" ./embed/... ./mobile/... -short
   lint:
     runs-on: ubuntu-latest
     steps:

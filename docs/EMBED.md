@@ -1,0 +1,104 @@
+# Embedding TokiBase (nano as a library)
+
+Package `embed` runs the server inside your process: no CLI, no signal handlers, an ephemeral loopback port, in-process requests. Package `mobile` wraps it for gomobile (Android AAR, iOS XCFramework). Nothing uses cgo.
+
+## Go
+
+```go
+inst, err := embed.Start(embed.Options{
+    DataDir: dir,                 // required; app sandbox on mobile
+    Listen:  "127.0.0.1:0",       // default; "-" = no TCP listener at all
+    Profile: "nano",              // default
+    Env:     map[string]string{"TOKI_LOCKOUT": "off"},
+    LogLevel: "warn",
+})
+if err != nil { /* ... */ }
+defer inst.Stop(ctx)
+
+inst.Superuser("me@example.com", "long-password")          // first run
+status, hdr, body, err := inst.Call("GET", "/api/health", nil, nil) // no TCP round trip
+cancel := inst.Subscribe("posts/*", func(ev []byte) { /* {"action":"create","record":{...}} */ })
+inst.Export(ctx, file)                                      // backup zip
+```
+
+| Option | Meaning |
+| --- | --- |
+| `DataDir` | Data directory. One running `Instance` per directory per process; a second `Start` fails. Freed by `Stop`. |
+| `Listen` | Default `127.0.0.1:0`. `-` serves nothing over TCP: only `Call`/`Subscribe` work (best for mobile: no port other apps can reach). |
+| `Profile` | `nano` (default), `edge`, `solo`, `team`, `cluster`. Run time only: turns compiled-in modules off through `TOKI_*` switches. What is compiled in is decided by build tags (`profiles.txt`). Switches of modules already compiled out are not set (the stubbed module boot guard would refuse them). |
+| `Env` | Environment variables, applied with `os.Setenv`. **Process wide and not undone by `Stop`.** Wins over profile defaults. |
+| `HooksDir` | JS `pb_hooks` directory (no file watching). Build with `-tags no_embed_jsvm` to drop the JS engine (about 7 MiB). |
+| `LogLevel` | `debug`, `info` (default), `warn`, `error`; stored in the app log settings. |
+| `MaxBodyBytes` | Request body cap for TCP and `Call`, 413 above it. Default 4 MiB (`DefaultMaxBodyBytes`), negative = unlimited. Raise it if the app uploads larger files. |
+
+Notes:
+
+- `Call` runs the real router and middlewares (auth, rules, rate limit, hooks); `RemoteAddr` is `127.0.0.1`, `Host` is `localhost`. `/api/realtime` (SSE) is refused: use `Subscribe`.
+- `Subscribe` is anonymous (public rules only). `SubscribeAs(token, topic, fn)` uses the access of an auth token. `fn` runs on its own goroutine.
+- `Export` currently writes the standard backup zip (data.db, auxiliary.db, storage). A schema + JSONL export is planned; the zip is restorable with the usual restore.
+- `Stop` runs `OnTerminate` (graceful HTTP shutdown, replica flush when compiled in), closes the databases and waits for in-flight `Call`s.
+- No installer link is created; use `Superuser`.
+- `Instance.App()` exposes the app to Go callers (hooks, direct queries). It is not in the mobile bindings.
+
+## Mobile bindings
+
+```
+mobile.Start(dataDir, listen, envJSON) (*Handle, error)
+Handle.URL() / Call(method, path, headersJSON, body) (*Response, error)
+Handle.Superuser(email, password) / Stop()
+Handle.Subscribe(topic, EventCallback) (int, error) / SubscribeAs(token, topic, cb) / Unsubscribe(id)
+type EventCallback interface{ OnEvent(data []byte) }
+Response{Status int; HeadersJSON string; Body []byte}
+```
+
+`envJSON` is a JSON object of strings. The keys `profile`, `hooksDir` and `logLevel` select those options instead of being exported. Callbacks arrive on a background thread: hop to the UI thread yourself.
+
+Build (needs gomobile, plus Android SDK/NDK or macOS with Xcode; not run in CI):
+
+```sh
+go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init
+make aar           # out/tokibase.aar          (androidapi 24)
+make xcframework   # out/TokiBase.xcframework
+TAGS="no_mcp no_ui" mobile/build.sh android   # other tag set
+```
+
+`mobile/build.sh` passes the nano tags from `profiles.txt` (`-tags`) to `gomobile bind`, and prints install instructions when a tool is missing.
+
+## Flutter sketch
+
+Two workable shapes:
+
+| | Platform channel (recommended first) | FFI |
+| --- | --- | --- |
+| How | Kotlin/Swift wrapper around the AAR/XCFramework, `MethodChannel` for `call`, `EventChannel` for `subscribe` | `dart:ffi` to a C shim (needs cgo `-buildmode=c-shared`, which this repo does not ship) |
+| Pros | Works with the generated bindings as is | No channel hop, one binary interface |
+| Cons | Bytes cross two bridges (JSON strings) | Own C ABI to maintain |
+
+Simplest integration: start with `listen = "127.0.0.1:0"`, read `URL()` over the channel and point the regular PocketBase/Dart HTTP client (and its SSE realtime) at it. Switch to `Call` through the channel (with `listen = "-"`) when the open loopback port is not acceptable. Sketch:
+
+```dart
+final url = await channel.invokeMethod<String>('start', {'dataDir': dir});
+final pb = PocketBase(url!);
+```
+
+## Platform lifecycle
+
+- **Android**: the server lives with the process. Start it in a foreground service (or in `Application.onCreate` for foreground use only) and call `Stop` from `onDestroy`/`onTrimMemory` at the latest. The OS can kill the process anytime, SQLite WAL makes that safe, but there is no replica flush. Without a foreground service the process is frozen in the background and loopback connections stall. DataDir: `Context.getFilesDir()`, not external storage.
+- **iOS**: no background processes. The server runs only while the app is active; stop it on `applicationDidEnterBackground` (or after `beginBackgroundTask` finishes) and start it again on foreground; `Start` after `Stop` on the same directory is supported. DataDir: Application Support (excluded from backup if the data is rebuildable). Use `listen = "-"` where possible: ATS allows loopback HTTP, but any other local app could reach an open port.
+- Both: JS hooks and cron run only while the process is alive. Realtime clients must resubscribe after a restart.
+
+## What nano excludes
+
+Tags `no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_replica no_backupcheck no_audit no_wasm`: no admin UI, no MCP, passkeys, push, webhooks, audit log, WASM hooks, WAL replication, backup verification. Kept: REST, realtime, auth (password/OAuth2/OTP), sessions, TOTP, lockout, rules and ruleguard, fieldperm, crypto, computed, jobs, geo, timelint, JS hooks (unless `no_embed_jsvm`).
+
+## Size
+
+Stripped (`-trimpath -s -w`, `CGO_ENABLED=0`), nano tags:
+
+| Binary | linux/amd64 | darwin/arm64 |
+| --- | --- | --- |
+| `examples/base` | 29.3 MiB | 28.4 MiB |
+| `examples/embed` (with JS hooks) | 29.3 MiB | 28.4 MiB |
+| `examples/embed` + `no_embed_jsvm` | 21.9 MiB | 21.2 MiB |
+
+gomobile output sizes (AAR/XCFramework, per ABI) were not measured here.
