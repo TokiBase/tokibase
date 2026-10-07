@@ -51,6 +51,10 @@ Exit gate: 100% SDK suite pass, kernel has no `net/http` import, all builds unde
 
 Exit gate: all modules on by default in profile `solo`, failover drill RTO under 30 s in CI, no COMPAT deviation on the REST contract.
 
+## Phase 2 (in progress)
+
+- [x] sessions: server-side sessions with `sid` JWT claim, revoke per device/all, revoke on password/email change, optional refresh rotation, `toki sessions` (`docs/modules/sessions.md`).
+
 ## Size budgets (stripped; CI enforces solo 36 MiB, no_ui 33 MiB, solo+replica_s3 45 MiB)
 
 | Profile | Budget |
