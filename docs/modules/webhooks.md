@@ -14,15 +14,15 @@ Collection `_webhooks` in `data.db` (created on bootstrap, superuser-only rules,
 | --- | --- |
 | `name` | unique |
 | `url` | absolute `http(s)` URL (validated on save) |
-| `secret` | HMAC key, hidden |
+| `secret` | HMAC key, hidden, required, at least 16 characters (validated on save, also through the admin API) |
 | `events` | JSON list: exact names or patterns `record.*`, `collection.*`, `auth.*`, `*` |
 | `collections` | JSON list of collection names; empty = all collections |
 | `enabled` | bool; disabled webhooks get no new deliveries, queued ones wait |
-| `headers` | JSON map of extra request headers (the `X-Toki-*`, `Content-Type` and `User-Agent` headers always win) |
-| `timeout_ms` | default 10000, capped at 60000 |
+| `headers` | JSON map of extra request headers (the `X-Toki-*`, `Content-Type` and `User-Agent` headers always win). `Host`, `Content-Length`, `Transfer-Encoding`, `Connection` and `X-Toki-*` names and values with CR/LF are rejected. Values usually hold bearer tokens: `toki webhooks list --json` masks them, but the superuser API returns them |
+| `timeout_ms` | default 10000, clamped to 100..30000 |
 | `max_attempts` | default 8 |
 
-The config is cached in memory, invalidated on any `_webhooks` record event, with a 30 s TTL so changes made by the CLI in another process are picked up.
+The config is cached in memory, invalidated on any `_webhooks` record event of this process, with a 5 s TTL. Once the cache is older than 5 s, event capture re-reads the webhooks from the database before choosing the deliveries, so a webhook added or enabled by the CLI or another node is seen within at most 5 s (events captured in that window by this process are not delivered to it; there is no backfill). If the reload fails, the stale cache is used and retried on the next event; with no cache at all the event is logged as dropped. Secrets are stored in clear in the main database (and its backups).
 
 ## Events
 
@@ -33,7 +33,7 @@ The config is cached in memory, invalidated on any `_webhooks` record event, wit
 | `auth.login` | `OnRecordAuthRequest` with a non-empty auth method (password, OTP, OAuth2); not token refresh or impersonation | auth collection / auth record id |
 | `ping` | `toki webhooks test` only | empty |
 
-Collections whose name starts with `_` (system collections, including `_webhooks`) never produce record or collection events. Regular `_superusers` logins do produce `auth.login`.
+Collections whose name starts with `_` (system collections, including `_webhooks` and `_superusers`) never produce record, collection or `auth.login` events.
 
 ## Payload
 
@@ -44,14 +44,17 @@ Collections whose name starts with `_` (system collections, including `_webhooks
   "created": "2026-10-07 04:02:51.552Z",
   "collection": "orders",
   "record_id": "efu69b4ihx4sfb2",
+  "seq": 42,
   "data": { "id": "efu69b4ihx4sfb2", "collectionName": "orders", "status": "paid" },
   "old": { "status": "new" },
   "changed": ["status"]
 }
 ```
 
-- `data` is the record's public export: hidden fields, `password` and `tokenKey` are never included; auth `email` follows `emailVisibility`. Collection events carry the collection JSON with secret-looking keys (`*secret*`, `*password*`, `token`, `apiKey`, ...) removed.
-- `old` and `changed` exist for `record.update` only: old values of the changed, non-hidden fields. When the record object had no pristine copy (created and updated through the same Go object) they are omitted.
+- `seq` is a per-webhook counter (also sent as header `X-Toki-Seq`), allocated when the event is captured. It lets receivers detect gaps and reorder, but delivery order is NOT guaranteed (retries run on independent timers). Ping events carry no `seq`.
+- Payloads above 256 KB (`TOKI_WEBHOOK_MAX_PAYLOAD_BYTES`) are replaced by a marker: `"truncated": true`, `data` reduced to `{"id": <record id>}`, no `old`; fetch the record from the API.
+- `data` is the record's public export: hidden fields, `password` and `tokenKey` are never included; auth `email` follows `emailVisibility`. `expand` data is included when present. Collection events carry the collection JSON with secret-looking keys (`*secret*`, `*password*`, `token`, `apiKey`, ...) removed.
+- `old` and `changed` exist for `record.update` only: old values of the changed fields that are visible in the public export of both the previous and the new state (so an auth `email` appears in `old`/`changed` only while `emailVisibility` is true; `password` and `tokenKey` never). When the record object had no pristine copy (created and updated through the same Go object) they are omitted.
 - `auth.login` data: `{id, method, ip}`; the token is never sent.
 - `id` identifies the event; `X-Toki-Delivery` identifies the delivery (one per webhook), use it for idempotency on retries.
 
@@ -91,24 +94,28 @@ def verify(raw_body: bytes, headers: dict, secret: str, tolerance: int = 300) ->
 
 ## Deliveries, retries, dead-letter
 
-Table `_webhook_deliveries` in `auxiliary.db` (`CREATE TABLE IF NOT EXISTS`, same approach as `_audit`): `id, webhook, event, collection, record, payload, attempt, state, next_at, last_status, last_error, response_ms, created, updated`.
+Table `_webhook_deliveries` in `auxiliary.db` (`CREATE TABLE IF NOT EXISTS`, same approach as `_audit`): `id, webhook, event, collection, record, payload, attempt, state, next_at, last_status, last_error, response_ms, created, updated, seq` (plus `_webhook_seq`, the per-webhook counter; older tables are migrated in place).
 
 | State | Meaning |
 | --- | --- |
 | `queued` | not tried yet (or replayed), due at `next_at` |
 | `failed` | last attempt failed, retry scheduled at `next_at` |
 | `delivered` | a 2xx was received |
-| `dead` | `max_attempts` reached (a failed `ping` is dead at once, never retried) |
+| `dead` | `max_attempts` reached, a 3xx response (not retried), the webhook was disabled or deleted, or a failed `ping` |
 
-A pool of workers (env `TOKI_WEBHOOK_WORKERS`, default 2) polls due rows every second (and immediately after a new event). A claim pushes `next_at` 2 minutes ahead, so a crashed worker's row becomes due again. Backoff after the n-th failed attempt: `10 s * 2^(n-1)`, capped at 1 h, with +-20 % jitter (10 s, 20 s, 40 s, ...). When a delivery turns `dead` the log gets `webhook.dead` and, if the audit module is on, an `_audit` entry (`webhooks.SetAuditSink`, wired in `tokibase.go`). `last_error` holds the transport error or `HTTP <code>: <first 4 KB of the body>`.
+A pool of workers (env `TOKI_WEBHOOK_WORKERS`, default 4) polls due rows every second (and immediately after a new event). A claim pushes `next_at` 2 minutes ahead, so a crashed worker's row becomes due again. Backoff after the n-th failed attempt: `10 s * 2^(n-1)`, capped at 1 h, with +-20 % jitter (10 s, 20 s, 40 s, ...). When a delivery turns `dead` the log gets `webhook.dead` and, if the audit module is on, an `_audit` entry (`webhooks.SetAuditSink`, wired in `tokibase.go`). `last_error` holds the transport error or `HTTP <code>: <first 4 KB of the body>`.
 
-Delivered rows are pruned after 7 days (`TOKI_WEBHOOK_RETENTION_HOURS`); `failed` and `dead` rows are kept until replayed. Delivery is at-least-once: receivers must dedupe on `X-Toki-Delivery`/`id`.
+Shutdown: in-flight deliveries are interrupted and given back (`next_at` = now, attempt count unchanged); a deploy never charges an attempt or dead-letters a delivery.
+
+Deliveries of a disabled webhook are not retried: when claimed they turn `dead` (`webhook disabled ...`, no attempt charged, no audit entry) and can be replayed after enabling it.
+
+Delivered rows are pruned after 7 days (`TOKI_WEBHOOK_RETENTION_HOURS`); `failed` and `dead` rows (and their payloads, which may hold personal data) after 30 days (`TOKI_WEBHOOK_DEAD_RETENTION_HOURS`). Delivery is at-least-once: receivers must dedupe on `X-Toki-Delivery`/`id`.
 
 ## SSRF rules
 
-- Every outgoing connection is checked after DNS resolution (at dial time, so DNS rebinding does not help). Loopback, private (RFC 1918, `fc00::/7`), link-local (incl. `169.254.169.254`), CGNAT `100.64.0.0/10`, `0.0.0.0/8`, unspecified and multicast addresses are refused; the delivery fails with `webhook target resolves to a private ...`.
+- Every outgoing connection is checked after DNS resolution (at dial time, so DNS rebinding does not help). Loopback, private (RFC 1918, `fc00::/7`), link-local (incl. `169.254.169.254`), CGNAT `100.64.0.0/10`, `0.0.0.0/8`, `240.0.0.0/4`, NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`, 6to4 `2002::/16`, Teredo `2001::/32`, `::/96`, site-local `fec0::/10`, unspecified and multicast addresses are refused; the delivery fails with `webhook target resolves to a private ...`.
 - Override for development or intranet receivers: `TOKI_WEBHOOK_ALLOW_PRIVATE=1`.
-- Redirects are never followed (a 3xx is a failed attempt). `HTTP(S)_PROXY` is ignored (a proxy would bypass the guard).
+- Redirects are never followed (a 3xx is a terminal failure: the delivery turns `dead` at once, no retries). `HTTP(S)_PROXY` is ignored (a proxy would bypass the guard).
 - Response bodies are read up to 4 KB only.
 
 ## CLI
@@ -119,11 +126,11 @@ toki webhooks add --name N --url U --events a,b [--secret S] [--collections x,y]
 toki webhooks rm <name>
 toki webhooks test <name>                       # synchronous ping, prints status, exit 1 on failure
 toki webhooks deliveries [--state queued|failed|delivered|dead] [--limit 50] [--json]
-toki webhooks replay <delivery-id> [--now]      # re-queue (attempt restarts at 0); --now delivers once from this process
+toki webhooks replay <delivery-id> [--now] [--force]   # re-queue a dead/failed delivery (attempt restarts at 0); --now delivers once from this process; --force also replays delivered/in-flight rows (duplicate)
 toki webhooks replay --dead                     # re-queue every dead delivery
 ```
 
-`list --json` never prints secrets.
+`list --json` never prints secrets and masks header values (`***`). Prefer the generated secret: `--secret` ends up in shell history. Payloads and per-delivery timeouts: see above. Default worker count is 4 (a slow receiver can still occupy workers up to its timeout, at most 30 s; there is no per-webhook concurrency cap).
 
 ## Implementation note: moving to the kernel job queue
 
@@ -131,4 +138,4 @@ The delivery queue is a private table and worker pool because the kernel `JobQue
 
 ## Not covered (phase 1)
 
-Secrets are stored in clear (hidden from the API only), no per-webhook rate limit, no ordering guarantee between events, no batching, events from `pb_data` restores or direct SQL are not seen, cluster-wide claim coordination (one writing process per `pb_data`).
+Secrets are stored in clear (hidden from the API only), no per-webhook rate limit or concurrency cap, no ordering guarantee between events (use `seq`), no batching, events from `pb_data` restores or direct SQL are not seen, cluster-wide claim coordination (one writing process per `pb_data`).

@@ -29,6 +29,8 @@ type Payload struct {
 	Created    string         `json:"created"`
 	Collection string         `json:"collection"`
 	RecordID   string         `json:"record_id"`
+	Seq        int64          `json:"seq,omitempty"` // monotonic per webhook (not a delivery order guarantee)
+	Truncated  bool           `json:"truncated,omitempty"`
 	Data       any            `json:"data"`
 	Old        map[string]any `json:"old,omitempty"`
 	Changed    []string       `json:"changed,omitempty"`
@@ -39,6 +41,24 @@ func newPayload(event, collection, recordID string, data any) *Payload {
 		ID:    security.RandomStringWithAlphabet(15, "abcdefghijklmnopqrstuvwxyz0123456789"),
 		Event: event, Created: fmtTime(nowFn()), Collection: collection, RecordID: recordID, Data: data,
 	}
+}
+
+// encodePayload marshals p for one webhook with its sequence number. A payload
+// above the size cap is replaced by a marker carrying only the record id.
+func encodePayload(p *Payload, seq int64, recordID string) ([]byte, error) {
+	cp := *p
+	cp.Seq = seq
+	body, err := json.Marshal(&cp)
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxPayloadBytes() {
+		cp.Data = map[string]any{"id": recordID}
+		cp.Old = nil
+		cp.Truncated = true
+		return json.Marshal(&cp)
+	}
+	return body, nil
 }
 
 // skipCollection reports whether events of the collection are never captured
@@ -56,7 +76,7 @@ func (m *Module) bindCapture() {
 			if skipCollection(name) {
 				return nil
 			}
-			p := newPayload(event, name, e.Record.Id, e.Record.PublicExport())
+			p := newPayload(event, name, e.Record.Id, safeExport(e.Record))
 			if event == EventRecordUpdate {
 				p.Old, p.Changed = changedFields(e.Record)
 			}
@@ -101,11 +121,22 @@ func (m *Module) bindCapture() {
 				return nil
 			}
 			name := e.Collection.Name
+			if skipCollection(name) { // _superusers and other system auth collections
+				return nil
+			}
 			data := map[string]any{"id": e.Record.Id, "method": e.AuthMethod, "ip": e.RealIP()}
 			m.enqueue(EventAuthLogin, name, e.Record.Id, newPayload(EventAuthLogin, name, e.Record.Id, data))
 			return nil
 		},
 	})
+}
+
+// safeExport is the public export without credential fields.
+func safeExport(r *core.Record) map[string]any {
+	m := r.PublicExport()
+	delete(m, core.FieldNamePassword)
+	delete(m, core.FieldNameTokenKey)
+	return m
 }
 
 // changedFields compares the record with its pristine copy and returns the
@@ -117,9 +148,18 @@ func changedFields(r *core.Record) (map[string]any, []string) {
 	}
 	old := map[string]any{}
 	var changed []string
+	// a field is reported only when it is visible in the public export of BOTH
+	// the new and the previous state (this hides `email` unless emailVisibility)
+	visNew, visOld := r.PublicExport(), orig.PublicExport()
 	for _, f := range r.Collection().Fields {
 		n := f.GetName()
 		if f.GetHidden() || n == core.FieldNamePassword || n == core.FieldNameTokenKey {
+			continue
+		}
+		if _, ok := visNew[n]; !ok {
+			continue
+		}
+		if _, ok := visOld[n]; !ok {
 			continue
 		}
 		a, b := r.Get(n), orig.Get(n)
