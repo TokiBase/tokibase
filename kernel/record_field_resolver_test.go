@@ -766,12 +766,7 @@ func TestRecordFieldResolverResolveCollectionFields(t *testing.T) {
 		{"json_array.0", false, "(CASE WHEN json_valid([[demo4.json_array]]) THEN JSON_EXTRACT([[demo4.json_array]], '$[0]') ELSE JSON_EXTRACT(json_object('pb', [[demo4.json_array]]), '$.pb[0]') END)"},
 		{"json_object.a.b.c", false, "(CASE WHEN json_valid([[demo4.json_object]]) THEN JSON_EXTRACT([[demo4.json_object]], '$.a.b.c') ELSE JSON_EXTRACT(json_object('pb', [[demo4.json_object]]), '$.pb.a.b.c') END)"},
 
-		// PocketBase v0.40.4 compatibility: the index check runs on the RAW segment and
-		// the sanitization comes second ("1é" -> key "1", NOT the index [1])
 		{"json_object.a.1", false, "(CASE WHEN json_valid([[demo4.json_object]]) THEN JSON_EXTRACT([[demo4.json_object]], '$.a[1]') ELSE JSON_EXTRACT(json_object('pb', [[demo4.json_object]]), '$.pb.a[1]') END)"},
-		{"json_object.a.1é", false, "(CASE WHEN json_valid([[demo4.json_object]]) THEN JSON_EXTRACT([[demo4.json_object]], '$.a.1') ELSE JSON_EXTRACT(json_object('pb', [[demo4.json_object]]), '$.pb.a.1') END)"},
-		{"json_array.1é", false, "(CASE WHEN json_valid([[demo4.json_array]]) THEN JSON_EXTRACT([[demo4.json_array]], '$.1') ELSE JSON_EXTRACT(json_object('pb', [[demo4.json_array]]), '$.pb.1') END)"},
-		{"json_array.0", false, "(CASE WHEN json_valid([[demo4.json_array]]) THEN JSON_EXTRACT([[demo4.json_array]], '$[0]') ELSE JSON_EXTRACT(json_object('pb', [[demo4.json_array]]), '$.pb[0]') END)"},
 
 		// max relations limit shouldn't apply for json paths
 		{"json_object.a.b.c.e.f.g.h.i.j.k.l.m.n.o.p", false, "(CASE WHEN json_valid([[demo4.json_object]]) THEN JSON_EXTRACT([[demo4.json_object]], '$.a.b.c.e.f.g.h.i.j.k.l.m.n.o.p') ELSE JSON_EXTRACT(json_object('pb', [[demo4.json_object]]), '$.pb.a.b.c.e.f.g.h.i.j.k.l.m.n.o.p') END)"},
@@ -960,5 +955,49 @@ func TestRecordFieldResolverResolveStaticRequestInfoFields(t *testing.T) {
 	}
 	if v, ok := authRecord.PublicExport()[kernel.FieldNameEmail]; ok {
 		t.Fatalf("Expected the original authRecord email to not be exported, got %q", v)
+	}
+}
+
+// PocketBase v0.40.4 compatibility: the JSON path index check runs on the RAW
+// segment and the sanitization comes second, so "1é" is the object key "1"
+// and NOT the array index [1] (regression of rule engine PR 2).
+//
+// The default allowed fields regex doesn't let such a segment through, so the
+// resolver is opened up (non-default but valid for custom resolvers).
+func TestRecordFieldResolverJSONPathSegmentOrder(t *testing.T) {
+	t.Parallel()
+
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	collection, err := app.FindCollectionByNameOrId("demo4")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := kernel.NewRecordFieldResolver(app, collection, nil, true)
+	r.SetAllowedFields([]string{"^json_.+$"})
+
+	scenarios := []struct {
+		field string
+		path  string
+	}{
+		{"json_object.a.1", "$.a[1]"},
+		{"json_object.a.1\u00e9", "$.a.1"},
+		{"json_object.a.1\u00e9.b", "$.a.1.b"},
+		{"json_array.1\u00e9", "$.1"},
+		{"json_array.0", "$[0]"},
+	}
+
+	for _, s := range scenarios {
+		res, err := r.Resolve(s.field)
+		if err != nil {
+			t.Fatalf("%q: %v", s.field, err)
+		}
+
+		want := "JSON_EXTRACT([[demo4." + strings.SplitN(s.field, ".", 2)[0] + "]], '" + s.path + "')"
+		if !strings.Contains(res.Identifier, want) {
+			t.Fatalf("%q: expected %q in\n%s", s.field, want, res.Identifier)
+		}
 	}
 }
