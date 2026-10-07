@@ -22,3 +22,10 @@ solo team cluster edge nano:
 	@ls -l out/toki-$@ | awk '{printf "toki-$@ %.1f MiB\n", $$5/1048576}'
 
 profiles: solo edge nano cluster
+
+# Mobile bindings (gomobile; see docs/EMBED.md). Not built in CI.
+.PHONY: aar xcframework
+aar:
+	./mobile/build.sh android
+xcframework:
+	./mobile/build.sh ios

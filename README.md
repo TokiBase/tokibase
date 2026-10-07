@@ -50,6 +50,10 @@ make edge                  # or: solo, team, cluster, nano (build tag sets, see 
 
 Every optional module can be removed at build time with `-tags no_<module>`; profiles are tag sets listed in [docs/PROFILES.md](docs/PROFILES.md).
 
+## Embedding (Go, Android, iOS)
+
+`embed.Start(embed.Options{DataDir: dir})` runs the server inside your process (loopback port or none, in-process `Call`, in-process `Subscribe`); `mobile/` wraps it for gomobile (`make aar`, `make xcframework`). See [docs/EMBED.md](docs/EMBED.md).
+
 ## License
 
 MIT. TokiBase contains code from PocketBase, Copyright (c) 2022-present Gani Georgiev,
