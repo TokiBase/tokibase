@@ -49,6 +49,24 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: tamper-evident trail of superuser, impersonated, schema and settings changes.
 - Migration path: none needed; an upstream `pb_data` gains the table on first start, and removing it (or running upstream) simply ignores it. See `docs/modules/audit.md`.
 
+### Boot warning for plain HTTP without trusted proxy (phase 1, tlscheck)
+
+- What: `modules/tlscheck` logs a warning (and prints it to stderr) at `OnServe` when the server listens on plain HTTP on a non-loopback address and `Settings.TrustedProxy.Headers` is empty; `TOKI_TLS_CHECK=strict` makes `serve` refuse to start in that case. REST, settings and `pb_data` are unchanged.
+- Why: such a server is probably reached by clients without encryption.
+- Migration: nothing needed (default `warn`). Set the trusted proxy headers behind nginx/Caddy/Cloudflare, or `TOKI_TLS_CHECK=off`.
+
+### Time zone check for submitted date values, new validation error code (phase 1, timelint)
+
+- What: `modules/timelint` inspects date fields in record create/update requests. Default `TOKI_TIMELINT=warn` only logs (once per collection+field per hour) and changes nothing. With `TOKI_TIMELINT=strict` a date-time string that carries no zone designator (for example `2026-10-07 10:00:00`) is rejected with 400 and a field error with the new code `validation_invalid_timezone`, in the same shape as upstream field errors (`data.<field>.code/message`). Date-only values (`YYYY-MM-DD`) and values with `Z` or `+hh:mm` are accepted. New CLI `toki time lint`.
+- Why: zoneless values are silently read as UTC, a common cause of "+N hours per sync" bugs.
+- Migration: nothing needed (default `warn`). Before enabling `strict`, make clients send ISO 8601 with an offset or `Z`; stock PocketBase SDKs that send `Date.toISOString()` already comply.
+
+### Structured denial logs (phase 1, denylog)
+
+- What: `modules/denylog` writes one extra Warn log entry (message `denylog: request denied`, attribute `toki.deny=true`) for every 401, 403 and 429 response, with `status`, `method`, `path`, `ip`, `auth_kind`, `auth_id`, `collection`, `reason`, `rule_kind`, `rate_limited`. Log attributes and the `_logs` table content only: responses, status codes, headers and schemas are unchanged. New CLI `toki deny tail`.
+- Why: denials were only visible as generic request logs without a machine-readable reason.
+- Migration: nothing needed. `TOKI_DENYLOG=off` stops the extra entries (they count toward the logs retention like any other log).
+
 ### Backup verification after create, `toki backup` CLI (phase 1, backupcheck)
 
 - What: `modules/backupcheck` verifies every created backup asynchronously (restore to a temp dir, `PRAGMA integrity_check`, counts, sampled files) and logs the result. New `toki backup create|list|verify|verify-all` commands (no `backup` CLI existed). Nothing changes in REST endpoints, backup file format or settings.
@@ -61,19 +79,16 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: replica lag is the signal operators need; an extra key in the superuser-only `data` map does not break the documented fields.
 - Migration: nothing needed; clients ignoring unknown `data` keys are unaffected.
 
-<<<<<<< HEAD
 ### Admin UI read-only or disabled by env (phase 1, adminlock)
 
 - What: `TOKI_ADMIN_UI=readonly` makes collection create/update/delete/import, settings update and `_superusers` record create/update/delete return 403 (JSON error in the usual shape) when the request is a superuser request carrying a `Referer`/`Origin` that points at `/_/` on the same host. `TOKI_ADMIN_UI=off` clears `ui.DistDirFS` so `/_/` is 404, like a `no_ui` build (installer and OAuth2 redirect fall back as in `no_ui`). Default `on` is byte for byte upstream.
 - Why: production schema changes should come from migration files in git, not from clicks in the UI.
 - Migration: nothing needed; SDK, CLI and migration calls (no UI referer) are never blocked. See `docs/modules/adminlock.md` for the detection rule and its limits.
-=======
 ### `Retry-After` header and per-identity lockout on auth endpoints (phase 1, `modules/lockout`)
 
 - What: after repeated failed `auth-with-password` / `auth-with-otp` for one identity (default 5 failures in 15 minutes), further attempts for that identity, even with the correct credentials, get the same 400 body as a wrong password (`Failed to authenticate.` / `Invalid or expired OTP`) plus a `Retry-After: <seconds>` header. The header is sent only while the identity is locked. New `_lockout` table in `auxiliary.db`, new `lockout` CLI command. No endpoint, status code or body shape changes.
 - Why: upstream rate limits are IP/path based and do not stop credential stuffing spread over many IPs.
 - Migration: nothing needed. `TOKI_LOCKOUT=off` disables it; `toki lockout unlock|clear` recovers locked accounts. See `docs/modules/lockout.md`.
->>>>>>> 11e88c00 (Add lockout module: progressive per-identity auth lockout)
 
 ## Not promised
 
