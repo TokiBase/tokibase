@@ -3,11 +3,13 @@
 package mcp
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/kernel"
@@ -58,11 +60,26 @@ type Agent struct {
 	Collections []string `json:"collections"` // empty = all
 	RatePerMin  int      `json:"rate_per_min"`
 	Enabled     bool     `json:"enabled"`
+	Sandbox     bool     `json:"sandbox"`           // writes are dry runs (rolled back)
+	Expires     string   `json:"expires,omitempty"` // empty = never
 	Created     string   `json:"created"`
+
+	// rec is the `_agents` record: the request auth of rule evaluation
+	// (`@request.auth.kind = "agent"`).
+	rec *kernel.Record
 
 	// invalid is set when the stored `collections` allowlist can not be parsed:
 	// the agent then fails closed (every call is denied).
 	invalid bool
+}
+
+// expired reports whether the agent has an expiry date in the past.
+func (a *Agent) expired(now time.Time) bool {
+	if a.rec == nil {
+		return false
+	}
+	t := a.rec.GetDateTime("expires")
+	return !t.IsZero() && !t.Time().After(now)
 }
 
 // allows reports whether the agent allowlist covers the collection name.
@@ -85,7 +102,10 @@ func agentFromRecord(r *kernel.Record) *Agent {
 	a := &Agent{
 		ID: r.Id, Name: r.GetString("name"), Role: Role(r.GetString("role")),
 		RatePerMin: r.GetInt("rate_per_min"), Enabled: r.GetBool("enabled"),
-		Created: r.GetString("created"),
+		Sandbox: r.GetBool("sandbox"), Created: r.GetString("created"), rec: r,
+	}
+	if f := r.GetDateTime("expires"); !f.IsZero() {
+		a.Expires = f.String()
 	}
 	if err := r.UnmarshalJSONField("collections", &a.Collections); err != nil {
 		a.Collections, a.invalid = nil, true
@@ -120,7 +140,20 @@ func Register(app core.App) {
 
 // EnsureCollection creates `_agents` if it does not exist (superuser-only rules).
 func EnsureCollection(app kernel.App) error {
-	if _, err := app.FindCollectionByNameOrId(CollectionName); err == nil {
+	if existing, err := app.FindCollectionByNameOrId(CollectionName); err == nil {
+		// PR 1 instances lack the PR 2 fields
+		changed := false
+		if existing.Fields.GetByName("sandbox") == nil {
+			existing.Fields.Add(&kernel.BoolField{Name: "sandbox"})
+			changed = true
+		}
+		if existing.Fields.GetByName("expires") == nil {
+			existing.Fields.Add(&kernel.DateField{Name: "expires"})
+			changed = true
+		}
+		if changed {
+			return app.Save(existing)
+		}
 		return nil
 	}
 	c := kernel.NewBaseCollection(CollectionName)
@@ -132,6 +165,8 @@ func EnsureCollection(app kernel.App) error {
 		&kernel.JSONField{Name: "collections"},
 		&kernel.NumberField{Name: "rate_per_min"},
 		&kernel.BoolField{Name: "enabled"},
+		&kernel.BoolField{Name: "sandbox"},
+		&kernel.DateField{Name: "expires"},
 		&kernel.AutodateField{Name: "created", OnCreate: true},
 		&kernel.AutodateField{Name: "updated", OnCreate: true, OnUpdate: true},
 	)
@@ -155,6 +190,17 @@ func HashKey(key string) string { return security.SHA256(key) }
 // CreateAgent registers a new agent and returns its API key, which is never
 // stored in clear text and can not be shown again.
 func CreateAgent(app kernel.App, name string, role Role, collections []string, ratePerMin int) (*Agent, string, error) {
+	return CreateAgentOpts(app, name, role, collections, ratePerMin, AgentOptions{})
+}
+
+// AgentOptions are the optional settings of a new agent.
+type AgentOptions struct {
+	Sandbox bool      // write tools run in a transaction that is always rolled back
+	Expires time.Time // zero = never expires
+}
+
+// CreateAgentOpts is CreateAgent with the PR 2 options.
+func CreateAgentOpts(app kernel.App, name string, role Role, collections []string, ratePerMin int, opts AgentOptions) (*Agent, string, error) {
 	if !nameRe.MatchString(name) {
 		return nil, "", fmt.Errorf("invalid agent name %q (1-63 chars of a-z 0-9 _ . -, starting with a letter or digit)", name)
 	}
@@ -193,6 +239,10 @@ func CreateAgent(app kernel.App, name string, role Role, collections []string, r
 	rec.Set("collections", cols)
 	rec.Set("rate_per_min", ratePerMin)
 	rec.Set("enabled", true)
+	rec.Set("sandbox", opts.Sandbox)
+	if !opts.Expires.IsZero() {
+		rec.Set("expires", opts.Expires.UTC().Format("2006-01-02 15:04:05.000Z"))
+	}
 	if err := app.Save(rec); err != nil {
 		return nil, "", err
 	}
@@ -237,6 +287,8 @@ func RevokeAgent(app kernel.App, name string) (*Agent, error) {
 
 var (
 	errBadKey       = errors.New("invalid agent key")
+	errAgentRevoked = errors.New("agent is revoked")
+	errAgentExpired = errors.New("agent key has expired")
 	errBadAllowlist = errors.New("agent configuration is invalid (collections must be a JSON array of names): all calls are denied")
 )
 
@@ -250,13 +302,20 @@ func Authenticate(app kernel.App, key string) (*Agent, error) {
 	if err != nil {
 		return nil, errBadKey
 	}
-	rec, err := app.FindFirstRecordByData(coll, "key_hash", HashKey(key))
+	hash := HashKey(key)
+	rec, err := app.FindFirstRecordByData(coll, "key_hash", hash)
 	if err != nil {
+		return nil, errBadKey
+	}
+	if subtle.ConstantTimeCompare([]byte(rec.GetString("key_hash")), []byte(hash)) != 1 {
 		return nil, errBadKey
 	}
 	a := agentFromRecord(rec)
 	if !a.Enabled {
-		return nil, errors.New("agent is revoked")
+		return nil, errAgentRevoked
+	}
+	if a.expired(time.Now()) {
+		return nil, errAgentExpired
 	}
 	if a.invalid {
 		app.Logger().Error("mcp: agent has a malformed collections allowlist, denying all calls", "agent", a.Name)
@@ -277,7 +336,10 @@ func reload(app kernel.App, id string) (*Agent, error) {
 	}
 	a := agentFromRecord(rec)
 	if !a.Enabled {
-		return nil, errors.New("agent is revoked")
+		return nil, errAgentRevoked
+	}
+	if a.expired(time.Now()) {
+		return nil, errAgentExpired
 	}
 	if a.invalid {
 		app.Logger().Error("mcp: agent has a malformed collections allowlist, denying all calls", "agent", a.Name)

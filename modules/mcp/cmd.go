@@ -73,27 +73,35 @@ func agentCommand(app core.App) *cobra.Command {
 		role string
 		cols []string
 		rate int
+
+		sandbox bool
+		expires string
 	)
 	create := &cobra.Command{
 		Use:   "create <name>",
 		Short: "Create an agent and print its API key once",
 		Long: "Create an agent identity in the _agents collection and print its API key ONCE (only a sha256 hash is stored).\n" +
 			"Roles: reader (schema + reads), writer (+ create/update/delete), operator (+ audit/backup/replica/deny/lockout, bypasses rules).\n" +
-			"--collections limits the collections the agent may touch (empty = all).",
+			"--collections limits the collections the agent may touch (empty = all).\n" +
+			"--sandbox makes every write a dry run (executed in a transaction that is rolled back). --expires (RFC 3339, 2006-01-02 or Nd, e.g. 90d) limits the key's lifetime.",
 		Example:      "agent create reviewer --role writer --collections posts,comments",
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			a, key, err := CreateAgent(app, args[0], Role(role), cols, rate)
+			exp, err := parseExpires(expires, time.Now())
+			if err != nil {
+				return err
+			}
+			a, key, err := CreateAgentOpts(app, args[0], Role(role), cols, rate, AgentOptions{Sandbox: sandbox, Expires: exp})
 			if err != nil {
 				return err
 			}
 			emit("agent.created", "", a.ID, map[string]any{
 				"cli": true, "agent": a.Name, "agent_id": a.ID, "role": string(a.Role),
-				"collections": a.Collections, "rate_per_min": a.RatePerMin,
+				"collections": a.Collections, "rate_per_min": a.RatePerMin, "sandbox": a.Sandbox, "expires": a.Expires,
 			})
 			out := c.OutOrStdout()
-			fmt.Fprintf(out, "Agent %q created (role %s, %d calls/min, collections: %s).\n", a.Name, a.Role, a.RatePerMin, listOrAll(a.Collections))
+			fmt.Fprintf(out, "Agent %q created (role %s, %d calls/min, collections: %s, sandbox: %v).\n", a.Name, a.Role, a.RatePerMin, listOrAll(a.Collections), a.Sandbox)
 			fmt.Fprintf(out, "API key (shown once, store it now):\n\n  %s\n\n", key)
 			fmt.Fprintf(out, "Connect:\n  claude mcp add tokibase -e %s=%s -- toki mcp serve --dir %s\n", EnvAgentKey, key, app.DataDir())
 			return nil
@@ -101,6 +109,8 @@ func agentCommand(app core.App) *cobra.Command {
 	}
 	create.Flags().StringVar(&role, "role", string(RoleReader), "reader, writer or operator")
 	create.Flags().StringSliceVar(&cols, "collections", nil, "comma separated collections the agent may touch (default all)")
+	create.Flags().BoolVar(&sandbox, "sandbox", false, "writes are dry runs: executed in a transaction that is always rolled back")
+	create.Flags().StringVar(&expires, "expires", "", "key expiry: RFC 3339, YYYY-MM-DD or Nd (days)")
 	create.Flags().IntVar(&rate, "rate", DefaultRatePerMin, "calls per minute")
 
 	var asJSON bool
@@ -119,9 +129,9 @@ func agentCommand(app core.App) *cobra.Command {
 				return enc.Encode(agents)
 			}
 			tw := tabwriter.NewWriter(c.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tROLE\tENABLED\tRATE/MIN\tCOLLECTIONS\tCREATED")
+			fmt.Fprintln(tw, "NAME\tROLE\tENABLED\tSANDBOX\tRATE/MIN\tCOLLECTIONS\tEXPIRES\tCREATED")
 			for _, a := range agents {
-				fmt.Fprintf(tw, "%s\t%s\t%v\t%d\t%s\t%s\n", a.Name, a.Role, a.Enabled, a.RatePerMin, listOrAll(a.Collections), a.Created)
+				fmt.Fprintf(tw, "%s\t%s\t%v\t%v\t%d\t%s\t%s\t%s\n", a.Name, a.Role, a.Enabled, a.Sandbox, a.RatePerMin, listOrAll(a.Collections), a.Expires, a.Created)
 			}
 			return tw.Flush()
 		},
@@ -162,6 +172,28 @@ func agentCommand(app core.App) *cobra.Command {
 	}
 	root.AddCommand(create, list, revoke, confirm)
 	return root
+}
+
+// parseExpires reads --expires: empty = never, Nd = N days from now,
+// YYYY-MM-DD (end of that day UTC) or RFC 3339.
+func parseExpires(v string, now time.Time) (time.Time, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return time.Time{}, nil
+	}
+	if strings.HasSuffix(v, "d") {
+		var n int
+		if _, err := fmt.Sscanf(strings.TrimSuffix(v, "d"), "%d", &n); err == nil && n > 0 {
+			return now.Add(time.Duration(n) * 24 * time.Hour), nil
+		}
+	}
+	if t, err := time.Parse(time.RFC3339, v); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02", v); err == nil {
+		return t.Add(24*time.Hour - time.Second), nil
+	}
+	return time.Time{}, fmt.Errorf("invalid --expires %q (use RFC 3339, YYYY-MM-DD or Nd)", v)
 }
 
 func listOrAll(l []string) string {

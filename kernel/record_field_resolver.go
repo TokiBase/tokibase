@@ -113,13 +113,18 @@ func NewRecordFieldResolver(
 		r.staticRequestInfo["query"] = r.requestInfo.Query
 		r.staticRequestInfo["headers"] = r.requestInfo.Headers
 		r.staticRequestInfo["body"] = r.requestInfo.Body
-		r.staticRequestInfo["auth"] = nil
+		r.staticRequestInfo["auth"] = map[string]any{AuthKindField: AuthKindGuest}
 		if r.requestInfo.Auth != nil {
 			authClone := r.requestInfo.Auth.Clone()
-			r.staticRequestInfo["auth"] = authClone.
+			exp := authClone.
 				Unhide(authClone.Collection().Fields.FieldNames()...).
 				IgnoreEmailVisibility(true).
 				PublicExport()
+			// @request.auth.kind: a real field of the auth collection wins
+			if _, ok := exp[AuthKindField]; !ok {
+				exp[AuthKindField] = AuthKindOf(r.requestInfo.Auth)
+			}
+			r.staticRequestInfo["auth"] = exp
 		}
 	}
 

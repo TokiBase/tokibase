@@ -76,12 +76,12 @@ func emit(action, collection, record string, details map[string]any) {
 	}
 }
 
-// HTTPEnabled reports whether the (future, PR 2) HTTP transport may be
-// registered. Reserved: env TOKI_MCP=off disables it. PR 1 only has stdio.
+// HTTPEnabled reports whether the HTTP transport is registered: env
+// TOKI_MCP=on (also true, 1, enabled). Default off.
 func HTTPEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TOKI_MCP"))) {
-	case "off", "false", "0", "disabled":
-		return false
+	case "on", "true", "1", "enabled":
+		return true
 	}
-	return true
+	return false
 }

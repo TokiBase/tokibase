@@ -274,10 +274,10 @@ func (s *Server) cascadeCheck(a *Agent, col *kernel.Collection) ([]string, error
 
 // ---- field permissions and enrichment (M8) --------------------------------
 
-// syntheticEvent builds a request event for the agent (evaluated as guest) so
+// syntheticEvent builds a request event for the agent (evaluated with the agent as request auth) so
 // the core request pipeline, including OnRecordEnrich and the record create
 // and update request hooks of modules such as fieldperm, applies to MCP.
-func (s *Server) syntheticEvent(method string, body map[string]any) (*core.RequestEvent, error) {
+func (s *Server) syntheticEvent(a *Agent, method string, body map[string]any) (*core.RequestEvent, error) {
 	raw := []byte("{}")
 	if body != nil {
 		var err error
@@ -292,6 +292,9 @@ func (s *Server) syntheticEvent(method string, body map[string]any) (*core.Reque
 	req.Header.Set("Content-Type", "application/json")
 	e := &core.RequestEvent{App: s.app}
 	e.Request = req
+	if a != nil && a.rec != nil {
+		e.Auth = a.rec
+	}
 	return e, nil
 }
 
@@ -306,7 +309,7 @@ func (s *Server) writeGuard(a *Agent, col *kernel.Collection, rec *kernel.Record
 	if create {
 		method = http.MethodPost
 	}
-	e, err := s.syntheticEvent(method, data)
+	e, err := s.syntheticEvent(a, method, data)
 	if err != nil {
 		return err
 	}
@@ -350,7 +353,7 @@ func (s *Server) enrich(a *Agent, recs []*kernel.Record) {
 		}
 	}
 	for _, id := range order {
-		e, err := s.syntheticEvent(http.MethodGet, nil)
+		e, err := s.syntheticEvent(a, http.MethodGet, nil)
 		if err == nil {
 			err = apis.EnrichRecords(e, groups[id])
 		}
@@ -368,8 +371,12 @@ func (s *Server) enrich(a *Agent, recs []*kernel.Record) {
 // exportVisible exports a record the agent just wrote: operators see it all,
 // others only when it passes the view rule as guest, otherwise just the id.
 func (s *Server) exportVisible(a *Agent, col *kernel.Collection, rec *kernel.Record) map[string]any {
+	return s.exportVisibleApp(s.app, a, col, rec)
+}
+
+func (s *Server) exportVisibleApp(app kernel.App, a *Agent, col *kernel.Collection, rec *kernel.Record) map[string]any {
 	if a.Role != RoleOperator {
-		ok, err := s.canRead(a, rec, col.ViewRule)
+		ok, err := s.canReadApp(app, a, rec, col.ViewRule)
 		if err != nil || !ok {
 			return map[string]any{"id": rec.Id, "collection": col.Name}
 		}

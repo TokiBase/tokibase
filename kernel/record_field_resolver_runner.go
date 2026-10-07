@@ -198,6 +198,17 @@ func (r *runner) processCollectionField() (*search.ResolverResult, error) {
 }
 
 func (r *runner) processRequestAuthField() (*search.ResolverResult, error) {
+	// @request.auth.kind (guest|user|superuser|agent), unless the auth
+	// collection has its own "kind" field
+	if len(r.activeProps) == 3 {
+		if name, _, _ := splitModifier(r.activeProps[2]); name == AuthKindField {
+			a := r.resolver.requestInfo.Auth
+			if a == nil || a.Collection() == nil || a.Collection().Fields.GetByName(AuthKindField) == nil {
+				return r.resolver.resolveStaticRequestField(r.activeProps[1:]...)
+			}
+		}
+	}
+
 	if r.resolver.requestInfo == nil || r.resolver.requestInfo.Auth == nil || r.resolver.requestInfo.Auth.Collection() == nil {
 		return &search.ResolverResult{Identifier: "NULL"}, nil
 	}

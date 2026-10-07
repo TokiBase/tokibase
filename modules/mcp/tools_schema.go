@@ -162,7 +162,7 @@ func (s *Server) registerSchemaTools() {
 			default:
 				out["meaning"] = "filter expression: the request passes when it evaluates to true for the record."
 				if strings.Contains(*rule, "@request.auth") {
-					out["hint"] = "the rule depends on @request.auth: guests (and non-operator agents, evaluated as guest in PR 1) fail the auth conditions."
+					out["hint"] = "the rule depends on @request.auth: guests fail it; agents are evaluated with the _agents record as auth (@request.auth.kind = \"agent\", @request.auth.id, @request.auth.role), operators bypass rules."
 				}
 			}
 			if in.RecordID == "" && in.AsUserID == "" {

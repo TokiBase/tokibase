@@ -12,3 +12,6 @@ func Register(app core.App) {}
 
 // NewCommands returns no commands in builds with the no_mcp tag.
 func NewCommands(app core.App) []*cobra.Command { return nil }
+
+// RegisterHTTP is a no-op in builds with the no_mcp tag (/api/mcp answers 404).
+func RegisterHTTP(app core.App) {}
