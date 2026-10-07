@@ -80,6 +80,12 @@ func (m *Module) bindHooks() {
 			return e.Next()
 		},
 	})
+	a.OnCollectionUpdateExecute().Bind(&hook.Handler[*core.CollectionEvent]{
+		Id: hookId, Priority: -1 << 10, Func: m.guardCollectionSave,
+	})
+	a.OnCollectionCreateExecute().Bind(&hook.Handler[*core.CollectionEvent]{
+		Id: hookId, Priority: -1 << 10, Func: m.guardCollectionSave,
+	})
 	a.OnCollectionAfterDeleteSuccess().Bind(&hook.Handler[*core.CollectionEvent]{
 		Id: hookId,
 		Func: func(e *core.CollectionEvent) error {
@@ -133,9 +139,36 @@ func (m *Module) openStored(col *core.Collection, field, recId, stored string, i
 }
 
 // decryptRecord replaces every ciphertext of the record's encrypted fields by
-// the plaintext, in place. A value that cannot be decrypted becomes "" and is
+// the plaintext, in place, including the records of its expand tree. A value
+// that cannot be decrypted becomes the sentinel [Undecryptable] (never "", so a
+// client that sends the whole record back cannot erase the stored value) and is
 // logged (and sampled into the audit sink); it never panics.
 func (m *Module) decryptRecord(rec *core.Record) error {
+	var errs []error
+	m.decryptTree(rec, &errs, 0)
+	return errors.Join(errs...)
+}
+
+func (m *Module) decryptTree(rec *core.Record, errs *[]error, depth int) {
+	if rec == nil || depth > 6 {
+		return
+	}
+	if err := m.decryptOne(rec); err != nil {
+		*errs = append(*errs, err)
+	}
+	for _, v := range rec.Expand() {
+		switch t := v.(type) {
+		case *core.Record:
+			m.decryptTree(t, errs, depth+1)
+		case []*core.Record:
+			for _, r := range t {
+				m.decryptTree(r, errs, depth+1)
+			}
+		}
+	}
+}
+
+func (m *Module) decryptOne(rec *core.Record) error {
 	col := rec.Collection()
 	if col == nil || isCryptoSystem(col.Name) {
 		return nil
@@ -163,7 +196,11 @@ func (m *Module) decryptRecord(rec *core.Record) error {
 		}
 		if err != nil {
 			m.decryptFailed(col, field, rec.Id, err)
-			setStored(rec, field, "", isJSON)
+			if isJSON {
+				setStored(rec, field, storedFromCT(Undecryptable, true), true)
+			} else {
+				setStored(rec, field, Undecryptable, false)
+			}
 			errs = append(errs, fmt.Errorf("%s.%s: %w", col.Name, field, err))
 			continue
 		}
@@ -173,7 +210,7 @@ func (m *Module) decryptRecord(rec *core.Record) error {
 }
 
 func (m *Module) decryptFailed(col *core.Collection, field, recId string, err error) {
-	m.app.Logger().Error("crypto: decryption failed, value replaced by empty string",
+	m.app.Logger().Error("crypto: decryption failed, value replaced by the undecryptable sentinel",
 		"collection", col.Name, "field", field, "record", recId, "error", err)
 	key := col.Id + "\x00" + field
 	m.auditMu.Lock()
@@ -190,7 +227,7 @@ func (m *Module) decryptFailed(col *core.Collection, field, recId string, err er
 
 // Decrypt replaces ciphertext by plaintext in place on record, for Go and JS
 // consumers. Inside record hooks, record.Get(field) returns ciphertext until
-// this is called. Failed values become "" and the joined error is returned.
+// this is called. Failed values become "[undecryptable]" and the joined error is returned.
 func Decrypt(app kernel.App, record *core.Record) error {
 	m := From(app)
 	if m == nil || record == nil {
@@ -264,10 +301,19 @@ func (m *Module) onWrite(e *core.RecordEvent) error {
 			continue
 		}
 		isJSON := f.Type() == core.FieldTypeJSON
+		if m.stateOf(col.Id, field) == StateDisabling {
+			continue // being disabled: new values are stored as plaintext, the sweep decrypts the rest
+		}
 		cur := storedOf(e.Record, field)
 		origStored := ""
 		if !isNew {
 			origStored = storedOf(orig, field)
+		}
+		if !isNew && isSentinel(cur, isJSON) {
+			if _, isCT := ctOf(origStored, isJSON); isCT {
+				setStored(e.Record, field, origStored, isJSON) // a failed read came back: keep what is stored
+				continue
+			}
 		}
 		if _, isCT := ctOf(cur, isJSON); isCT && !isNew && cur == origStored {
 			continue // untouched ciphertext
@@ -319,6 +365,14 @@ func (m *Module) onWrite(e *core.RecordEvent) error {
 		}
 	}
 	return nil
+}
+
+// isSentinel reports whether a stored column value is the [Undecryptable] marker.
+func isSentinel(stored string, isJSON bool) bool {
+	if isJSON {
+		return stored == storedFromCT(Undecryptable, true)
+	}
+	return stored == Undecryptable
 }
 
 func (m *Module) onDelete(e *core.RecordEvent) error {

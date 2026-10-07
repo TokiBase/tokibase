@@ -54,6 +54,7 @@ func buildMux(t *testing.T, app *tests.TestApp) http.Handler {
 func setup(t *testing.T, key string) *env {
 	t.Helper()
 	WaitForServers = false
+	RetireCooldown = 0
 	if key == "" {
 		key = newKey(t)
 	}
@@ -69,6 +70,7 @@ func setup(t *testing.T, key string) *env {
 	}
 	t.Cleanup(app.Cleanup)
 	m := Register(app)
+	t.Cleanup(m.unregisterAll)
 	if err := EnsureSchema(app); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +209,7 @@ func TestRoundTripAPI(t *testing.T) {
 	id2 := e.create(t)
 	e.app.DB().NewQuery("UPDATE patients SET diagnosis={:d} WHERE id={:id}").Bind(map[string]any{"d": e.raw(t, id, "diagnosis"), "id": id2}).Execute()
 	_, b = e.do(t, nil, "GET", "/api/collections/patients/records/"+id2, "")
-	if b["diagnosis"] != "" {
+	if b["diagnosis"] != Undecryptable {
 		t.Fatalf("ciphertext moved to another record decrypted: %v", b["diagnosis"])
 	}
 }
@@ -463,7 +465,7 @@ func TestMissingMasterKey(t *testing.T) {
 		t.Fatal("plaintext must not be stored in an encrypted field without a key")
 	}
 	_, b := e.do(t, e.su, "GET", "/api/collections/patients/records/"+id, "")
-	if b["diagnosis"] != "" {
+	if b["diagnosis"] != Undecryptable {
 		t.Fatalf("without a key the value must not be served as plaintext or crash: %v", b["diagnosis"])
 	}
 	// wrong key: unwrap fails, reads give empty
@@ -471,7 +473,7 @@ func TestMissingMasterKey(t *testing.T) {
 	e.m.master, _ = LoadMasterKey()
 	e.m.Invalidate()
 	_, b = e.do(t, e.su, "GET", "/api/collections/patients/records/"+id, "")
-	if b["diagnosis"] != "" {
+	if b["diagnosis"] != Undecryptable {
 		t.Fatalf("wrong key: %v", b["diagnosis"])
 	}
 }
@@ -496,7 +498,7 @@ func TestTamperedCiphertext(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out := e.do(t, e.su, "GET", "/api/collections/patients/records/"+id, "")
-	if code != 200 || out["diagnosis"] != "" || out["ssn"] != "123-45" {
+	if code != 200 || out["diagnosis"] != Undecryptable || out["ssn"] != "123-45" {
 		t.Fatalf("tampered: %d %v", code, out)
 	}
 	mu.Lock()

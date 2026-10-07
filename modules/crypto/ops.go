@@ -54,6 +54,15 @@ func (m *Module) eligible(col *core.Collection, field, mode string) error {
 	if mode == ModeBlindIndex && f.Type() == core.FieldTypeJSON {
 		return errors.New("blind-index is not supported on json fields")
 	}
+	if why := identityUse(col, field); why != "" {
+		return fmt.Errorf("field %q cannot be encrypted: %s", field, why)
+	}
+	if why := indexUse(col, field); why != "" {
+		return fmt.Errorf("field %q cannot be encrypted: %s", field, why)
+	}
+	if views := viewsUsing(m.app, col, field); len(views) > 0 {
+		return fmt.Errorf("field %q cannot be encrypted: the view %s selects it (a view would return ciphertext)", field, strings.Join(views, ", "))
+	}
 	return nil
 }
 
@@ -229,8 +238,10 @@ func sortedKeys(m map[string]string) []string {
 // Tests turn it off.
 var WaitForServers = true
 
-// Enable starts encrypting a field: stores the configuration and encrypts the
-// existing rows in batches of 500. Calling it again for the same mode resumes.
+// Enable starts encrypting a field: stores the configuration (state
+// "enabling") and encrypts the existing rows in batches of 500. Calling it
+// again for the same mode resumes; `toki crypto resume` finishes an
+// interrupted run.
 func Enable(app core.App, collection, field, mode string, progress Progress) (int, error) {
 	m := From(app)
 	if m == nil {
@@ -249,16 +260,33 @@ func Enable(app core.App, collection, field, mode string, progress Progress) (in
 	if mode == "" {
 		mode = ModeRandom
 	}
-	if err := m.eligible(col, field, mode); err != nil {
+	rec, _ := m.configRecord(col.Id, field)
+	if rec == nil { // eligibility only gates new configurations (a running one may already be indexed)
+		if err := m.eligible(col, field, mode); err != nil {
+			return 0, err
+		}
+	} else {
+		if rec.GetString("mode") != mode {
+			return 0, fmt.Errorf("%s.%s is already enabled with mode %s; disable it first", col.Name, field, rec.GetString("mode"))
+		}
+		if rec.GetString("state") == StateDisabling {
+			return 0, fmt.Errorf("%s.%s is being disabled; run `toki crypto resume`", col.Name, field)
+		}
+	}
+	unlock, err := m.acquireLock(col.Id, "enable", false)
+	if err != nil {
 		return 0, err
 	}
-	rec, _ := m.configRecord(col.Id, field)
-	if rec != nil && rec.GetString("mode") != mode {
-		return 0, fmt.Errorf("%s.%s is already enabled with mode %s; disable it first", col.Name, field, rec.GetString("mode"))
-	}
+	defer unlock()
+	return m.enableRun(col, field, mode, progress)
+}
+
+func (m *Module) enableRun(col *core.Collection, field, mode string, progress Progress) (int, error) {
+	app := m.app
 	if err := m.ensureKey(col.Id); err != nil {
 		return 0, err
 	}
+	rec, _ := m.configRecord(col.Id, field)
 	if rec == nil {
 		coll, err := app.FindCollectionByNameOrId(FieldsCollection)
 		if err != nil {
@@ -268,6 +296,7 @@ func Enable(app core.App, collection, field, mode string, progress Progress) (in
 		rec.Set("collection", col.Id)
 		rec.Set("field", field)
 		rec.Set("mode", mode)
+		rec.Set("state", StateEnabling)
 		if err := app.Save(rec); err != nil {
 			return 0, err
 		}
@@ -278,10 +307,38 @@ func Enable(app core.App, collection, field, mode string, progress Progress) (in
 	if err != nil {
 		return 0, err
 	}
-	return m.converge(col, map[string]string{field: cfg[field]}, WaitForServers, progress)
+	n, err := m.converge(col, map[string]string{field: cfg[field]}, WaitForServers, progress)
+	if err != nil {
+		return n, err // the row keeps state=enabling: `toki crypto resume` continues
+	}
+	if rec.GetString("state") != "" {
+		rec.Set("state", "")
+		if err := app.Save(rec); err != nil {
+			return n, err
+		}
+		m.Invalidate()
+	}
+	return n, nil
 }
 
-// Disable decrypts the rows of a field and removes its configuration.
+// countCiphertext counts the rows whose column holds a ciphertext of any
+// version (or of one version when ver > 0).
+func (m *Module) countCiphertext(col *core.Collection, field string, ver int) (int, error) {
+	pre := Prefix
+	if ver > 0 {
+		pre = fmt.Sprintf("%s%d:", Prefix, ver)
+	}
+	var n int
+	q := "SELECT COUNT(*) FROM {{" + col.Name + "}} WHERE [[" + field + "]] LIKE {:a} OR [[" + field + "]] LIKE {:b}"
+	err := m.app.DB().NewQuery(q).Bind(dbx.Params{"a": pre + "%", "b": `"` + pre + "%"}).Row(&n)
+	return n, err
+}
+
+// Disable decrypts the rows of a field and removes its configuration. The
+// configuration row is switched to state "disabling" first (servers then store
+// new values as plaintext) and is deleted only after a final check finds no
+// ciphertext left, so an interrupted run can always be finished with
+// `toki crypto resume` (or by running disable again).
 func Disable(app core.App, collection, field string, progress Progress) (int, error) {
 	m := From(app)
 	if m == nil {
@@ -297,6 +354,26 @@ func Disable(app core.App, collection, field string, progress Progress) (int, er
 	rec, _ := m.configRecord(col.Id, field)
 	if rec == nil {
 		return 0, fmt.Errorf("%s.%s is not encrypted", col.Name, field)
+	}
+	unlock, err := m.acquireLock(col.Id, "disable", false)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+	return m.disableRun(col, field, rec, progress)
+}
+
+func (m *Module) disableRun(col *core.Collection, field string, rec *core.Record, progress Progress) (int, error) {
+	app := m.app
+	if rec.GetString("state") != StateDisabling {
+		rec.Set("state", StateDisabling)
+		if err := app.Save(rec); err != nil {
+			return 0, err
+		}
+		m.Invalidate()
+		if WaitForServers {
+			time.Sleep(cacheTTL + time.Second) // every server now stores plaintext for this field
+		}
 	}
 	isJSON := isJSONField(col, field)
 	pass := func() (int, error) {
@@ -317,14 +394,10 @@ func Disable(app core.App, collection, field string, progress Progress) (int, er
 		}
 		return m.sweep(col, []string{field}, fn, 0, nil, progress)
 	}
-	n, err := pass() // the configuration stays while rows are decrypted: servers keep encrypting new writes
+	n, err := pass()
 	if err != nil {
 		return n, err
 	}
-	if err := app.Delete(rec); err != nil {
-		return n, err
-	}
-	m.Invalidate()
 	if WaitForServers {
 		time.Sleep(cacheTTL + time.Second)
 		n2, err := pass()
@@ -333,16 +406,30 @@ func Disable(app core.App, collection, field string, progress Progress) (int, er
 			return n, err
 		}
 	}
+	left, err := m.countCiphertext(col, field, 0)
+	if err != nil {
+		return n, err
+	}
+	if left > 0 {
+		return n, fmt.Errorf("%s.%s: %d rows still hold ciphertext; the field stays in state disabling, run `toki crypto resume`", col.Name, field, left)
+	}
 	if _, err := app.NonconcurrentDB().NewQuery("DELETE FROM {{" + IndexTable + "}} WHERE collection={:c} AND field={:f}").
 		Bind(dbx.Params{"c": col.Id, "f": field}).Execute(); err != nil {
 		return n, err
 	}
+	if err := app.Delete(rec); err != nil {
+		return n, err
+	}
+	m.Invalidate()
 	emit(ActionDisable, col.Name, "", map[string]any{"field": field, "rows": n})
 	return n, nil
 }
 
 // Rotate creates a new data key version and re-encrypts every encrypted field
-// of the collection with it. Old versions stay readable until Retire.
+// of the collection with it. Old versions stay readable until Retire. The
+// collection is locked for the duration; if the run is interrupted the lock
+// stays and `toki crypto resume` finishes the re-encryption (without creating
+// another key).
 func Rotate(app core.App, collection string, progress Progress) (newVersion, rows int, err error) {
 	m := From(app)
 	if m == nil {
@@ -362,12 +449,20 @@ func Rotate(app core.App, collection string, progress Progress) (newVersion, row
 	if len(cfg) == 0 {
 		return 0, 0, fmt.Errorf("collection %q has no encrypted fields", col.Name)
 	}
+	unlock, err := m.acquireLock(col.Id, "rotate", false)
+	if err != nil {
+		return 0, 0, err
+	}
 	ver, err := m.newKey(col.Id)
 	if err != nil {
+		unlock()
 		return 0, 0, err
 	}
 	emit(ActionRotate, col.Name, "", map[string]any{"version": ver})
 	rows, err = m.converge(col, cfg, WaitForServers, progress)
+	if err == nil {
+		unlock() // on error the lock stays: the rotation is unfinished
+	}
 	return ver, rows, err
 }
 
@@ -377,8 +472,19 @@ type RetireResult struct {
 	InUse   map[int]string `json:"in_use,omitempty"`
 }
 
+// RetireCooldown is how long after the last key was created Retire refuses to
+// run, so that a server with a stale key cache cannot still write the old
+// version after the usage check. Tests set it to 0.
+var RetireCooldown = 2 * cacheTTL
+
 // Retire destroys the non-active key versions of a collection, but only when
-// no row still holds a ciphertext of that version (otherwise nothing changes).
+// no row still holds a ciphertext of that version in ANY text-like column of
+// the collection, configured or not (otherwise nothing changes).
+//
+// This is key retirement, not erasure: the wrapped key is blanked in the
+// database, but older copies survive in SQLite free pages, the WAL, backups
+// and replicas. Only destroying the master key (or every copy of the old
+// wrapped key) makes the old ciphertext unrecoverable.
 func Retire(app core.App, collection string) (*RetireResult, error) {
 	m := From(app)
 	if m == nil {
@@ -388,22 +494,39 @@ func Retire(app core.App, collection string) (*RetireResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("collection %q not found", collection)
 	}
+	unlock, err := m.acquireLock(col.Id, "retire", false)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	infos, err := m.KeyInfos(col.Id)
 	if err != nil {
 		return nil, err
 	}
-	cfg, _ := m.fieldsFor(col.Id)
+	if RetireCooldown > 0 {
+		if recs, err := m.keyRecords(col.Id); err == nil && len(recs) > 0 {
+			last := recs[len(recs)-1].GetDateTime("created").Time()
+			if d := time.Since(last); d < RetireCooldown {
+				return nil, fmt.Errorf("the newest key was created %s ago; wait %s so that every server has loaded it, then retire",
+					d.Round(time.Second), (RetireCooldown - d).Round(time.Second))
+			}
+		}
+	}
+	var fields []string
+	for _, f := range col.Fields {
+		if allowedTypes[f.Type()] {
+			fields = append(fields, f.GetName())
+		}
+	}
 	res := &RetireResult{InUse: map[int]string{}}
 	var old []int
 	for _, ki := range infos {
-		if ki.Active || ki.RetiredAt != "" {
+		if ki.Active || ki.RetiredAt != "" || ki.Version <= 0 {
 			continue
 		}
-		for field := range cfg {
-			pre := fmt.Sprintf("%s%d:", Prefix, ki.Version)
-			var n int
-			q := "SELECT COUNT(*) FROM {{" + col.Name + "}} WHERE [[" + field + "]] LIKE {:a} OR [[" + field + "]] LIKE {:b}"
-			if err := app.DB().NewQuery(q).Bind(dbx.Params{"a": pre + "%", "b": `"` + pre + "%"}).Row(&n); err != nil {
+		for _, field := range fields {
+			n, err := m.countCiphertext(col, field, ki.Version)
+			if err != nil {
 				return nil, err
 			}
 			if n > 0 {
@@ -422,6 +545,79 @@ func Retire(app core.App, collection string) (*RetireResult, error) {
 	}
 	res.Retired = old
 	return res, nil
+}
+
+// Resume finishes every interrupted enable, disable or rotate and returns a
+// line per action taken.
+func Resume(app core.App, progress Progress) ([]string, error) {
+	m := From(app)
+	if m == nil {
+		return nil, errors.New("crypto module is not registered")
+	}
+	if !m.Active() {
+		return nil, ErrNoMasterKey
+	}
+	var done []string
+	recs, err := app.FindAllRecords(FieldsCollection)
+	if err != nil {
+		return nil, err
+	}
+	for _, rec := range recs {
+		st := rec.GetString("state")
+		if st == "" {
+			continue
+		}
+		col, err := app.FindCollectionByNameOrId(rec.GetString("collection"))
+		if err != nil {
+			return done, fmt.Errorf("config %s: collection %q not found", rec.Id, rec.GetString("collection"))
+		}
+		field := rec.GetString("field")
+		unlock, err := m.acquireLock(col.Id, "resume", true)
+		if err != nil {
+			return done, err
+		}
+		var n int
+		switch st {
+		case StateEnabling:
+			n, err = m.enableRun(col, field, rec.GetString("mode"), progress)
+		case StateDisabling:
+			n, err = m.disableRun(col, field, rec, progress)
+		default:
+			err = fmt.Errorf("unknown state %q", st)
+		}
+		if err != nil {
+			unlock()
+			return done, fmt.Errorf("%s.%s (%s): %w", col.Name, field, st, err)
+		}
+		unlock()
+		done = append(done, fmt.Sprintf("%s.%s: finished %s (%d values)", col.Name, field, st, n))
+	}
+	locks, err := m.locks()
+	if err != nil {
+		return done, err
+	}
+	for _, l := range locks {
+		col, err := app.FindCollectionByNameOrId(l.Collection)
+		if err != nil {
+			m.dropLock(l.Collection) // collection is gone
+			continue
+		}
+		if l.Op == "rotate" {
+			cfg, err := m.fieldsFor(col.Id)
+			if err != nil {
+				return done, err
+			}
+			n, err := m.converge(col, cfg, WaitForServers, progress)
+			if err != nil {
+				return done, fmt.Errorf("%s (rotate): %w", col.Name, err)
+			}
+			done = append(done, fmt.Sprintf("%s: finished rotate (%d values re-encrypted)", col.Name, n))
+		} else {
+			done = append(done, fmt.Sprintf("%s: released stale %s lock", col.Name, l.Op))
+		}
+		m.dropLock(l.Collection)
+	}
+	return done, nil
 }
 
 // VerifyReport is the outcome of Verify.
@@ -523,7 +719,16 @@ type StatusReport struct {
 	MasterKeyInDir bool               `json:"master_key_file_inside_data_dir,omitempty"`
 	AdminPlaintext bool               `json:"admin_plaintext"`
 	Collections    []CollectionStatus `json:"collections"`
+	Pending        []Pending          `json:"pending,omitempty"`
 	Warnings       []Finding          `json:"warnings"`
+}
+
+// Pending is an interrupted operation that `toki crypto resume` finishes.
+type Pending struct {
+	Collection string `json:"collection"`
+	Field      string `json:"field,omitempty"`
+	State      string `json:"state"` // enabling | disabling | locked:<op>
+	Since      string `json:"since,omitempty"`
 }
 
 // Status reports the module state.
@@ -555,6 +760,20 @@ func Status(app core.App) (*StatusReport, error) {
 			idx[c.CollId] = cs
 		}
 		cs.Fields[c.Field] = c.Mode
+	}
+	for _, c := range cfgs {
+		if c.State != "" {
+			rep.Pending = append(rep.Pending, Pending{Collection: c.Collection, Field: c.Field, State: c.State})
+		}
+	}
+	if locks, err := m.locks(); err == nil {
+		for _, l := range locks {
+			name := l.Collection
+			if col, err := app.FindCachedCollectionByNameOrId(l.Collection); err == nil && col != nil {
+				name = col.Name
+			}
+			rep.Pending = append(rep.Pending, Pending{Collection: name, State: "locked:" + l.Op, Since: l.Since.Format(time.RFC3339)})
+		}
 	}
 	rep.Warnings, _ = Lint(app)
 	return rep, nil
