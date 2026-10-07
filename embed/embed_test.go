@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tokibase/tokibase/embed"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 func start(t *testing.T, dir string, mut func(*embed.Options)) *embed.Instance {
@@ -223,18 +224,40 @@ func TestStopWithExpiredCtxKeepsLock(t *testing.T) {
 	stop(t, again)
 }
 
+// nanoKey returns a nano profile switch whose module is compiled in (the
+// switches of modules compiled out by build tags are deliberately not set).
+func nanoKey(t *testing.T) string {
+	t.Helper()
+	stubbed := map[string]bool{}
+	for _, m := range kernel.ModuleMarkers() {
+		if m.Stubbed {
+			for _, e := range m.Envs {
+				stubbed[e] = true
+			}
+		}
+	}
+	for _, k := range []string{"TOKI_AUDIT", "TOKI_TLS_CHECK", "TOKI_WEBHOOKS", "TOKI_PUSH", "TOKI_BACKUP_VERIFY", "TOKI_ADMIN_UI", "TOKI_WASM"} {
+		if !stubbed[k] {
+			return k
+		}
+	}
+	t.Skip("every nano switch is compiled out in this build")
+	return ""
+}
+
 func TestProfileEnvDoesNotLeak(t *testing.T) {
+	key := nanoKey(t)
 	a := start(t, t.TempDir(), func(o *embed.Options) { o.Listen = "-"; o.Profile = "nano" })
-	if os.Getenv("TOKI_AUDIT") != "off" {
-		t.Fatal("nano must set TOKI_AUDIT=off while running")
+	if os.Getenv(key) != "off" {
+		t.Fatalf("nano must set %s=off while running", key)
 	}
 	stop(t, a)
-	if v, ok := os.LookupEnv("TOKI_AUDIT"); ok && v == "off" {
-		t.Fatal("TOKI_AUDIT leaked after Stop")
+	if v, ok := os.LookupEnv(key); ok && v == "off" {
+		t.Fatalf("%s leaked after Stop", key)
 	}
 	b := start(t, t.TempDir(), func(o *embed.Options) { o.Listen = "-"; o.Profile = "team" })
 	defer stop(t, b)
-	if v, ok := os.LookupEnv("TOKI_AUDIT"); ok && v == "off" {
+	if v, ok := os.LookupEnv(key); ok && v == "off" {
 		t.Fatal("team inherited the nano profile")
 	}
 }
