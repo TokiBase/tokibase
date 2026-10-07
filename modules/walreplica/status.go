@@ -4,7 +4,9 @@ package walreplica
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"time"
 
 	"github.com/benbjohnson/litestream"
@@ -148,13 +150,45 @@ func Snapshot(ctx context.Context, app kernel.App) (map[string]uint64, error) {
 
 	out := map[string]uint64{}
 	for _, st := range r.dbs {
-		info, err := st.db.Snapshot(ctx)
+		txid, err := snapshotDB(ctx, st)
 		if err != nil {
 			return out, fmt.Errorf("%s: %w", st.name, err)
 		}
-		out[st.name] = uint64(info.MaxTXID)
+		out[st.name] = txid
 	}
 	return out, nil
+}
+
+// snapshotAttempts and snapshotRetryDelay bound the retries of snapshotDB.
+const (
+	snapshotAttempts   = 6
+	snapshotRetryDelay = 100 * time.Millisecond
+)
+
+// snapshotDB writes a snapshot of one database. Litestream's own snapshot
+// monitor (started by Store.Open, it also fires right after startup) may write
+// the very same snapshot file at the same moment. The file replica client
+// stages every upload in "<name>.tmp" and renames it, so two writers of the
+// same snapshot (same level and TXID) clobber each other's staging file and
+// the loser fails with ENOENT on rename. The data written by the winner is
+// identical, so a failed attempt is retried after a short backoff (the retry
+// either writes the file again or finds the concurrent writer done) and the
+// call only fails when the error persists.
+func snapshotDB(ctx context.Context, st *dbState) (uint64, error) {
+	for attempt := 1; ; attempt++ {
+		info, err := st.db.Snapshot(ctx)
+		if err == nil {
+			return uint64(info.MaxTXID), nil
+		}
+		if ctx.Err() != nil || !errors.Is(err, fs.ErrNotExist) || attempt == snapshotAttempts {
+			return 0, err
+		}
+		select {
+		case <-ctx.Done():
+			return 0, err
+		case <-time.After(time.Duration(attempt) * snapshotRetryDelay):
+		}
+	}
 }
 
 // ReplicaInfo summarizes the content of one database inside a replica.
