@@ -130,10 +130,13 @@ func TestFilterEqualityRelationPaths(t *testing.T) {
 		e.wantFilter(t, who, "visits", `patients.ssn ?!= "123-45"`, v2)
 		// back relation
 		e.wantFilter(t, who, "patients", `visits_via_patient.id = "`+v1+`" && ssn = "123-45"`, pa)
-		// @collection join
-		e.wantFilter(t, who, "visits", `@collection.patients.ssn = "nope"`)
-		e.wantFilter(t, who, "visits", `@collection.patients.ssn = "999-99" && @collection.patients.id = patient`, v2)
 	}
+	// @collection fields (superusers only) are multi-match too: ?= is any row, = needs every row
+	e.wantFilter(t, e.su, "visits", `@collection.patients.ssn ?= "999-99"`, v1, v2)
+	e.wantFilter(t, e.su, "visits", `@collection.patients.ssn ?= "nope"`)
+	e.wantFilter(t, e.su, "visits", `@collection.patients.ssn = "999-99"`)
+	e.wantFilter(t, e.su, "visits", `@collection.patients.ssn != "nope"`, v1, v2)
+	e.wantFilter(t, e.su, "visits", `@collection.patients.ssn ?!= "nope"`, v1, v2)
 	// still rejected through a relation path
 	if code, _ := e.do(t, e.su, "GET", "/api/collections/visits/records?"+fq(`patient.ssn ~ "1"`), ""); code != 400 {
 		t.Fatalf("relation ~: %d", code)

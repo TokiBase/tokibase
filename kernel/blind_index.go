@@ -58,7 +58,10 @@ var rePlaceholderOnly = regexp.MustCompile(`^\{:(\w+)\}$`)
 // When the field is compared with `=`, `!=`, `?=` or `?!=` to a bound
 // non-empty string, the identifier becomes
 //
-//	CASE WHEN <alias>.id IN (<matching ids>) THEN <the bound value> END
+//	CASE WHEN <alias>.id IN (<matching ids>) THEN <the bound value> ELSE '' END
+//
+// (the value is a non-empty string, so the ELSE branch never equals it; a NULL
+// there would break the "all related records match" multi-match semantics)
 //
 // so the unchanged comparison machinery (null handling, multi-match for
 // relation paths, parameter binding, both the legacy and the AST emitter)
@@ -70,7 +73,6 @@ func (r *runner) attachBlindIndex(collection *Collection, fieldName string, resu
 		return
 	}
 
-	app := r.resolver.app
 	info := r.resolver.requestInfo
 	// Rules are resolved with hidden fields allowed (as are superuser
 	// filters); a client filter of a non superuser is not.
@@ -116,7 +118,7 @@ func (r *runner) attachBlindIndex(collection *Collection, fieldName string, resu
 		}
 		in := strings.Join(holders, ",")
 		build := func(idCol string) string {
-			return fmt.Sprintf("(CASE WHEN %s IN (%s) THEN %s END)", idCol, in, other.Identifier)
+			return fmt.Sprintf("(CASE WHEN %s IN (%s) THEN %s ELSE '' END)", idCol, in, other.Identifier)
 		}
 
 		result.Identifier = build(idIdentifier)
