@@ -30,6 +30,7 @@ import (
 	"github.com/tokibase/tokibase/modules/timelint"
 	"github.com/tokibase/tokibase/modules/tlscheck"
 	"github.com/tokibase/tokibase/modules/walreplica"
+	"github.com/tokibase/tokibase/modules/push"
 	"github.com/tokibase/tokibase/modules/webhooks"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/list"
@@ -298,6 +299,23 @@ func NewWithConfig(config Config) *PocketBase {
 		}
 	}
 
+	// push notifications to FCM/APNs through the job queue (TOKI_PUSH=off disables)
+	if push.Enabled() {
+		push.Register(pb.App.(core.App))
+		if auditLog != nil {
+			push.SetAuditSink(func(action, collection, record string, details map[string]any) {
+				after, _ := json.Marshal(details)
+				afterStr := string(after)
+				if err := auditLog.Append(&audit.Entry{
+					ActorKind: "system", Action: action, Collection: collection,
+					Record: record, After: &afterStr,
+				}); err != nil {
+					pb.Logger().Warn("audit: failed to record "+action, "error", err)
+				}
+			})
+		}
+	}
+
 	// continuous WAL replication of data.db/auxiliary.db (inactive unless TOKI_REPLICA_URL is set)
 	walreplica.Register(pb.App.(core.App))
 	if auditLog != nil {
@@ -384,6 +402,9 @@ func (pb *PocketBase) Start() error {
 	}
 	if webhooks.Enabled() {
 		pb.RootCmd.AddCommand(webhooks.NewCommand(pb))
+	}
+	if push.Enabled() {
+		pb.RootCmd.AddCommand(push.NewCommand(pb))
 	}
 	pb.RootCmd.AddCommand(cmd.NewLockoutCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewSessionsCommand(pb))

@@ -57,6 +57,7 @@ Exit gate: all modules on by default in profile `solo`, failover drill RTO under
 - [x] jobs: durable `_jobs` queue with retry/backoff, dead-letter, cron and worker role; consumer interface `kernel.Jobs(app)` so modules never import each other, `toki jobs ...` (`docs/modules/jobs.md`).
 - [x] fieldperm: per-field read/write rules in `_field_rules`, `toki fieldperm list|set|rm|lint` (`docs/modules/fieldperm.md`).
 - [x] webhooks: outbound record/collection/auth events with HMAC signatures, retries, dead-letter, replay, `toki webhooks` (`docs/modules/webhooks.md`). Own delivery table for now; moves onto the kernel job queue when `modules/jobs` lands.
+- [x] push: FCM HTTP v1 and APNs (JWT, HTTP/2) with device registry, topics, `/api/push/*` and delivery as `push.send` jobs, `toki push` (`docs/modules/push.md`).
 - [x] mcp (PR 1): Model Context Protocol server over stdio, `_agents` identities, core tools, resources, prompts, `toki agent|mcp|gen` (`docs/modules/mcp.md`).
 - [ ] mcp (PR 2): streamable HTTP transport, `@request.auth.kind = "agent"` in rules, sandbox mode.
 
