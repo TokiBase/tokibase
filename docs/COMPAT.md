@@ -138,3 +138,9 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Go package API (`core`, `apis`, ...) may change between TokiBase minor versions.
 - Admin UI internals.
 - The jsvm `types.d.ts` now also exposes a `kernel` namespace; `core.*` names remain as aliases.
+
+### `_crypto_*` collections, `_crypto_index` table, filter rejection on encrypted fields (phase 2, `modules/crypto`)
+
+- What: system collections `_crypto_fields` and `_crypto_keys` (rules `null`) and the plain table `_crypto_index` in `data.db`, created at bootstrap; new `crypto` CLI command and `GET /api/crypto/lookup/{collection}/{field}`. Only when an operator enables encryption for a field (`toki crypto enable`): the column then holds `tkc1:<ver>:...` ciphertext, record API responses are decrypted by `OnRecordEnrich`, and `filter=`/`sort=` on `GET /api/collections/{c}/records` that touch an encrypted field answer `400` with `data.<filter|sort>.code = "validation_encrypted_field"`. Writes to a collection with encrypted fields are refused when no master key is configured. Go/JS code that loads records with `app.Find*` sees ciphertext until `crypto.Decrypt(app, record)`. Collection JSON schema, other endpoints and rules are unchanged; with no encrypted fields nothing changes.
+- Why: protect data in dumps, backups and replicas.
+- Migration: none needed; an upstream `pb_data` gains the empty collections/table on first start. Before moving back to upstream run `toki crypto disable <collection> <field> --i-understand` for every field, otherwise upstream serves ciphertext. See `docs/modules/crypto.md`.
