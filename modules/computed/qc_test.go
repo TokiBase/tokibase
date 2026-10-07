@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/kernel"
@@ -229,8 +230,10 @@ func TestC5C6QueryShapes(t *testing.T) {
 	e.def(t, "lst", "last", "amount", "")
 	p := e.parent(t)
 	e.kid(t, p, 5, "")
+	time.Sleep(5 * time.Millisecond) // `created` has millisecond resolution; ties fall back to id (random)
 	e.kid(t, p, 7, "")
 	e.want(t, p, "lst", 7)
+	time.Sleep(5 * time.Millisecond)
 	e.kid(t, p, 0, "") // newest child has amount 0 (the number field default)
 	e.want(t, p, "lst", 0)
 }
