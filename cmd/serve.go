@@ -49,7 +49,7 @@ func NewServeCommand(app core.App, showStartBanner bool) *cobra.Command {
 				return fmt.Errorf("invalid --role %q (use all or worker)", role)
 			}
 
-			if m := adminlock.ModeFromEnv(); m != adminlock.ModeOn {
+			if m := adminlock.ModeFromEnv(); m != adminlock.ModeOn && m != "" {
 				fmt.Fprintf(os.Stderr, "Admin UI mode: %s (TOKI_ADMIN_UI)\n", m)
 			}
 

@@ -1,3 +1,5 @@
+//go:build !no_backupcheck
+
 // Package backupcheck verifies backups by restoring them into a temp dir and
 // checking their integrity, so "backup exists but restore was never tested"
 // cannot happen silently.

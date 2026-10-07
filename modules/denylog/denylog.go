@@ -1,3 +1,5 @@
+//go:build !no_denylog
+
 // Package denylog gives every 401, 403 and 429 response a structured log
 // entry (Warn, attribute toki.deny=true) with the reason, so denials can be
 // queried from the ordinary _logs table.

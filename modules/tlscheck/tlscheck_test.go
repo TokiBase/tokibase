@@ -1,3 +1,5 @@
+//go:build !no_tlscheck
+
 package tlscheck
 
 import (

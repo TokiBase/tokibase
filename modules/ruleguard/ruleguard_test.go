@@ -1,3 +1,5 @@
+//go:build !no_ruleguard
+
 package ruleguard_test
 
 import (

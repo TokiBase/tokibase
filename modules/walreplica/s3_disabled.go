@@ -1,4 +1,4 @@
-//go:build !replica_s3
+//go:build !replica_s3 && !no_replica
 
 package walreplica
 

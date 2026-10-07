@@ -1,3 +1,5 @@
+//go:build !no_replica
+
 package walreplica_test
 
 import (

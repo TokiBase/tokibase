@@ -40,6 +40,30 @@ jobs:
           test $s -le $((46*1024*1024)) || { echo "solo over 46MB budget"; exit 1; }
           test $n -le $((43*1024*1024)) || { echo "no_ui over 43MB budget"; exit 1; }
           test $x -le $((56*1024*1024)) || { echo "solo+s3 over 56MB budget"; exit 1; }
+  profiles:
+    # edge/nano tag sets and budgets come from profiles.txt (docs/PROFILES.md)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        profile: [edge, nano]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: build ${{ matrix.profile }} (linux/${{ matrix.goarch }})
+        run: make ${{ matrix.profile }} GOOS=linux GOARCH=${{ matrix.goarch }}
+      - name: size budget
+        run: |
+          budget=$(awk -v p="${{ matrix.profile }}" '$1==p {print $2}' profiles.txt)
+          size=$(stat -c %s out/toki-${{ matrix.profile }})
+          echo "${{ matrix.profile }}/${{ matrix.goarch }}=$((size/1024/1024))MiB (budget ${budget}MiB)"
+          test $size -le $((budget*1024*1024)) || { echo "${{ matrix.profile }} over ${budget}MiB budget"; exit 1; }
+      - name: vet with the profile tags (catches stub drift)
+        run: go vet -structtag=false -tags "$(awk -v p='${{ matrix.profile }}' '$1==p {for (i=3;i<=NF;i++) printf "%s%s", (i>3?",":""), $i}' profiles.txt)" ./...
+      - name: stub builds (every module removed, each module removed)
+        if: matrix.goarch == 'amd64' && matrix.profile == 'edge'
+        run: go test -run 'TestProfile|TestEachStub' -count=1 .
   lint:
     runs-on: ubuntu-latest
     steps:

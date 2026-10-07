@@ -1,3 +1,5 @@
+//go:build !no_computed
+
 // Package computed keeps aggregate fields (counters and rollups) on a parent
 // collection correct on the server: likes_count, members_count,
 // total_distance_km and so on are recomputed from the child collection after

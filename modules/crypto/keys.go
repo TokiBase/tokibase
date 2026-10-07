@@ -1,3 +1,5 @@
+//go:build !no_crypto
+
 package crypto
 
 import (

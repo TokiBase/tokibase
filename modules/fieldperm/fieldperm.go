@@ -1,3 +1,5 @@
+//go:build !no_fieldperm
+
 // Package fieldperm adds per-field read and write rules on top of the
 // collection rules, using the same rule language, without touching the
 // collection JSON schema (Admin UI and SDKs keep working).

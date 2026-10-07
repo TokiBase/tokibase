@@ -1,3 +1,5 @@
+//go:build !no_replica
+
 package cmd
 
 import (
@@ -13,10 +15,6 @@ import (
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/modules/walreplica"
 )
-
-// AnnotationSkipBootstrap marks commands that must run without bootstrapping
-// the app (they work on a replica or on a data dir that does not exist yet).
-const AnnotationSkipBootstrap = "tokibase/skipBootstrap"
 
 // NewReplicaCommand creates the `replica` command (status, restore, snapshot)
 // backed by modules/walreplica.

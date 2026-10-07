@@ -1,3 +1,5 @@
+//go:build !no_push
+
 // Package push delivers push notifications to FCM (HTTP v1) and APNs
 // (token based auth) with a device registry, topics and delivery through the
 // kernel job queue (kind "push.send").

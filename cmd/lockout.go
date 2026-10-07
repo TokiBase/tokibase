@@ -1,3 +1,5 @@
+//go:build !no_lockout
+
 package cmd
 
 import (

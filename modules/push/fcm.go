@@ -1,3 +1,5 @@
+//go:build !no_push
+
 package push
 
 import (

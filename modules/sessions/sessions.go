@@ -1,3 +1,5 @@
+//go:build !no_sessions
+
 // Package sessions records every issued auth token as a server-side session
 // so tokens can be revoked per device or en masse, without changing the
 // PocketBase token format (the JWT only gains a "sid" claim) or any REST flow.

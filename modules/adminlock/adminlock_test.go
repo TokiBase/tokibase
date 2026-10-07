@@ -1,3 +1,5 @@
+//go:build !no_adminlock
+
 package adminlock_test
 
 import (

@@ -1,3 +1,5 @@
+//go:build !no_adminlock
+
 // Package adminlock lets production servers run with the Admin UI in
 // read-only mode or not served at all, selected by env TOKI_ADMIN_UI.
 package adminlock

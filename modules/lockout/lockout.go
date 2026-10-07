@@ -1,3 +1,5 @@
+//go:build !no_lockout
+
 // Package lockout implements a progressive, per-identity lockout for failed
 // authentication (password and OTP), independent of the client IP.
 package lockout

@@ -1,3 +1,5 @@
+//go:build !no_webhooks
+
 // Package webhooks delivers record, collection and auth events to external
 // HTTP endpoints with HMAC signatures, retries, dead-lettering and replay
 // (see docs/modules/webhooks.md).
