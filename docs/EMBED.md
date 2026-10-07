@@ -26,12 +26,10 @@ inst.Export(ctx, file)                                      // backup zip
 | `DataDir` | Data directory. One running `Instance` per directory per process; a second `Start` fails. Freed by `Stop`. |
 | `Listen` | Default `127.0.0.1:0` in `embed`. `-` serves nothing over TCP: only `Call`/`Subscribe` work (best for mobile: no port other apps or web pages can reach; `mobile.Start` uses it when `listen` is empty). On a TCP listener no CORS origin is granted (`AllowedOrigins`, default none) and a `Host` other than `localhost`, `127.0.0.1`, `[::1]` or `AllowedHosts` gets 403 (DNS rebinding). Any local app can still connect to an open port: prefer `-`. |
 | `Profile` | `nano` (default), `edge`, `solo`, `team`, `cluster`. Run time only: turns compiled-in modules off through `TOKI_*` switches. What is compiled in is decided by build tags (`profiles.txt`). Switches of modules already compiled out are not set (the stubbed module boot guard would refuse them). |
-| `Env` | Environment variables, applied with `os.Setenv`. **Process wide and not undone by `Stop`.** Wins over profile defaults. |
 | `HooksDir` | JS `pb_hooks` directory (no file watching). Build with `-tags no_jsvm` (part of the nano set) or `-tags no_embed_jsvm` to drop the JS engine (about 7 MiB). |
 | `Env` | Environment variables, applied with `os.Setenv` at `Start` together with the profile switches. Process wide: the previous values come back when the last running instance stops, and `Start` resets switches of other profiles first (a `team` start after `nano` does not inherit `TOKI_AUDIT=off`). Starts are serialised; use ONE profile per process while instances run. Wins over profile defaults. |
 | `EncryptionEnv` | Name of the env var holding the settings encryption key. `--encryptionEnv` is not parsed in an embedded app (`SkipFlagParse`), so set it here. |
 | `AllowedOrigins`, `AllowedHosts` | See `Listen`. |
-| `HooksDir` | JS `pb_hooks` directory (no file watching). Build with `-tags no_embed_jsvm` to drop the JS engine (about 7 MiB). |
 | `LogLevel` | `debug`, `info` (default), `warn`, `error`; stored in the app log settings. |
 | `MaxBodyBytes` | Request body cap for TCP and `Call`, 413 above it. Default 4 MiB (`DefaultMaxBodyBytes`), negative = unlimited. Raise it if the app uploads larger files. |
 
