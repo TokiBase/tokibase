@@ -52,8 +52,8 @@ func TestRequestAuthKind(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			params := map[string]any{}
-			sql := e.Build(app.DB(), params)
+			built := app.DB().Select("(1)").From("users").AndWhere(e).Build()
+			sql, params := built.SQL(), built.Params()
 			found := false
 			for _, v := range params {
 				if v == tc.want {
