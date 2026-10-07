@@ -41,12 +41,16 @@ type Handle struct {
 	subs   map[int]func()
 }
 
-// Start starts an instance. listen defaults to "127.0.0.1:0" when empty,
-// "-" disables the TCP listener (Call and Subscribe only). envJSON is an
+// Start starts an instance. listen empty or "-" means NO TCP listener (Call
+// and Subscribe only; no port other apps or web pages can reach). Pass an
+// address such as "127.0.0.1:0" to opt in to a loopback listener. envJSON is an
 // optional JSON object of string values applied as environment variables;
 // the keys "profile", "hooksDir", "logLevel" are reserved and select the
 // matching embed.Options field instead of being exported.
 func Start(dataDir, listen, envJSON string) (*Handle, error) {
+	if listen == "" {
+		listen = "-"
+	}
 	opts := embed.Options{DataDir: dataDir, Listen: listen}
 	if envJSON != "" {
 		env := map[string]string{}
@@ -103,11 +107,21 @@ func (h *Handle) Superuser(email, password string) error {
 // Subscribe registers cb for topic (for example "posts/*") and returns an
 // id for Unsubscribe.
 func (h *Handle) Subscribe(topic string, cb EventCallback) (int, error) {
-	return h.register(h.inst.Subscribe(topic, cb.OnEvent)), nil
+	if cb == nil {
+		return 0, errors.New("mobile: nil callback")
+	}
+	cancel, err := h.inst.Subscribe(topic, cb.OnEvent)
+	if err != nil {
+		return 0, err
+	}
+	return h.register(cancel), nil
 }
 
 // SubscribeAs is Subscribe with the access of an auth token's record.
 func (h *Handle) SubscribeAs(token, topic string, cb EventCallback) (int, error) {
+	if cb == nil {
+		return 0, errors.New("mobile: nil callback")
+	}
 	cancel, err := h.inst.SubscribeAs(token, topic, cb.OnEvent)
 	if err != nil {
 		return 0, err
@@ -138,5 +152,13 @@ func (h *Handle) Unsubscribe(id int) {
 func (h *Handle) Stop() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return h.inst.Stop(ctx)
+	err := h.inst.Stop(ctx)
+	h.mu.Lock()
+	subs := h.subs
+	h.subs = map[int]func(){}
+	h.mu.Unlock()
+	for _, c := range subs {
+		c()
+	}
+	return err
 }

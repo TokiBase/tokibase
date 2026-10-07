@@ -11,7 +11,7 @@ type cb struct{ ch chan []byte }
 func (c cb) OnEvent(d []byte) { c.ch <- d }
 
 func TestFacade(t *testing.T) {
-	h, err := Start(t.TempDir(), "", `{"logLevel":"error"}`)
+	h, err := Start(t.TempDir(), "127.0.0.1:0", `{"logLevel":"error"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,10 +70,17 @@ func TestFacade(t *testing.T) {
 	if _, err := h.Call("GET", "/", "not json", nil); err == nil {
 		t.Fatal("bad headersJSON must error")
 	}
+	if _, err := h.Subscribe("notes/*", nil); err == nil {
+		t.Fatal("nil callback must error")
+	}
 	stopped = true
 	if err := h.Stop(); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := h.Subscribe("notes/*", c); err == nil {
+		t.Fatal("Subscribe after Stop must error")
+	}
+	h.Unsubscribe(id)
 }
 
 func TestBadEnv(t *testing.T) {

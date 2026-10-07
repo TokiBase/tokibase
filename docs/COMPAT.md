@@ -113,9 +113,15 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Migration: nothing needed; the collection is created at boot. Clients that wrote these fields must stop (the write is rejected); run `toki computed backfill <collection>` after adding a definition. See `docs/modules/computed.md`.
 ### `_batch_rules` system collection and batch rejection code (phase 2, `modules/batchguard`)
 
-- What: new system collection `_batch_rules` (superusers only) holds rules that validate a whole `/api/batch` call (`assert` before, `assert_post` after the sub-requests, inside the batch transaction). A rejected batch answers `400` with `{"message":"Batch rejected.","data":{"batch":{"code":"validation_batch_rule","message":"<rule message>","rule":"<name>"}}}` and nothing is committed. When a rule with `assert_post` or a `kernel.OnBatch` handler applies, the batch response is sent after the commit instead of while the transaction is open (same body and status). New CLI `toki batch`. Endpoints, request and success response shapes are unchanged; with no applicable rule nothing changes.
+- What: new system collection `_batch_rules` (superusers only) holds rules that validate a whole `/api/batch` call (`assert` before, `assert_post` after the sub-requests, inside the batch transaction). A rejected batch answers `400` with `{"message":"Batch rejected.","data":{"batch":{"code":"validation_batch_rule","message":"<rule message>","rule":"<name>"}}}` and nothing is committed. When a rule with `assert_post` or a `kernel.OnBatchFor(app)` handler applies, the batch response is sent after the commit instead of while the transaction is open (same body and status). New CLI `toki batch`. Endpoints, request and success response shapes are unchanged; with no applicable rule nothing changes.
 - Why: record rules cannot express invariants across the records of one batch.
 - Migration: nothing needed; the collection is created at boot. Clients should handle `data.batch.code = validation_batch_rule`. See `docs/modules/batchguard.md`.
+
+### `embed` and `mobile` packages, `Config.SkipFlagParse` (phase 2)
+
+- What: additive Go API. Package `embed` (`embed.Start`, `Instance.Call/CallContext/Subscribe/SubscribeAs/Superuser/Export/Stop`) runs the server inside another process; `mobile` is its gomobile facade. `tokibase.Config.SkipFlagParse` skips the eager `os.Args` flag parsing, so `--dev`, `--hooksDir`, `--encryptionEnv` and the other global flags are never read: pass them through `Config` (for settings encryption set `Config.DefaultEncryptionEnv`, or `embed.Options.EncryptionEnv`). `embed` sets `ServeEvent.InstallerFunc = nil` (no installer link). The embedded loopback listener sends no CORS grant by default and answers only loopback Host headers; `mobile.Start` has no TCP listener unless an address is given. `kernel.OnBatch` (process global) became `kernel.OnBatchFor(app)`. No HTTP endpoint or response shape changes.
+- Why: run nano on mobile and desktop without a CLI.
+- Migration: nothing for servers. Go callers of the unreleased `kernel.OnBatch` bind on `kernel.OnBatchFor(app)`. See `docs/EMBED.md`.
 
 ### New `_webhooks` collection and `_webhook_deliveries` table, outbound HTTP (phase 2, `modules/webhooks`)
 

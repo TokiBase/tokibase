@@ -7,7 +7,7 @@ Package `embed` runs the server inside your process: no CLI, no signal handlers,
 ```go
 inst, err := embed.Start(embed.Options{
     DataDir: dir,                 // required; app sandbox on mobile
-    Listen:  "127.0.0.1:0",       // default; "-" = no TCP listener at all
+    Listen:  "127.0.0.1:0",       // default for embed; "-" = no TCP listener at all (mobile default)
     Profile: "nano",              // default
     Env:     map[string]string{"TOKI_LOCKOUT": "off"},
     LogLevel: "warn",
@@ -17,26 +17,33 @@ defer inst.Stop(ctx)
 
 inst.Superuser("me@example.com", "long-password")          // first run
 status, hdr, body, err := inst.Call("GET", "/api/health", nil, nil) // no TCP round trip
-cancel := inst.Subscribe("posts/*", func(ev []byte) { /* {"action":"create","record":{...}} */ })
+cancel, err := inst.Subscribe("posts/*", func(ev []byte) { /* {"action":"create","record":{...}} */ })
 inst.Export(ctx, file)                                      // backup zip
 ```
 
 | Option | Meaning |
 | --- | --- |
 | `DataDir` | Data directory. One running `Instance` per directory per process; a second `Start` fails. Freed by `Stop`. |
-| `Listen` | Default `127.0.0.1:0`. `-` serves nothing over TCP: only `Call`/`Subscribe` work (best for mobile: no port other apps can reach). |
+| `Listen` | Default `127.0.0.1:0` in `embed`. `-` serves nothing over TCP: only `Call`/`Subscribe` work (best for mobile: no port other apps or web pages can reach; `mobile.Start` uses it when `listen` is empty). On a TCP listener no CORS origin is granted (`AllowedOrigins`, default none) and a `Host` other than `localhost`, `127.0.0.1`, `[::1]` or `AllowedHosts` gets 403 (DNS rebinding). Any local app can still connect to an open port: prefer `-`. |
 | `Profile` | `nano` (default), `edge`, `solo`, `team`, `cluster`. Run time only: turns compiled-in modules off through `TOKI_*` switches. What is compiled in is decided by build tags (`profiles.txt`). Switches of modules already compiled out are not set (the stubbed module boot guard would refuse them). |
 | `Env` | Environment variables, applied with `os.Setenv`. **Process wide and not undone by `Stop`.** Wins over profile defaults. |
 | `HooksDir` | JS `pb_hooks` directory (no file watching). Build with `-tags no_jsvm` (part of the nano set) or `-tags no_embed_jsvm` to drop the JS engine (about 7 MiB). |
+| `Env` | Environment variables, applied with `os.Setenv` at `Start` together with the profile switches. Process wide: the previous values come back when the last running instance stops, and `Start` resets switches of other profiles first (a `team` start after `nano` does not inherit `TOKI_AUDIT=off`). Starts are serialised; use ONE profile per process while instances run. Wins over profile defaults. |
+| `EncryptionEnv` | Name of the env var holding the settings encryption key. `--encryptionEnv` is not parsed in an embedded app (`SkipFlagParse`), so set it here. |
+| `AllowedOrigins`, `AllowedHosts` | See `Listen`. |
+| `HooksDir` | JS `pb_hooks` directory (no file watching). Build with `-tags no_embed_jsvm` to drop the JS engine (about 7 MiB). |
 | `LogLevel` | `debug`, `info` (default), `warn`, `error`; stored in the app log settings. |
 | `MaxBodyBytes` | Request body cap for TCP and `Call`, 413 above it. Default 4 MiB (`DefaultMaxBodyBytes`), negative = unlimited. Raise it if the app uploads larger files. |
 
 Notes:
 
-- `Call` runs the real router and middlewares (auth, rules, rate limit, hooks); `RemoteAddr` is `127.0.0.1`, `Host` is `localhost`. `/api/realtime` (SSE) is refused: use `Subscribe`.
-- `Subscribe` is anonymous (public rules only). `SubscribeAs(token, topic, fn)` uses the access of an auth token. `fn` runs on its own goroutine.
+- `Call` runs the real router and middlewares (auth, rules, rate limit, hooks); `RemoteAddr` is `127.0.0.1`, `Host` is `localhost`. `/api/realtime` (SSE, any method or case) is refused: use `Subscribe`. `Call` times out after 60 s (`DefaultCallTimeout`); `CallContext(ctx, ...)` takes your own context. The response is buffered in memory (no streaming or large downloads), multiple header values are joined with `, ` (so `Set-Cookie` is merged) and `RemoteAddr` is always loopback: do not proxy untrusted requests into `Call` and rely on loopback checks.
+- `Subscribe` is anonymous (public rules only). `SubscribeAs(token, topic, fn)` uses the access of an auth token. `fn` runs on its own goroutine, panics in it are recovered, and it must not block. `Subscribe` fails after `Stop`.
 - `Export` currently writes the standard backup zip (data.db, auxiliary.db, storage). A schema + JSONL export is planned; the zip is restorable with the usual restore.
-- `Stop` runs `OnTerminate` (graceful HTTP shutdown, replica flush when compiled in), closes the databases and waits for in-flight `Call`s.
+- `Stop` runs `OnTerminate` (graceful HTTP shutdown, replica flush when compiled in), closes the databases and waits for in-flight `Call`s. When `ctx` expires first, `Stop` returns an error and keeps the DataDir reserved (a second `Start` on it is refused); call `Stop` again to finish. The DataDir is released only after the server really stopped.
+- Several instances may run in one process (one per DataDir). `kernel.OnBatchFor(app)` handlers are per instance.
+- `Export` uses the configured backups filesystem (with S3 backups configured the temporary zip is uploaded there and deleted best effort) and is not exposed in `mobile`. `LogLevel` is stored in the app settings.
+- On case-insensitive file systems `/Data` and `/data` count as two DataDirs: always pass the same spelling.
 - No installer link is created; use `Superuser`.
 - `Instance.App()` exposes the app to Go callers (hooks, direct queries). It is not in the mobile bindings.
 
@@ -51,7 +58,7 @@ type EventCallback interface{ OnEvent(data []byte) }
 Response{Status int; HeadersJSON string; Body []byte}
 ```
 
-`envJSON` is a JSON object of strings. The keys `profile`, `hooksDir` and `logLevel` select those options instead of being exported. Callbacks arrive on a background thread: hop to the UI thread yourself.
+`listen` empty or `-` = no TCP listener (opt in with e.g. `127.0.0.1:0`). `Subscribe` returns an error after `Stop` or with a nil callback. `envJSON` is a JSON object of strings. The keys `profile`, `hooksDir` and `logLevel` select those options instead of being exported. Callbacks arrive on a background thread: hop to the UI thread yourself.
 
 Build (needs gomobile, plus Android SDK/NDK or macOS with Xcode; not run in CI):
 
@@ -84,7 +91,7 @@ final pb = PocketBase(url!);
 ## Platform lifecycle
 
 - **Android**: the server lives with the process. Start it in a foreground service (or in `Application.onCreate` for foreground use only) and call `Stop` from `onDestroy`/`onTrimMemory` at the latest. The OS can kill the process anytime, SQLite WAL makes that safe, but there is no replica flush. Without a foreground service the process is frozen in the background and loopback connections stall. DataDir: `Context.getFilesDir()`, not external storage.
-- **iOS**: no background processes. The server runs only while the app is active; stop it on `applicationDidEnterBackground` (or after `beginBackgroundTask` finishes) and start it again on foreground; `Start` after `Stop` on the same directory is supported. DataDir: Application Support (excluded from backup if the data is rebuildable). Use `listen = "-"` where possible: ATS allows loopback HTTP, but any other local app could reach an open port.
+- **iOS**: no background processes. The server runs only while the app is active; stop it on `applicationDidEnterBackground` (or after `beginBackgroundTask` finishes) and start it again on foreground; `Start` after `Stop` on the same directory is supported. DataDir: Application Support (excluded from backup if the data is rebuildable). `mobile.Start` has no TCP listener unless you pass an address; keep it that way where possible: ATS allows loopback HTTP, but any other local app could reach an open port.
 - Both: JS hooks and cron run only while the process is alive. Realtime clients must resubscribe after a restart.
 
 ## What nano excludes
