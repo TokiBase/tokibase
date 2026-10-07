@@ -59,10 +59,17 @@ type Agent struct {
 	RatePerMin  int      `json:"rate_per_min"`
 	Enabled     bool     `json:"enabled"`
 	Created     string   `json:"created"`
+
+	// invalid is set when the stored `collections` allowlist can not be parsed:
+	// the agent then fails closed (every call is denied).
+	invalid bool
 }
 
 // allows reports whether the agent allowlist covers the collection name.
 func (a *Agent) allows(collection string) bool {
+	if a.invalid {
+		return false
+	}
 	if len(a.Collections) == 0 {
 		return true
 	}
@@ -80,7 +87,9 @@ func agentFromRecord(r *kernel.Record) *Agent {
 		RatePerMin: r.GetInt("rate_per_min"), Enabled: r.GetBool("enabled"),
 		Created: r.GetString("created"),
 	}
-	_ = r.UnmarshalJSONField("collections", &a.Collections)
+	if err := r.UnmarshalJSONField("collections", &a.Collections); err != nil {
+		a.Collections, a.invalid = nil, true
+	}
 	if a.RatePerMin <= 0 {
 		a.RatePerMin = DefaultRatePerMin
 	}
@@ -226,7 +235,10 @@ func RevokeAgent(app kernel.App, name string) (*Agent, error) {
 	return agentFromRecord(rec), nil
 }
 
-var errBadKey = errors.New("invalid agent key")
+var (
+	errBadKey       = errors.New("invalid agent key")
+	errBadAllowlist = errors.New("agent configuration is invalid (collections must be a JSON array of names): all calls are denied")
+)
 
 // Authenticate resolves an API key to an enabled agent.
 func Authenticate(app kernel.App, key string) (*Agent, error) {
@@ -246,6 +258,10 @@ func Authenticate(app kernel.App, key string) (*Agent, error) {
 	if !a.Enabled {
 		return nil, errors.New("agent is revoked")
 	}
+	if a.invalid {
+		app.Logger().Error("mcp: agent has a malformed collections allowlist, denying all calls", "agent", a.Name)
+		return nil, errBadAllowlist
+	}
 	return a, nil
 }
 
@@ -262,6 +278,10 @@ func reload(app kernel.App, id string) (*Agent, error) {
 	a := agentFromRecord(rec)
 	if !a.Enabled {
 		return nil, errors.New("agent is revoked")
+	}
+	if a.invalid {
+		app.Logger().Error("mcp: agent has a malformed collections allowlist, denying all calls", "agent", a.Name)
+		return nil, errBadAllowlist
 	}
 	return a, nil
 }

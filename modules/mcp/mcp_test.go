@@ -103,6 +103,11 @@ func (e *env) agent(name string, role Role, cols ...string) *Agent {
 func (e *env) connect(a *Agent) (*sdk.ClientSession, *Server) {
 	e.t.Helper()
 	srv := NewServer(e.app, a, "test")
+	return e.connectServer(srv), srv
+}
+
+func (e *env) connectServer(srv *Server) *sdk.ClientSession {
+	e.t.Helper()
 	ct, st := sdk.NewInMemoryTransports()
 	ctx, cancel := context.WithCancel(context.Background())
 	ss, err := srv.SDK().Connect(ctx, st, nil)
@@ -114,7 +119,7 @@ func (e *env) connect(a *Agent) (*sdk.ClientSession, *Server) {
 		e.t.Fatal(err)
 	}
 	e.t.Cleanup(func() { cs.Close(); ss.Close(); cancel() })
-	return cs, srv
+	return cs
 }
 
 // call invokes a tool and returns the structured result and the error text ("" when ok).

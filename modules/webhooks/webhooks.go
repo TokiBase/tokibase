@@ -159,6 +159,7 @@ func ensureCollection(app core.App) error {
 		return errors.New("webhooks: _collections table is not ready")
 	}
 	c := core.NewBaseCollection(ConfigCollection)
+	c.System = true
 	// rules stay nil: superuser only
 	c.Fields.Add(
 		&core.TextField{Name: "name", Required: true, Max: 100},

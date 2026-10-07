@@ -3,6 +3,7 @@
 package mcp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -97,6 +98,9 @@ func (s *Server) registerRecordTools() {
 			}
 			c.collection = col.Name
 			c.set("filter", in.Filter)
+			if err := s.checkTraversal(c.agent, col, in.Expand, in.Filter, in.Sort); err != nil {
+				return nil, err
+			}
 			rule := col.ListRule
 			if rule == nil && c.agent.Role != RoleOperator {
 				return nil, fmt.Errorf("collection %q has a locked list rule (superusers only); agents need role operator", col.Name)
@@ -113,12 +117,14 @@ func (s *Server) registerRecordTools() {
 				page = 1
 			}
 
-			query := s.app.RecordQuery(col)
+			ctx, cancel := context.WithTimeout(c.ctx, queryTimeout)
+			defer cancel()
+			query := s.app.RecordQuery(col).WithContext(ctx)
 			resolver := kernel.NewRecordFieldResolver(s.app, col, guestInfo(), true)
 			if c.agent.Role != RoleOperator && rule != nil && *rule != "" {
 				expr, err := search.FilterData(*rule).BuildExpr(resolver)
 				if err != nil {
-					return nil, err
+					return nil, s.internal(c, "list rule", err)
 				}
 				query.AndWhere(expr)
 			}
@@ -139,11 +145,16 @@ func (s *Server) registerRecordTools() {
 			recs := []*kernel.Record{}
 			res, err := provider.ParseAndExec(q.Encode(), &recs)
 			if err != nil {
-				return nil, fmt.Errorf("query failed: %w", err)
+				if errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+					return nil, fmt.Errorf("query timed out after %s: narrow the filter", queryTimeout)
+				}
+				s.app.Logger().Warn("mcp: query failed", "tool", c.tool, "error", err)
+				return nil, errors.New("query failed: invalid filter, sort or parameters (details are in the server log)")
 			}
 			if in.Expand != "" {
 				s.expand(c.agent, recs, in.Expand)
 			}
+			s.enrich(c.agent, recs)
 			items := make([]any, 0, len(recs))
 			for _, r := range recs {
 				items = append(items, exportRecord(r, in.Fields))
@@ -161,6 +172,9 @@ func (s *Server) registerRecordTools() {
 				return nil, err
 			}
 			c.collection, c.record = col.Name, in.ID
+			if err := s.checkTraversal(c.agent, col, in.Expand, "", ""); err != nil {
+				return nil, err
+			}
 			notFound := fmt.Errorf("record %q not found or not accessible in %q", in.ID, col.Name)
 			rec, err := s.app.FindRecordById(col, in.ID)
 			if err != nil {
@@ -172,6 +186,7 @@ func (s *Server) registerRecordTools() {
 			if in.Expand != "" {
 				s.expand(c.agent, []*kernel.Record{rec}, in.Expand)
 			}
+			s.enrich(c.agent, []*kernel.Record{rec})
 			return map[string]any{"record": exportRecord(rec, in.Fields)}, nil
 		})
 
@@ -188,12 +203,12 @@ func (s *Server) registerRecordTools() {
 			}
 			c.set("reason", reason)
 			c.set("data", sanitize(in.Data, 200))
-			rec, err := s.createRecord(s.app, col, in.Data)
+			rec, err := s.createRecord(c, c.agent, s.app, col, in.Data)
 			if err != nil {
 				return nil, err
 			}
 			c.record = rec.Id
-			return map[string]any{"record": exportRecord(rec, "")}, nil
+			return map[string]any{"record": s.exportVisible(c.agent, col, rec)}, nil
 		})
 
 	addTool(s, "records.update", "Update a record. Needs role writer or operator and the collection in the agent allowlist. The change is audited with the reason.",
@@ -209,11 +224,11 @@ func (s *Server) registerRecordTools() {
 			}
 			c.set("reason", reason)
 			c.set("data", sanitize(in.Data, 200))
-			rec, err := s.updateRecord(s.app, col, in.ID, in.Data)
+			rec, err := s.updateRecord(c, c.agent, s.app, col, in.ID, in.Data)
 			if err != nil {
 				return nil, err
 			}
-			return map[string]any{"record": exportRecord(rec, "")}, nil
+			return map[string]any{"record": s.exportVisible(c.agent, col, rec)}, nil
 		})
 
 	addTool(s, "records.delete", "Delete a record in two steps: call without confirm_token to get a plan (what would be deleted, cascade warnings) and a token valid 5 minutes, then call again with the same arguments and the token.",
@@ -232,19 +247,32 @@ func (s *Server) registerRecordTools() {
 			if err != nil {
 				return nil, fmt.Errorf("record %q not found in %q", in.ID, col.Name)
 			}
+			warnings, err := s.cascadeCheck(c.agent, col)
+			if err != nil {
+				if errors.Is(err, errCascadeDenied) {
+					return nil, err
+				}
+				return nil, s.internal(c, "cascade check", err)
+			}
 			args := map[string]string{"collection": col.Name, "id": rec.Id}
 			if in.ConfirmToken == "" {
 				c.set("dry_run", true)
+				// the preview obeys the same read check as records.get
+				preview := any(map[string]any{"id": rec.Id, "collection": col.Name})
+				if ok, err := s.canRead(c.agent, rec, col.ViewRule); err == nil && ok {
+					s.enrich(c.agent, []*kernel.Record{rec})
+					preview = sanitize(jsonValue(rec.PublicExport()), 40)
+				}
 				return map[string]any{
 					"confirm_required": true,
 					"plan": map[string]any{
 						"action": "delete", "collection": col.Name, "id": rec.Id,
-						"preview":  sanitize(jsonValue(rec.PublicExport()), 40),
-						"warnings": s.cascadeWarnings(col),
+						"preview":  preview,
+						"warnings": warnings,
 					},
 					"confirm_token": s.issuePlan(c.agent, "records.delete", args),
 					"expires_in":    int(planTTL.Seconds()),
-					"next":          "call records.delete again with identical arguments plus confirm_token to execute",
+					"next":          s.nextHint("records.delete"),
 				}, nil
 			}
 			if err := s.consumePlan(c.agent, "records.delete", in.ConfirmToken, args); err != nil {
@@ -252,7 +280,7 @@ func (s *Server) registerRecordTools() {
 			}
 			c.set("before", sanitize(jsonValue(rec.PublicExport()), 200))
 			if err := s.app.Delete(rec); err != nil {
-				return nil, fmt.Errorf("delete failed: %w", err)
+				return nil, s.internal(c, "delete failed", err)
 			}
 			return map[string]any{"deleted": true, "collection": col.Name, "id": in.ID}, nil
 		})
@@ -268,6 +296,7 @@ func (s *Server) registerRecordTools() {
 				return nil, fmt.Errorf("ops must contain 1 to %d operations", maxBatch)
 			}
 			hasDelete := false
+			cascadeChecked := map[string]bool{}
 			counts := map[string]int{}
 			for i, op := range in.Ops {
 				op.Action = strings.ToLower(op.Action)
@@ -285,7 +314,18 @@ func (s *Server) registerRecordTools() {
 					if _, err := s.app.FindRecordById(col, op.ID); err != nil {
 						return nil, fmt.Errorf("op %d: record %q not found in %q", i, op.ID, col.Name)
 					}
-					hasDelete = hasDelete || op.Action == "delete"
+					if op.Action == "delete" {
+						hasDelete = true
+						if !cascadeChecked[col.Id] {
+							if _, err := s.cascadeCheck(c.agent, col); err != nil {
+								if errors.Is(err, errCascadeDenied) {
+									return nil, fmt.Errorf("op %d: %w", i, err)
+								}
+								return nil, s.internal(c, "cascade check", err)
+							}
+							cascadeChecked[col.Id] = true
+						}
+					}
 				default:
 					return nil, fmt.Errorf("op %d: unknown action %q (create, update, delete)", i, op.Action)
 				}
@@ -308,7 +348,7 @@ func (s *Server) registerRecordTools() {
 					},
 					"confirm_token": s.issuePlan(c.agent, "records.batch", in.Ops),
 					"expires_in":    int(planTTL.Seconds()),
-					"next":          "call records.batch again with identical ops plus confirm_token to execute",
+					"next":          s.nextHint("records.batch"),
 				}, nil
 			}
 			if needPlan {
@@ -319,20 +359,20 @@ func (s *Server) registerRecordTools() {
 			results := make([]map[string]any, 0, len(in.Ops))
 			err = s.app.RunInTransaction(func(tx kernel.App) error {
 				for i, op := range in.Ops {
-					col, err := tx.FindCollectionByNameOrId(op.Collection)
+					col, err := tx.FindCollectionByNameOrId(strings.TrimSpace(op.Collection))
 					if err != nil {
-						return fmt.Errorf("op %d: %w", i, err)
+						return fmt.Errorf("op %d: collection not found", i)
 					}
 					r := map[string]any{"action": op.Action, "collection": col.Name}
 					switch op.Action {
 					case "create":
-						rec, err := s.createRecord(tx, col, op.Data)
+						rec, err := s.createRecord(c, c.agent, tx, col, op.Data)
 						if err != nil {
 							return fmt.Errorf("op %d: %w", i, err)
 						}
 						r["id"] = rec.Id
 					case "update":
-						rec, err := s.updateRecord(tx, col, op.ID, op.Data)
+						rec, err := s.updateRecord(c, c.agent, tx, col, op.ID, op.Data)
 						if err != nil {
 							return fmt.Errorf("op %d: %w", i, err)
 						}
@@ -340,10 +380,10 @@ func (s *Server) registerRecordTools() {
 					case "delete":
 						rec, err := tx.FindRecordById(col, op.ID)
 						if err != nil {
-							return fmt.Errorf("op %d: %w", i, err)
+							return fmt.Errorf("op %d: record not found", i)
 						}
 						if err := tx.Delete(rec); err != nil {
-							return fmt.Errorf("op %d: delete failed: %w", i, err)
+							return fmt.Errorf("op %d: %w", i, s.internal(c, "delete failed", err))
 						}
 						r["id"] = op.ID
 					}
@@ -367,23 +407,6 @@ func capList[T any](l []T, n int) []T {
 	return l
 }
 
-// cascadeWarnings lists relation fields that cascade-delete into other collections.
-func (s *Server) cascadeWarnings(col *kernel.Collection) []string {
-	out := []string{}
-	all, err := s.app.FindAllCollections()
-	if err != nil {
-		return out
-	}
-	for _, c := range all {
-		for _, f := range c.Fields {
-			if rf, ok := f.(*kernel.RelationField); ok && rf.CollectionId == col.Id && rf.CascadeDelete {
-				out = append(out, fmt.Sprintf("records in %s.%s that reference it are deleted too (cascadeDelete)", c.Name, rf.Name))
-			}
-		}
-	}
-	return out
-}
-
 // checkData rejects unknown fields (modifiers like "tags+" / "+tags" / "tags-" are accepted).
 func checkData(col *kernel.Collection, data map[string]any) error {
 	for k := range data {
@@ -395,7 +418,9 @@ func checkData(col *kernel.Collection, data map[string]any) error {
 	return nil
 }
 
-func (s *Server) createRecord(app kernel.App, col *kernel.Collection, data map[string]any) (*kernel.Record, error) {
+var errCascadeDenied = errors.New("delete denied: it would cascade into collections outside the agent allowlist; an operator must delete this record")
+
+func (s *Server) createRecord(c *call, a *Agent, app kernel.App, col *kernel.Collection, data map[string]any) (*kernel.Record, error) {
 	if err := checkData(col, data); err != nil {
 		return nil, err
 	}
@@ -403,13 +428,16 @@ func (s *Server) createRecord(app kernel.App, col *kernel.Collection, data map[s
 	for k, v := range data {
 		rec.Set(k, v)
 	}
+	if err := s.writeGuard(a, col, rec, data, true); err != nil {
+		return nil, err
+	}
 	if err := app.Save(rec); err != nil {
-		return nil, fmt.Errorf("create failed: %w", err)
+		return nil, s.userErr(c, "create failed", err)
 	}
 	return rec, nil
 }
 
-func (s *Server) updateRecord(app kernel.App, col *kernel.Collection, id string, data map[string]any) (*kernel.Record, error) {
+func (s *Server) updateRecord(c *call, a *Agent, app kernel.App, col *kernel.Collection, id string, data map[string]any) (*kernel.Record, error) {
 	if err := checkData(col, data); err != nil {
 		return nil, err
 	}
@@ -423,8 +451,11 @@ func (s *Server) updateRecord(app kernel.App, col *kernel.Collection, id string,
 	for k, v := range data {
 		rec.Set(k, v)
 	}
+	if err := s.writeGuard(a, col, rec, data, false); err != nil {
+		return nil, err
+	}
 	if err := app.Save(rec); err != nil {
-		return nil, fmt.Errorf("update failed: %w", err)
+		return nil, s.userErr(c, "update failed", err)
 	}
 	return rec, nil
 }
@@ -432,31 +463,34 @@ func (s *Server) updateRecord(app kernel.App, col *kernel.Collection, id string,
 // expand resolves relations; for non-operators the related records must pass
 // the allowlist and the view rule evaluated as guest.
 func (s *Server) expand(a *Agent, recs []*kernel.Record, expand string) {
-	var fetch kernel.ExpandFetchFunc
-	if a.Role != RoleOperator {
-		fetch = func(rc *kernel.Collection, ids []string) ([]*kernel.Record, error) {
-			if rc.Name == CollectionName || rc.System || !a.allows(rc.Name) || rc.ViewRule == nil {
-				return nil, nil
-			}
-			args := make([]any, len(ids))
-			for i, id := range ids {
-				args[i] = id
-			}
-			q := s.app.RecordQuery(rc).AndWhere(dbx.In(rc.Name+".id", args...))
-			if *rc.ViewRule != "" {
-				resolver := kernel.NewRecordFieldResolver(s.app, rc, guestInfo(), true)
-				expr, err := search.FilterData(*rc.ViewRule).BuildExpr(resolver)
-				if err != nil {
-					return nil, err
-				}
-				q.AndWhere(expr)
-				if err := resolver.UpdateQuery(q); err != nil {
-					return nil, err
-				}
-			}
-			out := []*kernel.Record{}
-			return out, q.All(&out)
+	// the allowlist and reserved collection rules apply to every role (the
+	// paths were already validated by checkTraversal); operators only skip
+	// the view rule
+	fetch := func(rc *kernel.Collection, ids []string) ([]*kernel.Record, error) {
+		if !canTouch(a, rc, false) {
+			return nil, nil
 		}
+		if a.Role != RoleOperator && rc.ViewRule == nil {
+			return nil, nil
+		}
+		args := make([]any, len(ids))
+		for i, id := range ids {
+			args[i] = id
+		}
+		q := s.app.RecordQuery(rc).AndWhere(dbx.In(rc.Name+".id", args...))
+		if a.Role != RoleOperator && *rc.ViewRule != "" {
+			resolver := kernel.NewRecordFieldResolver(s.app, rc, guestInfo(), true)
+			expr, err := search.FilterData(*rc.ViewRule).BuildExpr(resolver)
+			if err != nil {
+				return nil, err
+			}
+			q.AndWhere(expr)
+			if err := resolver.UpdateQuery(q); err != nil {
+				return nil, err
+			}
+		}
+		out := []*kernel.Record{}
+		return out, q.All(&out)
 	}
 	paths := []string{}
 	for _, p := range strings.Split(expand, ",") {
