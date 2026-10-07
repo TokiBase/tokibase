@@ -146,7 +146,7 @@ func (r *RecordFieldResolver) UpdateQuery(query *dbx.SelectQuery) error {
 		for _, join := range r.joins {
 			query.LeftJoin(
 				(join.TableName + " " + join.TableAlias),
-				join.On,
+				r.joinOn(join),
 			)
 		}
 	}
@@ -206,7 +206,7 @@ func (r *RecordFieldResolver) updateQueryWithCollectionListRule(c *Collection, t
 		for _, j := range cloneR.joins {
 			query.LeftJoin(
 				(j.TableName + " " + j.TableAlias),
-				j.On,
+				r.joinOn(j),
 			)
 		}
 	}

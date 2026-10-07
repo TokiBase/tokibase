@@ -1,8 +1,10 @@
 package kernel
 
 import (
+	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/kernel/rule"
 	rulesqlite "github.com/tokibase/tokibase/kernel/rule/sqlite"
+	"github.com/tokibase/tokibase/tools/search"
 )
 
 // Dialect returns the SQL dialect the resolver emits (SQLite by default).
@@ -21,4 +23,14 @@ func (r *RecordFieldResolver) Dialect() rule.Dialect {
 // resolver is used with, see docs/RULE_ENGINE.md.
 func (r *RecordFieldResolver) SetDialect(d rule.Dialect) {
 	r.dialect = d
+}
+
+// joinOn returns the ON condition of a registered join; joins without
+// a condition get the dialect's replacement (PostgreSQL requires an ON clause).
+func (r *RecordFieldResolver) joinOn(j *search.Join) dbx.Expression {
+	if j.On == nil && r.Dialect().OptionalOn() != "" {
+		return dbx.NewExp("TRUE")
+	}
+
+	return j.On
 }

@@ -34,11 +34,11 @@ type dialectOutcome struct {
 	err         error
 }
 
-func buildDialect(app *tests.TestApp, col *kernel.Collection, ri *kernel.RequestInfo, expr string, usePG bool) dialectOutcome {
+func buildDialect(app *tests.TestApp, col *kernel.Collection, ri *kernel.RequestInfo, expr string, usePG, hidden bool) dialectOutcome {
 	restore := security.SeedPseudorandomForTest(42)
 	defer restore()
 
-	resolver := kernel.NewRecordFieldResolver(app, col, ri, false)
+	resolver := kernel.NewRecordFieldResolver(app, col, ri, hidden)
 
 	ast, err := rule.Parse(expr)
 	if err != nil {
@@ -153,7 +153,7 @@ var pgGoldenExprs = []string{
 	`text = 'abc'`, `text != 'abc'`, `text ~ 'abc'`, `text !~ 'a_b'`, `number > 1`, `number <= 1.5`,
 	`text = null`, `text != ''`, `text = number`, `number != text`, `bool = true`, `bool != false`, `true = false`,
 	`text = email && number != 3 || bool = true`, `(text ~ 'a' || text ~ 'b') && number >= 1`,
-	`text ~ email`, `json.a.b = 'x'`, `json.a[0] = 1`, `json = 'x'`, `json:length = 1`, `select_many:length > 1`,
+	`text ~ email`, `json.a.b = 'x'`, `json.a.0 = 1`, `json = 'x'`, `json:length = 1`, `select_many:length > 1`,
 	`text:lower = 'abc'`, `email:lower ~ 'a'`,
 	`rel_one.title = 'x'`, `rel_one.id = 'x'`, `rel_one.title != rel_one.title`, `rel_one.rel_one.title ~ 'x'`,
 	`demo1_via_rel_one.text = 'x'`, `demo1_via_rel_many.text ?= 'x'`, `demo1_via_rel_many.text = 'x'`,
@@ -215,7 +215,7 @@ func TestRulePostgresGolden(t *testing.T) {
 	for _, expr := range pgGoldenExprs {
 		sb.WriteString("## " + expr + "\n")
 
-		out := buildDialect(app, col, ri, expr, true)
+		out := buildDialect(app, col, ri, expr, true, true)
 		if out.err != nil {
 			sb.WriteString("ERR " + out.err.Error() + "\n\n")
 			continue
@@ -278,6 +278,7 @@ func TestRulePostgresStructuralParity(t *testing.T) {
 		}
 		cols = append(cols, c)
 	}
+	hiddenVariants := []bool{false, true}
 
 	var problems []string
 	compared, same, unsupported := 0, 0, 0
@@ -285,47 +286,49 @@ func TestRulePostgresStructuralParity(t *testing.T) {
 
 	for _, expr := range keys {
 		for _, col := range cols {
-			lite := buildDialect(app, col, ri, expr, false)
-			post := buildDialect(app, col, ri, expr, true)
-			compared++
+			for _, hidden := range hiddenVariants {
+				lite := buildDialect(app, col, ri, expr, false, hidden)
+				post := buildDialect(app, col, ri, expr, true, hidden)
+				compared++
 
-			id := fmt.Sprintf("[%s] %q", col.Name, expr)
+				id := fmt.Sprintf("[%s hidden=%v] %q", col.Name, hidden, expr)
 
-			switch {
-			case lite.err != nil && post.err == nil:
-				problems = append(problems, id+": sqlite fails ("+lite.err.Error()+") but postgres builds")
-			case lite.err != nil && post.err != nil:
-				// same failure class; unsupported must not mask a parse/resolve error
-				if errors.Is(post.err, rule.ErrUnsupported) && !errors.Is(lite.err, rule.ErrUnsupported) {
+				switch {
+				case lite.err != nil && post.err == nil:
+					problems = append(problems, id+": sqlite fails ("+lite.err.Error()+") but postgres builds")
+				case lite.err != nil && post.err != nil:
+					// same failure class; unsupported must not mask a parse/resolve error
+					if errors.Is(post.err, rule.ErrUnsupported) && !errors.Is(lite.err, rule.ErrUnsupported) {
+						unsupported++
+					}
+				case lite.err == nil && post.err != nil:
+					if !errors.Is(post.err, rule.ErrUnsupported) {
+						problems = append(problems, id+": postgres fails without ErrUnsupported: "+post.err.Error())
+						continue
+					}
 					unsupported++
-				}
-			case lite.err == nil && post.err != nil:
-				if !errors.Is(post.err, rule.ErrUnsupported) {
-					problems = append(problems, id+": postgres fails without ErrUnsupported: "+post.err.Error())
-					continue
-				}
-				unsupported++
-				msg := post.err.Error()
-				if i := strings.LastIndex(msg, "postgres: "); i >= 0 {
-					msg = msg[i:]
-				}
-				if j := strings.Index(msg, ";"); j > 0 {
-					msg = msg[:j]
-				}
-				unsupportedKinds[msg]++
-			default:
-				same++
+					msg := post.err.Error()
+					if i := strings.LastIndex(msg, "postgres: "); i >= 0 {
+						msg = msg[i:]
+					}
+					if j := strings.Index(msg, ";"); j > 0 {
+						msg = msg[:j]
+					}
+					unsupportedKinds[msg]++
+				default:
+					same++
 
-				if lite.params != post.params {
-					problems = append(problems, id+": params differ\n  sqlite:   "+lite.params+"\n  postgres: "+post.params)
-				}
+					if lite.params != post.params {
+						problems = append(problems, id+": params differ\n  sqlite:   "+lite.params+"\n  postgres: "+post.params)
+					}
 
-				if !slices.Equal(placeholderOrder(lite.sql), placeholderOrder(post.sql)) {
-					problems = append(problems, id+": placeholder order differs")
-				}
+					if !slices.Equal(placeholderOrder(lite.sql), placeholderOrder(post.sql)) {
+						problems = append(problems, id+": placeholder order differs")
+					}
 
-				if v := pgViolations(post.sql); len(v) > 0 {
-					problems = append(problems, id+": "+strings.Join(v, "; ")+"\n  "+post.sql)
+					if v := pgViolations(post.sql); len(v) > 0 {
+						problems = append(problems, id+": "+strings.Join(v, "; ")+"\n  "+post.sql)
+					}
 				}
 			}
 		}
