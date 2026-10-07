@@ -23,6 +23,7 @@ import (
 	"github.com/tokibase/tokibase/modules/crypto"
 	"github.com/tokibase/tokibase/modules/denylog"
 	"github.com/tokibase/tokibase/modules/fieldperm"
+	"github.com/tokibase/tokibase/modules/geo"
 	"github.com/tokibase/tokibase/modules/jobs"
 	"github.com/tokibase/tokibase/modules/lockout"
 	"github.com/tokibase/tokibase/modules/mcp"
@@ -304,6 +305,7 @@ func NewWithConfig(config Config) *PocketBase {
 
 	// date values without a time zone: TOKI_TIMELINT=off|warn|strict (default warn)
 	timelint.Register(pb.App.(core.App))
+	geo.Register(pb.App.(core.App))
 
 	// structured logs for every 401/403/429 response (TOKI_DENYLOG=off disables)
 	denylog.Register(pb.App.(core.App))
@@ -467,6 +469,7 @@ func (pb *PocketBase) Start() error {
 	pb.RootCmd.AddCommand(cmd.NewFieldPermCommand(pb))
 	pb.RootCmd.AddCommand(computed.NewCommand(pb))
 	pb.RootCmd.AddCommand(crypto.NewCommand(pb))
+	pb.RootCmd.AddCommand(geo.NewCommand(pb))
 	for _, c := range mcp.NewCommands(pb) {
 		pb.RootCmd.AddCommand(c)
 	}

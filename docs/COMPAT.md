@@ -133,6 +133,12 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: passwordless login with passkeys (Face ID / fingerprint / security key) without a custom backend.
 - Migration: nothing needed for REST clients and SDKs. Code that enumerates all collections can see `_passkeys` (like other `_` system collections). See `docs/modules/passkey.md`.
 
+### New `GET /api/collections/{collection}/records/near` endpoint and `distance_km` item key (phase 2, `modules/geo`)
+
+- What: an additive endpoint for radius (`near=<field>:<lat>,<lon>,<km>`) and bounding-box (`bbox=...`) queries on `geoPoint` fields. It returns the standard list envelope; with `near` each item carries one extra top-level key `distance_km` and results are ordered by distance. The collection `listRule` applies as on the list endpoint. `toki geo index` can create an SQLite R*Tree virtual table `_geo_<collection>_<field>` in `data.db`. No existing endpoint, status code, body shape or the filter language changes. The path `records/near` shadows a record whose id is literally `near` (ids are 15 characters by default).
+- Why: nearby search without custom hooks or client-side filtering that breaks pagination.
+- Migration: nothing needed for REST clients and SDKs. Drop the `_geo_*` tables (`toki geo drop`) before returning to upstream if you want a pristine schema; upstream ignores them. See `docs/modules/geo.md`.
+
 ## Not promised
 
 - Go package API (`core`, `apis`, ...) may change between TokiBase minor versions.
