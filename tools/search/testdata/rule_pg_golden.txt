@@ -7,11 +7,11 @@ SELECT * FROM "demo1" WHERE [[demo1.text]] IS DISTINCT FROM {:p1}
 p1="abc"
 
 ## text ~ 'abc'
-SELECT * FROM "demo1" WHERE CAST([[demo1.text]] AS TEXT) ILIKE {:p1} ESCAPE '\'
+SELECT * FROM "demo1" WHERE CAST([[demo1.text]] AS TEXT) ILIKE {:p1} ESCAPE E'\\'
 p1="%abc%"
 
 ## text !~ 'a_b'
-SELECT * FROM "demo1" WHERE CAST([[demo1.text]] AS TEXT) NOT ILIKE {:p1} ESCAPE '\'
+SELECT * FROM "demo1" WHERE CAST([[demo1.text]] AS TEXT) NOT ILIKE {:p1} ESCAPE E'\\'
 p1="%a\\_b%"
 
 ## number > 1
@@ -55,19 +55,19 @@ SELECT * FROM "demo1" WHERE (COALESCE(CAST([[demo1.text]] AS TEXT), '') = COALES
 p1=3
 
 ## (text ~ 'a' || text ~ 'b') && number >= 1
-SELECT * FROM "demo1" WHERE ((CAST([[demo1.text]] AS TEXT) ILIKE {:p1} ESCAPE '\' OR CAST([[demo1.text]] AS TEXT) ILIKE {:p2} ESCAPE '\') AND [[demo1.number]] >= {:p3})
+SELECT * FROM "demo1" WHERE ((CAST([[demo1.text]] AS TEXT) ILIKE {:p1} ESCAPE E'\\' OR CAST([[demo1.text]] AS TEXT) ILIKE {:p2} ESCAPE E'\\') AND [[demo1.number]] >= {:p3})
 p1="%a%" p2="%b%" p3=1
 
 ## text ~ email
-SELECT * FROM "demo1" WHERE CAST([[demo1.text]] AS TEXT) ILIKE ('%' || CAST([[demo1.email]] AS TEXT) || '%') ESCAPE '\'
+SELECT * FROM "demo1" WHERE CAST([[demo1.text]] AS TEXT) ILIKE ('%' || CAST([[demo1.email]] AS TEXT) || '%') ESCAPE E'\\'
 
 
 ## json.a.b = 'x'
-SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #>> '{a,b}') IS NOT DISTINCT FROM {:p1}
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #>> '{"a","b"}') IS NOT DISTINCT FROM {:p1}
 p1="x"
 
 ## json.a.0 = 1
-SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #>> '{a,0}') IS NOT DISTINCT FROM {:p1}
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #> '{"a","0"}') IS NOT DISTINCT FROM to_jsonb(CAST({:p1} AS DOUBLE PRECISION))
 p1=1
 
 ## json = 'x'
@@ -75,7 +75,7 @@ SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #>> '{}') IS NOT DISTINCT 
 p1="x"
 
 ## json:length = 1
-SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #>> '{}') IS NOT DISTINCT FROM {:p1}
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #> '{}') IS NOT DISTINCT FROM to_jsonb(CAST({:p1} AS DOUBLE PRECISION))
 p1=1
 
 ## select_many:length > 1
@@ -83,11 +83,11 @@ SELECT * FROM "demo1" WHERE (CASE WHEN [[demo1.select_many]] IS NULL THEN 0 WHEN
 p1=1
 
 ## text:lower = 'abc'
-SELECT * FROM "demo1" WHERE LOWER([[demo1.text]]) = {:p1}
+SELECT * FROM "demo1" WHERE LOWER(CAST([[demo1.text]] AS TEXT)) = {:p1}
 p1="abc"
 
 ## email:lower ~ 'a'
-SELECT * FROM "demo1" WHERE CAST(LOWER([[demo1.email]]) AS TEXT) ILIKE {:p1} ESCAPE '\'
+SELECT * FROM "demo1" WHERE CAST(LOWER(CAST([[demo1.email]] AS TEXT)) AS TEXT) ILIKE {:p1} ESCAPE E'\\'
 p1="%a%"
 
 ## rel_one.text = 'x'
@@ -103,7 +103,7 @@ SELECT DISTINCT * FROM "demo1" LEFT JOIN "demo1" "demo1_rel_one" ON [[demo1_rel_
 
 
 ## rel_one.rel_one.text ~ 'x'
-SELECT DISTINCT * FROM "demo1" LEFT JOIN "demo1" "demo1_rel_one" ON [[demo1_rel_one.id]] = [[demo1.rel_one]] LEFT JOIN "demo1" "demo1_rel_one_rel_one" ON [[demo1_rel_one_rel_one.id]] = [[demo1_rel_one.rel_one]] WHERE CAST([[demo1_rel_one_rel_one.text]] AS TEXT) ILIKE {:p1} ESCAPE '\'
+SELECT DISTINCT * FROM "demo1" LEFT JOIN "demo1" "demo1_rel_one" ON [[demo1_rel_one.id]] = [[demo1.rel_one]] LEFT JOIN "demo1" "demo1_rel_one_rel_one" ON [[demo1_rel_one_rel_one.id]] = [[demo1_rel_one.rel_one]] WHERE CAST([[demo1_rel_one_rel_one.text]] AS TEXT) ILIKE {:p1} ESCAPE E'\\'
 p1="%x%"
 
 ## demo1_via_rel_one.text = 'x'
@@ -158,7 +158,7 @@ SELECT * FROM "demo1" WHERE TRUE = TRUE
 
 
 ## @request.body.text:lower = 'a'
-SELECT * FROM "demo1" WHERE LOWER({:p1}) = {:p2}
+SELECT * FROM "demo1" WHERE LOWER(CAST({:p1} AS TEXT)) = {:p2}
 p1="body text" p2="a"
 
 ## @request.body.text:changed = true
@@ -193,11 +193,11 @@ SELECT * FROM "demo1" WHERE {:p1} = {:p2}
 p1=2026 p2=2026
 
 ## geoDistance(1, 2, 3, 4) < 10
-SELECT * FROM "demo1" WHERE (CASE WHEN (cos(radians(CAST({:p1} AS DOUBLE PRECISION))) * cos(radians(CAST({:p2} AS DOUBLE PRECISION))) * cos(radians(CAST({:p3} AS DOUBLE PRECISION)) - radians(CAST({:p4} AS DOUBLE PRECISION))) + sin(radians(CAST({:p1} AS DOUBLE PRECISION))) * sin(radians(CAST({:p2} AS DOUBLE PRECISION)))) IS NULL THEN NULL ELSE 6371 * acos(LEAST(1, GREATEST(-1, cos(radians(CAST({:p1} AS DOUBLE PRECISION))) * cos(radians(CAST({:p2} AS DOUBLE PRECISION))) * cos(radians(CAST({:p3} AS DOUBLE PRECISION)) - radians(CAST({:p4} AS DOUBLE PRECISION))) + sin(radians(CAST({:p1} AS DOUBLE PRECISION))) * sin(radians(CAST({:p2} AS DOUBLE PRECISION)))))) END) < {:p5}
+SELECT * FROM "demo1" WHERE (SELECT CASE WHEN (cos(radians(g.la1)) * cos(radians(g.la2)) * cos(radians(g.lo2) - radians(g.lo1)) + sin(radians(g.la1)) * sin(radians(g.la2))) IS NULL THEN NULL ELSE 6371 * acos(LEAST(1, GREATEST(-1, cos(radians(g.la1)) * cos(radians(g.la2)) * cos(radians(g.lo2) - radians(g.lo1)) + sin(radians(g.la1)) * sin(radians(g.la2))))) END FROM (SELECT CASE WHEN t.lo1 ~ '^ *[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)? *$' THEN CAST(t.lo1 AS DOUBLE PRECISION) END AS lo1, CASE WHEN t.la1 ~ '^ *[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)? *$' THEN CAST(t.la1 AS DOUBLE PRECISION) END AS la1, CASE WHEN t.lo2 ~ '^ *[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)? *$' THEN CAST(t.lo2 AS DOUBLE PRECISION) END AS lo2, CASE WHEN t.la2 ~ '^ *[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)? *$' THEN CAST(t.la2 AS DOUBLE PRECISION) END AS la2 FROM (SELECT CAST({:p1} AS TEXT) AS la1, CAST({:p2} AS TEXT) AS la2, CAST({:p3} AS TEXT) AS lo2, CAST({:p4} AS TEXT) AS lo1) t) g) < {:p5}
 p1=2 p2=4 p3=3 p4=1 p5=10
 
 ## geoDistance(point.lon, point.lat, 23.32, 42.69) < 200
-SELECT * FROM "demo1" WHERE (CASE WHEN (cos(radians(CAST((to_jsonb([[demo1.point]]) #>> '{lat}') AS DOUBLE PRECISION))) * cos(radians(CAST({:p1} AS DOUBLE PRECISION))) * cos(radians(CAST({:p2} AS DOUBLE PRECISION)) - radians(CAST((to_jsonb([[demo1.point]]) #>> '{lon}') AS DOUBLE PRECISION))) + sin(radians(CAST((to_jsonb([[demo1.point]]) #>> '{lat}') AS DOUBLE PRECISION))) * sin(radians(CAST({:p1} AS DOUBLE PRECISION)))) IS NULL THEN NULL ELSE 6371 * acos(LEAST(1, GREATEST(-1, cos(radians(CAST((to_jsonb([[demo1.point]]) #>> '{lat}') AS DOUBLE PRECISION))) * cos(radians(CAST({:p1} AS DOUBLE PRECISION))) * cos(radians(CAST({:p2} AS DOUBLE PRECISION)) - radians(CAST((to_jsonb([[demo1.point]]) #>> '{lon}') AS DOUBLE PRECISION))) + sin(radians(CAST((to_jsonb([[demo1.point]]) #>> '{lat}') AS DOUBLE PRECISION))) * sin(radians(CAST({:p1} AS DOUBLE PRECISION)))))) END) < {:p3}
+SELECT * FROM "demo1" WHERE (SELECT CASE WHEN (cos(radians(g.la1)) * cos(radians(g.la2)) * cos(radians(g.lo2) - radians(g.lo1)) + sin(radians(g.la1)) * sin(radians(g.la2))) IS NULL THEN NULL ELSE 6371 * acos(LEAST(1, GREATEST(-1, cos(radians(g.la1)) * cos(radians(g.la2)) * cos(radians(g.lo2) - radians(g.lo1)) + sin(radians(g.la1)) * sin(radians(g.la2))))) END FROM (SELECT CASE WHEN t.lo1 ~ '^ *[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)? *$' THEN CAST(t.lo1 AS DOUBLE PRECISION) END AS lo1, CASE WHEN t.la1 ~ '^ *[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)? *$' THEN CAST(t.la1 AS DOUBLE PRECISION) END AS la1, CASE WHEN t.lo2 ~ '^ *[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)? *$' THEN CAST(t.lo2 AS DOUBLE PRECISION) END AS lo2, CASE WHEN t.la2 ~ '^ *[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)? *$' THEN CAST(t.la2 AS DOUBLE PRECISION) END AS la2 FROM (SELECT CAST((to_jsonb([[demo1.point]]) #>> '{"lat"}') AS TEXT) AS la1, CAST({:p1} AS TEXT) AS la2, CAST({:p2} AS TEXT) AS lo2, CAST((to_jsonb([[demo1.point]]) #>> '{"lon"}') AS TEXT) AS lo1) t) g) < {:p3}
 p1=42.69 p2=23.32 p3=200
 
 ## strftime('%Y', created) = '2026'
@@ -205,4 +205,117 @@ ERR invalid left operand "strftime" - [strftime] rule: construct not supported b
 
 ## text = 'a' && missing = 1
 ERR invalid left operand "missing" - unknown field "missing"
+
+## @request.body.missingbool = true
+SELECT * FROM "demo1" WHERE CAST(NULL AS BOOLEAN) IS NOT DISTINCT FROM TRUE
+
+
+## @request.body.missingbool != false
+SELECT * FROM "demo1" WHERE CAST(NULL AS BOOLEAN) IS DISTINCT FROM FALSE
+
+
+## @request.body.missingnum = 5
+SELECT * FROM "demo1" WHERE CAST(NULL AS DOUBLE PRECISION) IS NOT DISTINCT FROM {:p1}
+p1=5
+
+## @request.body.missingnum = number
+SELECT * FROM "demo1" WHERE (('' = CAST([[demo1.number]] AS TEXT) OR [[demo1.number]] IS NULL))
+
+
+## @request.body.bool = true
+SELECT * FROM "demo1" WHERE {:p1} = TRUE
+p1=true
+
+## json.flag = true
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #> '{"flag"}') IS NOT DISTINCT FROM to_jsonb(CAST(TRUE AS BOOLEAN))
+
+
+## json.flag != false
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #> '{"flag"}') IS DISTINCT FROM to_jsonb(CAST(FALSE AS BOOLEAN))
+
+
+## json.count > 5
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #> '{"count"}') > to_jsonb(CAST({:p1} AS DOUBLE PRECISION))
+p1=5
+
+## json.count <= 5.5
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #> '{"count"}') <= to_jsonb(CAST({:p1} AS DOUBLE PRECISION))
+p1=5.5
+
+## json.count = number
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #> '{"count"}') IS NOT DISTINCT FROM to_jsonb(CAST([[demo1.number]] AS DOUBLE PRECISION))
+
+
+## json.flag = bool
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #> '{"flag"}') IS NOT DISTINCT FROM to_jsonb(CAST([[demo1.bool]] AS BOOLEAN))
+
+
+## json.null = 'x'
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #>> '{"null"}') IS NOT DISTINCT FROM {:p1}
+p1="x"
+
+## json:lower = 'a'
+SELECT * FROM "demo1" WHERE LOWER(CAST((to_jsonb([[demo1.json]]) #>> '{}') AS TEXT)) IS NOT DISTINCT FROM {:p1}
+p1="a"
+
+## json.a.b:lower = 'a'
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #>> '{"a","blower"}') IS NOT DISTINCT FROM {:p1}
+p1="a"
+
+## number:lower = 1
+SELECT * FROM "demo1" WHERE LOWER(CAST([[demo1.number]] AS TEXT)) = {:p1}
+p1=1
+
+## number = number
+SELECT * FROM "demo1" WHERE [[demo1.number]] IS NOT DISTINCT FROM [[demo1.number]]
+
+
+## number != number
+SELECT * FROM "demo1" WHERE [[demo1.number]] IS DISTINCT FROM [[demo1.number]]
+
+
+## bool = bool
+SELECT * FROM "demo1" WHERE [[demo1.bool]] IS NOT DISTINCT FROM [[demo1.bool]]
+
+
+## datetime = datetime
+SELECT * FROM "demo1" WHERE [[demo1.datetime]] IS NOT DISTINCT FROM [[demo1.datetime]]
+
+
+## text ~ "a%\\"
+SELECT * FROM "demo1" WHERE CAST([[demo1.text]] AS TEXT) ILIKE {:p1} ESCAPE E'\\'
+p1="a%\\\\"
+
+## text ~ "a\\"
+SELECT * FROM "demo1" WHERE CAST([[demo1.text]] AS TEXT) ILIKE {:p1} ESCAPE E'\\'
+p1="%a\\\\%"
+
+## text !~ "100%"
+SELECT * FROM "demo1" WHERE CAST([[demo1.text]] AS TEXT) NOT ILIKE {:p1} ESCAPE E'\\'
+p1="100%"
+
+## geoDistance(point.lon, point.lat, json.lon, json.lat) < 10
+SELECT * FROM "demo1" WHERE (SELECT CASE WHEN (cos(radians(g.la1)) * cos(radians(g.la2)) * cos(radians(g.lo2) - radians(g.lo1)) + sin(radians(g.la1)) * sin(radians(g.la2))) IS NULL THEN NULL ELSE 6371 * acos(LEAST(1, GREATEST(-1, cos(radians(g.la1)) * cos(radians(g.la2)) * cos(radians(g.lo2) - radians(g.lo1)) + sin(radians(g.la1)) * sin(radians(g.la2))))) END FROM (SELECT CASE WHEN t.lo1 ~ '^ *[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)? *$' THEN CAST(t.lo1 AS DOUBLE PRECISION) END AS lo1, CASE WHEN t.la1 ~ '^ *[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)? *$' THEN CAST(t.la1 AS DOUBLE PRECISION) END AS la1, CASE WHEN t.lo2 ~ '^ *[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)? *$' THEN CAST(t.lo2 AS DOUBLE PRECISION) END AS lo2, CASE WHEN t.la2 ~ '^ *[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)? *$' THEN CAST(t.la2 AS DOUBLE PRECISION) END AS la2 FROM (SELECT CAST((to_jsonb([[demo1.point]]) #>> '{"lat"}') AS TEXT) AS la1, CAST((to_jsonb([[demo1.json]]) #>> '{"lat"}') AS TEXT) AS la2, CAST((to_jsonb([[demo1.json]]) #>> '{"lon"}') AS TEXT) AS lo2, CAST((to_jsonb([[demo1.point]]) #>> '{"lon"}') AS TEXT) AS lo1) t) g) < {:p1}
+p1=10
+
+## @collection.demo2.title = 'x' && json.a = true
+SELECT DISTINCT * FROM "demo1" LEFT JOIN "demo2" "__collection_demo2" ON TRUE WHERE ((([[__collection_demo2.title]] = {:p1}) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___collection_demo2.title]] as [[multiMatchValue]] FROM "demo1" "__mm_demo1" LEFT JOIN "demo2" "__mm___collection_demo2" ON TRUE WHERE "__mm_demo1"."id" = "demo1"."id") {{__smX}} WHERE NOT ([[__smX.multiMatchValue]] = {:p1})))) AND (to_jsonb([[demo1.json]]) #> '{"a"}') IS NOT DISTINCT FROM to_jsonb(CAST(TRUE AS BOOLEAN)))
+p1="x"
+
+## @collection.demo1:x.json.a = 1
+ERR rule: construct not supported by the SQL dialect: postgres: comparing a JSON member of a multi-match path with a number or boolean
+
+## @collection.demo1:x.json.a = 'x'
+SELECT DISTINCT * FROM "demo1" LEFT JOIN "demo1" "__collection_alias_x" ON TRUE WHERE ((((to_jsonb([[__collection_alias_x.json]]) #>> '{"a"}') IS NOT DISTINCT FROM {:p1}) AND (NOT EXISTS (SELECT 1 FROM (SELECT (to_jsonb([[__mm___collection_alias_x.json]]) #>> '{"a"}') as [[multiMatchValue]] FROM "demo1" "__mm_demo1" LEFT JOIN "demo1" "__mm___collection_alias_x" ON TRUE WHERE "__mm_demo1"."id" = "demo1"."id") {{__smX}} WHERE NOT ([[__smX.multiMatchValue]] IS NOT DISTINCT FROM {:p1})))))
+p1="x"
+
+## @request.body.number:lower = '12.5'
+SELECT * FROM "demo1" WHERE LOWER(CAST({:p1} AS TEXT)) = {:p2}
+p1="12.5" p2="12.5"
+
+## rel_many.json.a = 1
+ERR invalid left operand "rel_many.json.a" - rule: construct not supported by the SQL dialect: postgres: JOIN over the elements of a multi-value column (:each, multi relations); needs LATERAL jsonb_array_elements_text support in the join builder
+
+## rel_many.json.a = 'x'
+ERR invalid left operand "rel_many.json.a" - rule: construct not supported by the SQL dialect: postgres: JOIN over the elements of a multi-value column (:each, multi relations); needs LATERAL jsonb_array_elements_text support in the join builder
 

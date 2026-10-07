@@ -2,6 +2,7 @@ package pg_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/tokibase/tokibase/kernel/rule"
@@ -28,11 +29,25 @@ func TestDialectSQL(t *testing.T) {
 	}
 	check("json top", got, `(to_jsonb([[t.j]]) #>> '{}')`)
 
-	got, _ = d.JSONExtract("t.j", []string{"a", "0", "b"})
-	check("json path", got, `(to_jsonb([[t.j]]) #>> '{a,0,b}')`)
+	got, _ = d.JSONExtract("t.j", []rule.Segment{{Key: "a"}, {Key: "0", Index: true}, {Key: "null"}})
+	check("json path", got, `(to_jsonb([[t.j]]) #>> '{"a","0","null"}')`)
 
-	if _, err = d.JSONExtract("t.j", []string{`a"b`}); !errors.Is(err, rule.ErrUnsupported) {
-		t.Fatalf("expected ErrUnsupported for a bad path segment, got %v", err)
+	got, _ = d.JSONExtractTyped("t.j", []rule.Segment{{Key: "a"}})
+	check("json typed", got, `(to_jsonb([[t.j]]) #> '{"a"}')`)
+
+	for _, bad := range []string{`a"b`, `a'b`, "a\\b", "a,b", "a{", "a b", "a\x00b", ""} {
+		if _, err = d.JSONExtract("t.j", []rule.Segment{{Key: bad}}); !errors.Is(err, rule.ErrUnsupported) {
+			t.Fatalf("expected ErrUnsupported for the path segment %q, got %v", bad, err)
+		}
+	}
+
+	check("json scalar num", d.JSONScalar("{:p}", rule.ValueNumber), `to_jsonb(CAST({:p} AS DOUBLE PRECISION))`)
+	check("json scalar bool", d.JSONScalar("TRUE", rule.ValueBool), `to_jsonb(CAST(TRUE AS BOOLEAN))`)
+	check("empty bool", d.EmptyFor(rule.ValueBool), `CAST(NULL AS BOOLEAN)`)
+	check("empty text", d.EmptyFor(rule.ValueText), `''`)
+
+	for in, want := range map[string]string{"a": "a", `a\`: `a\\`, `a\\`: `a\\`, `a%\`: `a%\\`, `a\\\`: `a\\\\`} {
+		check("like normalize "+in, d.NormalizeLikePattern(in), want)
 	}
 
 	got, _ = d.JSONArrayLength("t.c")
@@ -55,16 +70,22 @@ func TestDialectSQL(t *testing.T) {
 	check("coalesce", d.CoalesceEmpty("x"), `COALESCE(CAST(x AS TEXT), '')`)
 	check("eq", d.NullSafeEq("a", "b", true), `a IS NOT DISTINCT FROM b`)
 	check("neq", d.NullSafeEq("a", "b", false), `a IS DISTINCT FROM b`)
-	check("like col", d.Like("a", "b", false, true), `CAST(a AS TEXT) ILIKE ('%' || CAST(b AS TEXT) || '%') ESCAPE '\'`)
-	check("nlike col", d.Like("a", "b", true, true), `CAST(a AS TEXT) NOT ILIKE ('%' || CAST(b AS TEXT) || '%') ESCAPE '\'`)
-	check("like param", d.Like("a", "{:p}", false, false), `CAST(a AS TEXT) ILIKE {:p} ESCAPE '\'`)
+	check("like col", d.Like("a", "b", false, true), `CAST(a AS TEXT) ILIKE ('%' || CAST(b AS TEXT) || '%') ESCAPE E'\\'`)
+	check("nlike col", d.Like("a", "b", true, true), `CAST(a AS TEXT) NOT ILIKE ('%' || CAST(b AS TEXT) || '%') ESCAPE E'\\'`)
+	check("like param", d.Like("a", "{:p}", false, false), `CAST(a AS TEXT) ILIKE {:p} ESCAPE E'\\'`)
 	check("optional on", d.OptionalOn(), ` ON TRUE`)
 	check("exists", d.ExistsNone("S", "x", "W"), `NOT EXISTS (SELECT 1 FROM (S) {{x}} WHERE W)`)
 	check("exists many", d.ExistsNoneMany("L", "l", "R", "r", "W"), `NOT EXISTS (SELECT 1 FROM (L) {{l}} LEFT JOIN (R) {{r}} ON TRUE WHERE W)`)
 
 	got, _ = d.GeoDistance("lonA", "latA", "lonB", "latB")
-	check("geo", got, `(CASE WHEN (cos(radians(CAST(latA AS DOUBLE PRECISION))) * cos(radians(CAST(latB AS DOUBLE PRECISION))) * cos(radians(CAST(lonB AS DOUBLE PRECISION)) - radians(CAST(lonA AS DOUBLE PRECISION))) + sin(radians(CAST(latA AS DOUBLE PRECISION))) * sin(radians(CAST(latB AS DOUBLE PRECISION)))) IS NULL THEN NULL ELSE `+
-		`6371 * acos(LEAST(1, GREATEST(-1, cos(radians(CAST(latA AS DOUBLE PRECISION))) * cos(radians(CAST(latB AS DOUBLE PRECISION))) * cos(radians(CAST(lonB AS DOUBLE PRECISION)) - radians(CAST(lonA AS DOUBLE PRECISION))) + sin(radians(CAST(latA AS DOUBLE PRECISION))) * sin(radians(CAST(latB AS DOUBLE PRECISION)))))) END)`)
+	for _, arg := range []string{"lonA", "latA", "lonB", "latB"} {
+		if strings.Count(got, arg) != 1 {
+			t.Fatalf("geo: argument %s must appear exactly once: %s", arg, got)
+		}
+	}
+	if !strings.Contains(got, "CASE WHEN t.lo1 ~ '") || strings.Contains(got, "CAST(latA AS DOUBLE") {
+		t.Fatalf("geo: expected guarded casts: %s", got)
+	}
 }
 
 func TestDialectUnsupported(t *testing.T) {

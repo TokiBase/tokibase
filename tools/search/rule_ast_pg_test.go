@@ -47,7 +47,9 @@ func buildDialect(app *tests.TestApp, col *kernel.Collection, ri *kernel.Request
 
 	var e dbx.Expression
 	if usePG {
-		resolver.SetDialect(pg.Dialect)
+		if err := resolver.SetDialect(pg.Dialect); err != nil {
+			return dialectOutcome{err: err}
+		}
 		e, err = pg.Emit(ast, resolver)
 	} else {
 		e, err = rulesql.Emit(ast, resolver)
@@ -87,7 +89,7 @@ var (
 	randAliasRegex   = regexp.MustCompile(`__(sm|ml|mr)[A-Za-z0-9]{8}`)
 	isRegex          = regexp.MustCompile(`\bIS\s+(NOT\s+)?(\w+)`)
 	likeRegex        = regexp.MustCompile(`(^|[^I])LIKE\b`)
-	sqliteOnlyRegex  = regexp.MustCompile(`(?i)\b(json_each|json_valid|json_type|json_array_length|json_extract|json_object|json_array|strftime|iif)\s*\(|\bmin\(1|\bmax\(-1`)
+	sqliteOnlyRegex  = regexp.MustCompile(`(?i)\b(json_each|json_valid|json_type|json_array_length|json_extract|json_object|json_array|strftime|iif|ifnull|typeof|instr|substr|datetime|group_concat)\s*\(|\bglob\b|\bmin\(1|\bmax\(-1`)
 )
 
 // normalizePG renders the dbx output the way a PostgreSQL connection would
@@ -114,6 +116,30 @@ func normalizePG(sql string, params map[string]any) (string, string) {
 	}
 
 	return sql, strings.TrimSpace(sb.String())
+}
+
+// paramsEqualModLikeNormalization reports whether the params are equal except
+// for LIKE patterns that the PostgreSQL dialect had to normalize (dangling escape).
+func paramsEqualModLikeNormalization(lite, post map[string]any) bool {
+	if len(lite) != len(post) {
+		return false
+	}
+
+	for k, lv := range lite {
+		pv, ok := post[k]
+		if !ok {
+			return false
+		}
+		if fmt.Sprintf("%#v", lv) == fmt.Sprintf("%#v", pv) {
+			continue
+		}
+		ls, isStr := lv.(string)
+		if !isStr || pv != pg.Dialect.NormalizeLikePattern(ls) {
+			return false
+		}
+	}
+
+	return true
 }
 
 func placeholderOrder(sql string) []string {
@@ -165,6 +191,17 @@ var pgGoldenExprs = []string{
 	`datetime > @now`, `datetime >= @todayStart && datetime <= @todayEnd`, `@year = 2026`,
 	`geoDistance(1, 2, 3, 4) < 10`, `geoDistance(point.lon, point.lat, 23.32, 42.69) < 200`,
 	`strftime('%Y', created) = '2026'`, `text = 'a' && missing = 1`,
+	// typed semantics (QC round 5)
+	`@request.body.missingbool = true`, `@request.body.missingbool != false`, `@request.body.missingnum = 5`,
+	`@request.body.missingnum = number`, `@request.body.bool = true`,
+	`json.flag = true`, `json.flag != false`, `json.count > 5`, `json.count <= 5.5`, `json.count = number`, `json.flag = bool`,
+	`json.null = 'x'`, `json:lower = 'a'`, `json.a.b:lower = 'a'`,
+	`number:lower = 1`, `number = number`, `number != number`, `bool = bool`, `datetime = datetime`,
+	`text ~ "a%\\"`, `text ~ "a\\"`, `text !~ "100%"`,
+	`geoDistance(point.lon, point.lat, json.lon, json.lat) < 10`,
+	`@collection.demo2.title = 'x' && json.a = true`, `@collection.demo1:x.json.a = 1`, `@collection.demo1:x.json.a = 'x'`,
+	`@request.body.number:lower = '12.5'`,
+	`rel_many.json.a = 1`, `rel_many.json.a = 'x'`,
 }
 
 func pgTestApp(t *testing.T) (*tests.TestApp, *kernel.RequestInfo, func()) {
@@ -318,7 +355,7 @@ func TestRulePostgresStructuralParity(t *testing.T) {
 				default:
 					same++
 
-					if lite.params != post.params {
+					if lite.params != post.params && !paramsEqualModLikeNormalization(lite.rawParams, post.rawParams) {
 						problems = append(problems, id+": params differ\n  sqlite:   "+lite.params+"\n  postgres: "+post.params)
 					}
 
@@ -368,8 +405,157 @@ func TestRuleEmitDialectMismatch(t *testing.T) {
 		t.Fatal("expected a dialect mismatch error for the SQLite resolver")
 	}
 
-	r.SetDialect(pg.Dialect)
+	if err := r.SetDialect(pg.Dialect); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := rulesql.Emit(ast, r); err == nil {
 		t.Fatal("expected a dialect mismatch error for the PostgreSQL resolver")
+	}
+}
+
+// Dialect specific typed constructs must appear where the engine knows the
+// operand types (the structural test cannot see type errors).
+func TestRulePostgresTypedCasts(t *testing.T) {
+	defer search.SetRuleASTForTest(false)()
+
+	app, ri, cleanup := pgTestApp(t)
+	defer cleanup()
+
+	col, err := app.FindCollectionByNameOrId("demo1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	scenarios := []struct {
+		expr     string
+		contains []string
+		excludes []string
+	}{
+		{`json.flag = true`, []string{`#> '{"flag"}') IS NOT DISTINCT FROM to_jsonb(CAST(TRUE AS BOOLEAN))`}, []string{`#>>`}},
+		{`json.count > 5`, []string{`#> '{"count"}') > to_jsonb(CAST({:`, `AS DOUBLE PRECISION))`}, []string{`#>>`}},
+		{`json.a = 'x'`, []string{`#>> '{"a"}')`}, []string{`to_jsonb(CAST(`}},
+		{`json.null = 'x'`, []string{`'{"null"}'`}, nil},
+		{`@request.body.missingbool = true`, []string{`CAST(NULL AS BOOLEAN) IS NOT DISTINCT FROM TRUE`}, []string{`'' = TRUE`}},
+		{`@request.body.missingbool != true`, []string{`CAST(NULL AS BOOLEAN) IS DISTINCT FROM TRUE`}, nil},
+		{`@request.body.missingnum = 5`, []string{`CAST(NULL AS DOUBLE PRECISION) IS NOT DISTINCT FROM {:`}, nil},
+		{`number = number`, []string{`[[demo1.number]] IS NOT DISTINCT FROM [[demo1.number]]`}, []string{`CAST(`}},
+		{`datetime != datetime`, []string{`[[demo1.datetime]] IS DISTINCT FROM [[demo1.datetime]]`}, []string{`CAST(`}},
+		{`number:lower = 1`, []string{`LOWER(CAST([[demo1.number]] AS TEXT))`}, nil},
+		{`json:lower = 'a'`, []string{`LOWER(CAST(`}, nil},
+		{`@request.body.text:lower = 'a'`, []string{`LOWER(CAST({:`}, nil},
+		{`text ~ 'a'`, []string{`ESCAPE E'\\'`}, nil},
+		{`geoDistance(1, 2, 3, 4) < 10`, []string{`CASE WHEN t.lo1 ~ '^ *[-+]?`, `AS DOUBLE PRECISION) END`}, nil},
+	}
+
+	for _, s := range scenarios {
+		out := buildDialect(app, col, ri, s.expr, true, true)
+		if out.err != nil {
+			t.Errorf("%q: %v", s.expr, out.err)
+			continue
+		}
+		for _, c := range s.contains {
+			if !strings.Contains(out.sql, c) {
+				t.Errorf("%q: expected %q in\n%s", s.expr, c, out.sql)
+			}
+		}
+		for _, c := range s.excludes {
+			if strings.Contains(out.sql, c) {
+				t.Errorf("%q: unexpected %q in\n%s", s.expr, c, out.sql)
+			}
+		}
+	}
+
+	// a dangling escape character in the user pattern is doubled
+	out := buildDialect(app, col, ri, `text ~ "a%\\"`, true, true)
+	if out.err != nil {
+		t.Fatal(out.err)
+	}
+	found := false
+	for _, v := range out.rawParams {
+		if v == "a%\\\\" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected the doubled trailing backslash, got %v", out.rawParams)
+	}
+
+	// SQLite keeps the user pattern untouched
+	lite := buildDialect(app, col, ri, `text ~ "a%\\"`, false, true)
+	for _, v := range lite.rawParams {
+		if v != "a%\\" {
+			t.Fatalf("sqlite pattern must stay unchanged, got %q", v)
+		}
+	}
+}
+
+// SetDialect after Resolve would leave joins of the previous dialect behind.
+func TestRuleSetDialectAfterResolve(t *testing.T) {
+	app, _, cleanup := pgTestApp(t)
+	defer cleanup()
+
+	col, _ := app.FindCollectionByNameOrId("demo1")
+
+	r := kernel.NewRecordFieldResolver(app, col, nil, true)
+	if _, err := r.Resolve("text"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SetDialect(pg.Dialect); err == nil {
+		t.Fatal("expected an error when SetDialect is called after Resolve")
+	}
+}
+
+type nilDialectResolver struct{ *kernel.RecordFieldResolver }
+
+func (nilDialectResolver) Dialect() rule.Dialect { return nil }
+
+// A resolver reporting a nil dialect is an error, not a panic.
+func TestRuleNilDialectResolver(t *testing.T) {
+	app, _, cleanup := pgTestApp(t)
+	defer cleanup()
+
+	col, _ := app.FindCollectionByNameOrId("demo1")
+	ast, _ := rule.Parse(`text = 'a'`)
+
+	r := nilDialectResolver{kernel.NewRecordFieldResolver(app, col, nil, true)}
+	if _, err := rulesql.Emit(ast, r); err == nil {
+		t.Fatal("expected an error for a nil resolver dialect")
+	}
+	if _, err := search.FilterData(`text = 'a'`).BuildExpr(r); err == nil {
+		t.Fatal("expected an error for a nil resolver dialect (BuildExpr)")
+	}
+}
+
+// The multi-value back relation (demo1.rel_many -> users) builds the member
+// join (and the multi-match join) end to end with the array-member condition.
+func TestRulePostgresMultiBackRelation(t *testing.T) {
+	defer search.SetRuleASTForTest(false)()
+
+	app, ri, cleanup := pgTestApp(t)
+	defer cleanup()
+
+	col, err := app.FindCollectionByNameOrId("users")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, expr := range []string{`demo1_via_rel_many.text = 'x'`, `demo1_via_rel_many.text ?= 'x'`} {
+		out := buildDialect(app, col, ri, expr, true, true)
+		if out.err != nil {
+			t.Fatalf("%q: %v", expr, out.err)
+		}
+
+		want := 1
+		if !strings.Contains(expr, "?=") {
+			want = 2 // main join + multi-match subquery
+		}
+
+		if n := strings.Count(out.sql, "jsonb_array_elements_text("); n != want {
+			t.Fatalf("%q: expected %d array-member conditions, got %d:\n%s", expr, want, n, out.sql)
+		}
+
+		if !strings.Contains(out.sql, "LEFT JOIN") || pgViolations(out.sql) != nil {
+			t.Fatalf("%q: unexpected SQL (%v):\n%s", expr, pgViolations(out.sql), out.sql)
+		}
 	}
 }

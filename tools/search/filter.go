@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -98,13 +99,14 @@ func (f FilterData) BuildExprWithLimit(
 	// (the legacy compiler is SQLite only)
 	d := sqliteDialect
 	if dr, ok := fieldResolver.(DialectResolver); ok {
-		if rd := dr.Dialect(); rd != nil {
-			d = rd
+		d = dr.Dialect()
+		if d == nil {
+			return nil, errNilDialect
 		}
 	}
 
 	// experimental rule AST path (see docs/RULE_ENGINE.md)
-	if RuleASTEnabled() || d != sqliteDialect {
+	if RuleASTEnabled() || !isSQLiteDialect(d) {
 		return buildExprViaAST(d, raw, cacheKey, fieldResolver, maxExpressions)
 	}
 
@@ -206,6 +208,11 @@ func buildResolversExpr(
 ) (dbx.Expression, error) {
 	var expr dbx.Expression
 
+	left, right, err := adaptJSONOperands(d, op, left, right)
+	if err != nil {
+		return nil, err
+	}
+
 	switch op {
 	case fexpr.SignEq, fexpr.SignAnyEq:
 		expr = resolveEqualExpr(d, true, left, right)
@@ -282,7 +289,7 @@ func buildLikeExpr(d rule.Dialect, negate bool, left, right *ResolverResult) dbx
 		return dbx.NewExp(d.Like(left.Identifier, right.Identifier, negate, true), left.Params)
 	}
 
-	return dbx.NewExp(d.Like(left.Identifier, right.Identifier, negate, false), mergeParams(left.Params, wrapLikeParams(right.Params)))
+	return dbx.NewExp(d.Like(left.Identifier, right.Identifier, negate, false), mergeParams(left.Params, wrapLikeParams(d, right.Params)))
 }
 
 // keywordIdentifiers are the identifiers that, if no field of that name exists,
@@ -347,6 +354,9 @@ func resolveToken(d rule.Dialect, token fexpr.Token, fieldResolver FieldResolver
 	case fexpr.TokenFunction:
 		fn, ok := tokenFunctionsFor(d)[token.Literal]
 		if !ok {
+			if _, custom := TokenFunctions[token.Literal]; custom && !isSQLiteDialect(d) {
+				return nil, fmt.Errorf("function %q: %w: only available for the sqlite dialect", token.Literal, rule.ErrUnsupported)
+			}
 			return nil, fmt.Errorf("unknown function %q", token.Literal)
 		}
 
@@ -397,6 +407,18 @@ func resolveEqualExpr(d rule.Dialect, equal bool, left, right *ResolverResult) d
 		)
 	}
 
+	// 2 columns of the same non-text type (number, bool, date) are compared
+	// natively by the dialects that need it (a text comparison would make
+	// 1.00 != 1); NULL = NULL and NULL != value keep the COALESCE semantics
+	if left.Type != rule.ValueUnknown && left.Type == right.Type &&
+		left.NullFallback != NullFallbackEnforced && right.NullFallback != NullFallbackEnforced &&
+		d.NativeCompare(left.Type) {
+		return dbx.NewExp(
+			d.NullSafeEq(left.Identifier, right.Identifier, equal),
+			mergeParams(left.Params, right.Params),
+		)
+	}
+
 	isLeftEmpty := isEmptyIdentifier(left) ||
 		(left.NullFallback == NullFallbackAuto && len(left.Params) == 1 && hasEmptyParamValue(left))
 
@@ -413,12 +435,22 @@ func resolveEqualExpr(d rule.Dialect, equal bool, left, right *ResolverResult) d
 	if isKnownNonEmptyIdentifier(left) || isKnownNonEmptyIdentifier(right) {
 		leftIdentifier := left.Identifier
 		if isLeftEmpty {
-			leftIdentifier = "''"
+			leftIdentifier = d.EmptyFor(scalarKind(right))
 		}
 		rightIdentifier := right.Identifier
 		if isRightEmpty {
-			rightIdentifier = "''"
+			rightIdentifier = d.EmptyFor(scalarKind(left))
 		}
+
+		// a typed NULL replaced the empty string (it is not comparable with
+		// "=" the way '' is), so compare null-safe
+		if (isLeftEmpty && leftIdentifier != "''") || (isRightEmpty && rightIdentifier != "''") {
+			return dbx.NewExp(
+				d.NullSafeEq(leftIdentifier, rightIdentifier, equal),
+				mergeParams(left.Params, right.Params),
+			)
+		}
+
 		return dbx.NewExp(
 			cmp(leftIdentifier, rightIdentifier),
 			mergeParams(left.Params, right.Params),
@@ -522,7 +554,7 @@ func mergeParams(params ...dbx.Params) dbx.Params {
 //
 // wrapLikeParams wraps each provided param value string with `%`
 // if the param doesn't contain an explicit wildcard (`%`) character already.
-func wrapLikeParams(params dbx.Params) dbx.Params {
+func wrapLikeParams(d rule.Dialect, params dbx.Params) dbx.Params {
 	result := dbx.Params{}
 
 	for k, v := range params {
@@ -532,7 +564,7 @@ func wrapLikeParams(params dbx.Params) dbx.Params {
 			vStr = escapeUnescapedChars(vStr, '\\', '%', '_')
 			vStr = "%" + vStr + "%"
 		}
-		result[k] = vStr
+		result[k] = d.NormalizeLikePattern(vStr)
 	}
 
 	return result
@@ -765,4 +797,104 @@ func (e *manyVsOneExpr) Build(db *dbx.DB, params dbx.Params) string {
 		alias,
 		whereExpr.Build(db, params),
 	)
+}
+
+var errNilDialect = errors.New("the field resolver returned a nil dialect")
+
+// isSQLiteDialect reports whether d is the SQLite dialect (compared by
+// identity when the dynamic type allows it, so a dialect that merely reuses
+// the name "sqlite" doesn't pass).
+func isSQLiteDialect(d rule.Dialect) bool {
+	return sameDialect(d, sqliteDialect)
+}
+
+// sameDialect compares 2 dialects without panicking on non-comparable types.
+func sameDialect(a, b rule.Dialect) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+
+	ta, tb := reflect.TypeOf(a), reflect.TypeOf(b)
+	if ta != tb {
+		return false
+	}
+
+	if ta.Comparable() {
+		return a == b
+	}
+
+	return a.Name() == b.Name()
+}
+
+// scalarKind returns the number/bool kind of an operand (unknown otherwise).
+func scalarKind(r *ResolverResult) rule.ValueType {
+	if r.Type == rule.ValueNumber || r.Type == rule.ValueBool {
+		return r.Type
+	}
+
+	if len(r.Params) == 0 {
+		switch strings.ToLower(r.Identifier) {
+		case "true", "false":
+			return rule.ValueBool
+		}
+		if _, err := strconv.Atoi(r.Identifier); err == nil {
+			return rule.ValueNumber
+		}
+		return rule.ValueUnknown
+	}
+
+	if len(r.Params) != 1 {
+		return rule.ValueUnknown
+	}
+
+	for k, v := range r.Params {
+		if r.Identifier != "{:"+k+"}" {
+			return rule.ValueUnknown
+		}
+		switch v.(type) {
+		case bool:
+			return rule.ValueBool
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+			return rule.ValueNumber
+		}
+	}
+
+	return rule.ValueUnknown
+}
+
+// adaptJSONOperands switches a JSON member that is compared with a number or
+// boolean to its typed form (and converts the other side), for dialects whose
+// plain JSON extraction yields text.
+func adaptJSONOperands(d rule.Dialect, op fexpr.SignOp, left, right *ResolverResult) (*ResolverResult, *ResolverResult, error) {
+	switch op {
+	case fexpr.SignLike, fexpr.SignAnyLike, fexpr.SignNlike, fexpr.SignAnyNlike:
+		return left, right, nil
+	}
+
+	adapt := func(j, other *ResolverResult) (*ResolverResult, *ResolverResult, bool, error) {
+		kind := scalarKind(other)
+		if j.JSONTyped == "" || j.JSONTyped == j.Identifier || (kind != rule.ValueNumber && kind != rule.ValueBool) {
+			return j, other, false, nil
+		}
+
+		if j.MultiMatchSubQuery != nil || other.MultiMatchSubQuery != nil {
+			return nil, nil, false, fmt.Errorf("%w: %s: comparing a JSON member of a multi-match path with a number or boolean", rule.ErrUnsupported, d.Name())
+		}
+
+		jc, oc := *j, *other
+		jc.Identifier = j.JSONTyped
+		oc.Identifier = d.JSONScalar(other.Identifier, kind)
+
+		return &jc, &oc, true, nil
+	}
+
+	if l, r, ok, err := adapt(left, right); err != nil || ok {
+		return l, r, err
+	}
+
+	if r, l, ok, err := adapt(right, left); err != nil || ok {
+		return l, r, err
+	}
+
+	return left, right, nil
 }
