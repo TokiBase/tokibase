@@ -49,6 +49,12 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: tamper-evident trail of superuser, impersonated, schema and settings changes.
 - Migration path: none needed; an upstream `pb_data` gains the table on first start, and removing it (or running upstream) simply ignores it. See `docs/modules/audit.md`.
 
+### New `_jobs` table in auxiliary.db (phase 2, `modules/jobs`)
+
+- What: new `_jobs` table in `auxiliary.db` (durable job queue), in-process workers started at `OnServe` (`TOKI_JOBS_WORKERS`, default 4), a new `jobs` CLI command and `serve --role worker` / `TOKI_ROLE=worker` (only `/api/health` is served). No REST/SDK change in the default role; `data.db` untouched. `TOKI_JOBS=off` skips registration.
+- Why: shared foundation for push, webhooks and data jobs.
+- Migration: none needed; an upstream `pb_data` gains the table on first start, and removing it (or running upstream) simply ignores it. See `docs/modules/jobs.md`.
+
 ### Boot warning for plain HTTP without trusted proxy (phase 1, tlscheck)
 
 - What: `modules/tlscheck` logs a warning (and prints it to stderr) at `OnServe` when the server listens on plain HTTP on a non-loopback address and `Settings.TrustedProxy.Headers` is empty; `TOKI_TLS_CHECK=strict` makes `serve` refuse to start in that case. REST, settings and `pb_data` are unchanged.

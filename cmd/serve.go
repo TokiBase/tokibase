@@ -18,6 +18,7 @@ func NewServeCommand(app core.App, showStartBanner bool) *cobra.Command {
 	var allowedOrigins []string
 	var httpAddr string
 	var httpsAddr string
+	var role string
 
 	command := &cobra.Command{
 		Use:          "serve [domain(s)]",
@@ -37,6 +38,15 @@ func NewServeCommand(app core.App, showStartBanner bool) *cobra.Command {
 				if httpAddr == "" {
 					httpAddr = "127.0.0.1:8090"
 				}
+			}
+
+			switch role {
+			case "":
+			case "all", "worker":
+				// consumed by modules/jobs (worker role: only /api/health is served)
+				os.Setenv("TOKI_ROLE", role)
+			default:
+				return fmt.Errorf("invalid --role %q (use all or worker)", role)
 			}
 
 			if m := adminlock.ModeFromEnv(); m != adminlock.ModeOn {
@@ -71,6 +81,13 @@ func NewServeCommand(app core.App, showStartBanner bool) *cobra.Command {
 		"http",
 		"",
 		"TCP address to listen for the HTTP server\n(if domain args are specified - default to 0.0.0.0:80, otherwise - default to 127.0.0.1:8090)",
+	)
+
+	command.PersistentFlags().StringVar(
+		&role,
+		"role",
+		"",
+		"Process role: all (default) or worker (runs job workers, serves only /api/health; same as TOKI_ROLE=worker)",
 	)
 
 	command.PersistentFlags().StringVar(
