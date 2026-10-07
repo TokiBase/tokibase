@@ -155,7 +155,7 @@ var pgGoldenExprs = []string{
 	`text = email && number != 3 || bool = true`, `(text ~ 'a' || text ~ 'b') && number >= 1`,
 	`text ~ email`, `json.a.b = 'x'`, `json.a.0 = 1`, `json = 'x'`, `json:length = 1`, `select_many:length > 1`,
 	`text:lower = 'abc'`, `email:lower ~ 'a'`,
-	`rel_one.title = 'x'`, `rel_one.id = 'x'`, `rel_one.title != rel_one.title`, `rel_one.rel_one.title ~ 'x'`,
+	`rel_one.text = 'x'`, `rel_one.id = 'x'`, `rel_one.text != rel_one.text`, `rel_one.rel_one.text ~ 'x'`,
 	`demo1_via_rel_one.text = 'x'`, `demo1_via_rel_many.text ?= 'x'`, `demo1_via_rel_many.text = 'x'`,
 	`rel_many.title = 'a'`, `rel_many.title ?= 'a'`, `select_many:each ~ 'a'`,
 	`@request.auth.id != ''`, `@request.auth.id = id`, `@request.auth.verified = true`, `@request.auth.rel.title = 'x'`,
