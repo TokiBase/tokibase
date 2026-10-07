@@ -25,13 +25,14 @@ import (
 	"github.com/tokibase/tokibase/modules/jobs"
 	"github.com/tokibase/tokibase/modules/lockout"
 	"github.com/tokibase/tokibase/modules/mcp"
+	"github.com/tokibase/tokibase/modules/passkey"
+	"github.com/tokibase/tokibase/modules/push"
 	"github.com/tokibase/tokibase/modules/ruleguard"
 	"github.com/tokibase/tokibase/modules/sessions"
 	"github.com/tokibase/tokibase/modules/store/sqlite"
 	"github.com/tokibase/tokibase/modules/timelint"
 	"github.com/tokibase/tokibase/modules/tlscheck"
 	"github.com/tokibase/tokibase/modules/walreplica"
-	"github.com/tokibase/tokibase/modules/push"
 	"github.com/tokibase/tokibase/modules/webhooks"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/list"
@@ -217,6 +218,22 @@ func NewWithConfig(config Config) *PocketBase {
 				}
 			})
 		}
+	}
+
+	// WebAuthn passkeys: active only when TOKI_PASSKEY_RP_ID is set (see docs/modules/passkey.md)
+	passkey.Register(pb.App.(core.App))
+	passkey.SetFailureSink(lockout.RecordFailure)
+	if auditLog != nil {
+		passkey.SetAuditSink(func(action, collection, record string, details map[string]any) {
+			after, _ := json.Marshal(details)
+			afterStr := string(after)
+			if err := auditLog.Append(&audit.Entry{
+				ActorKind: "system", Action: action, Collection: collection,
+				Record: record, After: &afterStr,
+			}); err != nil {
+				pb.Logger().Warn("audit: failed to record "+action, "error", err)
+			}
+		})
 	}
 
 	// durable job queue (TOKI_JOBS=off disables; TOKI_JOBS_WORKERS, TOKI_ROLE=worker)
@@ -424,6 +441,7 @@ func (pb *PocketBase) Start() error {
 	}
 	pb.RootCmd.AddCommand(cmd.NewLockoutCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewSessionsCommand(pb))
+	pb.RootCmd.AddCommand(passkey.NewCommand(pb))
 	if jobs.Enabled() {
 		pb.RootCmd.AddCommand(jobs.NewCommand(pb))
 	}
