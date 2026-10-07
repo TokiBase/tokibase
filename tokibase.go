@@ -22,6 +22,7 @@ import (
 	"github.com/tokibase/tokibase/modules/denylog"
 	"github.com/tokibase/tokibase/modules/lockout"
 	"github.com/tokibase/tokibase/modules/ruleguard"
+	"github.com/tokibase/tokibase/modules/sessions"
 	"github.com/tokibase/tokibase/modules/store/sqlite"
 	"github.com/tokibase/tokibase/modules/timelint"
 	"github.com/tokibase/tokibase/modules/tlscheck"
@@ -195,6 +196,23 @@ func NewWithConfig(config Config) *PocketBase {
 		}
 	}
 
+	// server-side sessions: sid claim, revocation, rotation (TOKI_SESSIONS=off disables)
+	if sessions.Enabled() {
+		sessions.Register(pb.App.(core.App))
+		if auditLog != nil {
+			sessions.SetAuditSink(func(action, collection, record string, details map[string]any) {
+				after, _ := json.Marshal(details)
+				afterStr := string(after)
+				if err := auditLog.Append(&audit.Entry{
+					ActorKind: "system", Action: action, Collection: collection,
+					Record: record, After: &afterStr,
+				}); err != nil {
+					pb.Logger().Warn("audit: failed to record "+action, "error", err)
+				}
+			})
+		}
+	}
+
 	// warn when serving plain HTTP on a reachable address without trusted proxy headers (TOKI_TLS_CHECK=warn|strict|off)
 	tlscheck.Register(pb.App.(core.App))
 
@@ -289,6 +307,7 @@ func (pb *PocketBase) Start() error {
 		pb.RootCmd.AddCommand(audit.NewCommand(pb))
 	}
 	pb.RootCmd.AddCommand(cmd.NewLockoutCommand(pb))
+	pb.RootCmd.AddCommand(cmd.NewSessionsCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewTimeCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewDenyCommand(pb))
 

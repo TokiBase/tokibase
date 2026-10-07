@@ -33,6 +33,21 @@ var (
 	ErrMissingSigningKey = errors.New("missing or invalid signing key")
 )
 
+// TokenIssueKind describes the kind of auth token passed to [OnAuthTokenIssue].
+const (
+	TokenIssueAuth   = "auth"   // regular refreshable token
+	TokenIssueStatic = "static" // non-refreshable token (impersonation, NewStaticAuthToken)
+)
+
+// OnAuthTokenIssue is an optional seam called for every auth token right
+// before it is signed. The callback may add claims to the provided map
+// (for example a session id) and may record the issuance. It must not
+// remove or overwrite the standard claims. A nil value (the default) keeps
+// the upstream behavior byte for byte.
+//
+// It is a process wide variable, set once at startup (see modules/sessions).
+var OnAuthTokenIssue func(record *Record, kind string, claims jwt.MapClaims, duration time.Duration)
+
 // NewStaticAuthToken generates and returns a new static record authentication token.
 //
 // Static auth tokens are similar to the regular auth tokens, but are
@@ -67,6 +82,14 @@ func (m *Record) newAuthToken(duration time.Duration, refreshable bool) (string,
 
 	if duration <= 0 {
 		duration = m.Collection().AuthToken.DurationTime()
+	}
+
+	if fn := OnAuthTokenIssue; fn != nil {
+		kind := TokenIssueAuth
+		if !refreshable {
+			kind = TokenIssueStatic
+		}
+		fn(m, kind, claims, duration)
 	}
 
 	return security.NewJWT(claims, key, duration)

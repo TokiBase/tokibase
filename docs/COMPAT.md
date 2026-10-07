@@ -90,6 +90,12 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: upstream rate limits are IP/path based and do not stop credential stuffing spread over many IPs.
 - Migration: nothing needed. `TOKI_LOCKOUT=off` disables it; `toki lockout unlock|clear` recovers locked accounts. See `docs/modules/lockout.md`.
 
+### `sid` claim in auth JWTs, revoked tokens answer 401 before expiry, new `_sessions` table (phase 2, `modules/sessions`)
+
+- What: every auth token (login, refresh, impersonation) gains a `sid` claim and a row in the new `_sessions` table in `data.db`. A token whose session was revoked (CLI, password or email change, optional rotation) is treated as unauthenticated: authed endpoints return upstream's 401 shape before the token's `exp`. Tokens issued without the module (no `sid`) are unaffected. New `sessions` CLI command, optional request header `X-Toki-Device`. Rotation (`TOKI_SESSIONS_ROTATE=on`, default off) makes `auth-refresh` revoke the previous token, which can log out parallel tabs sharing a token. Endpoints, bodies and token signing are unchanged; the kernel gained the `kernel.OnAuthTokenIssue` seam (nil = upstream behavior).
+- Why: stolen or lost-device tokens could not be invalidated before expiry without changing the user's `tokenKey`.
+- Migration: nothing needed; an upstream `pb_data` gains the table on first start and upstream ignores it (upstream does not know `sid`, so after going back to upstream revoked tokens work again until expiry). `TOKI_SESSIONS=off` disables everything. See `docs/modules/sessions.md`.
+
 ## Not promised
 
 - Go package API (`core`, `apis`, ...) may change between TokiBase minor versions.
