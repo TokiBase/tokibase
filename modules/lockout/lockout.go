@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pocketbase/dbx"
@@ -142,9 +143,23 @@ func New(app core.App, p Policy) *Module {
 	return &Module{app: app, policy: p, now: time.Now, cache: store.New[string, *entry](nil)}
 }
 
+// active is the module bound by Register, used by RecordFailure.
+var active atomic.Pointer[Module]
+
+// RecordFailure counts one failed authentication for an identity on behalf of
+// an auth method that has no lockout hook of its own (e.g. passkeys; wired in
+// tokibase.go). The key is the same as for OTP: <collection>:<identity>. It is
+// a no-op when the module is not registered.
+func RecordFailure(collection, identity string) {
+	if m := active.Load(); m != nil {
+		m.failure(collection, identity, Key(collection, identity))
+	}
+}
+
 // Register binds the lockout hooks to app.
 func Register(app core.App) *Module {
 	m := New(app, LoadPolicy())
+	active.Store(m)
 
 	init := func() {
 		if _, err := app.AuxDB().NewQuery(createTableSQL).Execute(); err != nil {

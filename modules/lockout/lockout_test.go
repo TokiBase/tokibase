@@ -253,3 +253,13 @@ func TestOTPLock(t *testing.T) {
 	e.now = e.now.Add(61 * time.Second)
 	do("1234567890", 200, `"token":`)
 }
+
+func TestRecordFailureExported(t *testing.T) {
+	e := setup(t, Policy{Threshold: 3})
+	for i := 0; i < 3; i++ {
+		RecordFailure("clients", "RecordID1")
+	}
+	if wait := e.m.lockedFor(Key("clients", "recordid1")); wait <= 0 {
+		t.Fatal("exported RecordFailure must count towards the lock")
+	}
+}

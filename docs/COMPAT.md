@@ -127,6 +127,12 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: agent identity and revocation must live in the same database as the data, and rules of a later phase will reference it.
 - Migration: nothing needed for REST clients and SDKs. Built with `-tags no_mcp` the collection is not created. Code that enumerates all collections (for example schema exporters) should skip `_agents` like the other system collections.
 
+### New `/api/collections/{collection}/passkeys/*` endpoints and `_passkeys` collection (phase 2, `modules/passkey`)
+
+- What: when `TOKI_PASSKEY_RP_ID` is set, six additive endpoints appear under `/api/collections/{collection}/passkeys/` (`register/options`, `register/verify`, `GET` list, `DELETE {id}`, `login/options`, `login/verify`). `login/verify` returns the standard auth response (`token`, `record`, `meta`) with `AuthMethod` `passkey`, so authRule, MFA, sessions and `OnRecordAuthRequest` apply. New system collection `_passkeys` (superusers only, `public_key` hidden) in `data.db`, new `_passkey_challenges` table in `auxiliary.db`, new `passkey` CLI command. Without the env nothing is registered: the endpoints answer 404 and no collection is created. No existing endpoint, status code or body shape changes.
+- Why: passwordless login with passkeys (Face ID / fingerprint / security key) without a custom backend.
+- Migration: nothing needed for REST clients and SDKs. Code that enumerates all collections can see `_passkeys` (like other `_` system collections). See `docs/modules/passkey.md`.
+
 ## Not promised
 
 - Go package API (`core`, `apis`, ...) may change between TokiBase minor versions.
