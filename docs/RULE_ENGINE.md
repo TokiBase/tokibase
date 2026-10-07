@@ -65,6 +65,10 @@ receive the full identifier string.
 
 Placeholders (`{:name}`) are still substituted textually before parsing, exactly as before.
 
+## Request auth kind
+
+`@request.auth.kind` is resolved by the field resolver (`kernel.RecordFieldResolver`), not by the parser or an emitter, so the legacy compiler and the AST path produce the same SQL. Values (`kernel.AuthKindOf`): `guest` (no auth), `user` (any auth collection but `_superusers`), `superuser`, `agent` (an MCP agent: `RequestInfo.Auth` is a record of the system collection `_agents`). It is a bound parameter like other static `@request.*` values. If the auth collection has a real field `kind`, that field wins (backward compatibility). For agents `@request.auth.id` is the agent id and `@request.auth.role` (`reader|writer|operator`) joins `_agents` like any auth field; operators bypass rules. Note `@request.auth.id != ""` is true for agents too: use `@request.auth.kind = "user"` for user-only rules. See `docs/modules/mcp.md`.
+
 ## What is still fused
 
 - Identifier resolution (`FieldResolver.Resolve`, `kernel/record_field_resolver*.go`) emits SQL, registers
