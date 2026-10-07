@@ -24,6 +24,11 @@ type env struct {
 
 func s(v string) *string { return &v }
 
+func rf(m *Module, c *core.Collection) map[string]*Rule {
+	r, _ := m.rulesFor(c)
+	return r
+}
+
 func buildMux(t *testing.T, app *tests.TestApp) http.Handler {
 	t.Helper()
 	router, err := apis.NewRouter(app)
@@ -212,8 +217,10 @@ func TestWriteRuleLeaderOnly(t *testing.T) {
 		t.Fatalf("non leader must be blocked: %d %v", code, b)
 	}
 	// modifier syntax is covered
-	if code, _ := e.do(t, e.other, "PATCH", url, `{"leader+":"x"}`); code != 400 {
-		t.Fatal("modifier must be blocked")
+	// (a modifier that leaves the stored value unchanged is not a change and passes)
+	code, _ := e.do(t, e.other, "PATCH", url, `{"leader+":"x"}`)
+	if cur, _ := e.app.FindRecordById("clans", r.Id); code != 400 && cur.GetString("leader") != e.owner.Id {
+		t.Fatalf("modifier changed the field without the rule: %d", code)
 	}
 	if code, b := e.do(t, e.owner, "PATCH", url, `{"leader":"`+e.other.Id+`"}`); code != 200 {
 		t.Fatalf("leader must pass: %d %v", code, b)
@@ -325,7 +332,7 @@ func TestCacheInvalidation(t *testing.T) {
 	if ok, err := Remove(e.app, "clans", "secret"); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
-	if rs := e.m.rulesFor(r.Collection()); len(rs) != 0 {
+	if rs := rf(e.m, r.Collection()); len(rs) != 0 {
 		t.Fatal("cache must refresh after delete")
 	}
 }
@@ -335,16 +342,16 @@ func TestCacheTTL(t *testing.T) {
 	now := time.Now()
 	e.m.now = func() time.Time { return now }
 	col, _ := e.app.FindCollectionByNameOrId("clans")
-	_ = e.m.rulesFor(col)
+	rf(e.m, col)
 	// write behind the module's back (another process)
 	if _, err := e.app.DB().NewQuery("INSERT INTO _field_rules (id, collection, field, read_rule, write_rule, note, created, updated) VALUES ('abcdefghij12345','clans','secret','\"\"','null','','','')").Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if len(e.m.rulesFor(col)) != 0 {
+	if len(rf(e.m, col)) != 0 {
 		t.Fatal("still cached")
 	}
 	now = now.Add(cacheTTL + time.Second)
-	if len(e.m.rulesFor(col)) != 1 {
+	if len(rf(e.m, col)) != 1 {
 		t.Fatal("ttl refresh expected")
 	}
 }

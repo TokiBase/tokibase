@@ -18,7 +18,9 @@ System collection `_field_rules` (main db, all API rules `null` = superusers onl
 | `note` | text | free text |
 | `created`, `updated` | autodate | |
 
-Unique index on `(collection, field)`. The module reads all rows into memory. The cache is invalidated on every create/update/delete event of `_field_rules` and at bootstrap, and also expires after 30 s so that changes made by another process (the CLI against a running server) are picked up.
+Unique index on `(collection, field)`. The module reads all rows into memory. The cache is invalidated on every create/update/delete event of `_field_rules` and at bootstrap, and also expires after 5 s so that changes made by another process (the CLI against a running server) are picked up: tightening a rule from the CLI takes effect on a running server within 5 s (instantly for rules changed through the server itself).
+
+Fail closed on load errors: if the rules cannot be loaded even once (DB busy, `_field_rules` missing), non-superusers get every field of every record hidden except `id`, expand is dropped and writes are refused with `503` until a load succeeds (we cannot know which fields are protected). A failed load is remembered for 5 s (no retry storm, no DB I/O under the lock). After a good load, a failed refresh keeps serving the previous rules.
 
 ## Semantics
 
@@ -34,13 +36,15 @@ A rule that fails to evaluate (typo, unknown field) fails closed: the field is h
 
 ## Read enforcement
 
-Bound to `OnRecordEnrich`, which upstream calls for every record that leaves through the record API: list, view, the create/update response, realtime events and every expanded relation (`expand=` enriches each related record with the same request info, context `expand`). After the rest of the enrich chain (including upstream's "superusers see hidden fields" step) the hook evaluates each field's rule against the stored record and calls `record.Hide(field)`. Hidden fields are simply absent from the JSON. Cost: one small query per protected field per record, only for collections that have rules.
+Bound to `OnRecordEnrich`, which upstream calls for every record that leaves through the record API: list, view, the create/update response, realtime events and every expanded relation (`expand=` enriches each related record with the same request info, context `expand`). After the rest of the enrich chain (including upstream's "superusers see hidden fields" step) the hook evaluates each field's rule against the stored record and calls `record.Hide(field)`. Hidden fields are simply absent from the JSON. Cost: one small query per protected field per record, only for collections that have rules, except that rules which cannot depend on the record (only `@request.auth.*`, `@request.context/method/headers/query`, datetime macros and literals; anything else, including field names, `@request.body.*` and `@collection.*`, counts as record-dependent) are evaluated once per (collection, field) and request.
+
+Relations: when a relation field is hidden, its entry is also removed from `expand`, at every depth of the expand tree (single, nested `a.b`, list, auth responses and realtime `options.query.expand`). Back-relation expands (`posts_via_clan`) drop the related records whose relation field is hidden. When request info is missing (custom code), protected fields are hidden (fail closed).
 
 ## Write enforcement
 
 Bound to `OnRecordCreateRequest` and `OnRecordUpdateRequest`, before `e.Next()`. For every key of the submitted body (modifiers `field+`, `+field`, `field-` count as `field`; uploaded files too) that has a `write_rule`:
 
-- update: the rule is evaluated against the ORIGINAL stored record (so "only the current leader may change `leader`" works), with the request info (`@request.body.*` holds the resolved values).
+- update: a key whose submitted (resolved) value equals the stored value is not a change and is skipped (SDKs that PATCH the whole record keep working); file fields are always evaluated. Otherwise the rule is evaluated against the ORIGINAL stored record (so "only the current leader may change `leader`" works), with the request info (`@request.body.*` holds the resolved values).
 - create: the rule is evaluated against the submitted data using the same one-row-CTE technique as upstream's create rule.
 
 Denial is `400` in the upstream validation shape, all denied fields listed:
@@ -83,5 +87,6 @@ Only the stored leader can change `leader` (also through `leader+` modifiers and
 
 - Scope is the record API. Not covered: files served from `/api/files/...` (a file field's URL stays fetchable by whoever knows it; protected file tokens are a separate mechanism), custom routes and JS/Go hooks that serialize records without `EnrichRecord`, direct `$app`/SQL access, backups.
 - A hidden field can still be used in `filter=` and `sort=` of list requests by users that can list the collection, which allows inferring its value one comparison at a time. Combine with a list rule when the value is secret.
-- Rules apply to the submitted keys only; a field changed by a hook or by another field's side effect is not checked.
+- Rules apply to the submitted keys only; a field changed by a hook or by another field's side effect is not checked. Write paths outside `OnRecordCreateRequest`/`OnRecordUpdateRequest` are not covered: email-change/verification/password-reset confirm, OAuth2 link/update of mapped fields, relation cascades, Go/JS hooks. On OAuth2 first login the server-mapped fields (`name`, `avatar`, ...) go through the create hook and ARE evaluated: a locked or ruled `name` makes OAuth2 sign-up fail with 400, so do not put a write rule on fields mapped by OAuth2.
+- Known limit (F3): file downloads from `/api/files/...` ignore field read rules (see first bullet).
 - No rule inheritance across collections; collection renames need the `_field_rules.collection` row updated (collection ids also match).
