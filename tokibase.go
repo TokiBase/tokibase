@@ -19,6 +19,7 @@ import (
 	"github.com/tokibase/tokibase/modules/adminlock"
 	"github.com/tokibase/tokibase/modules/audit"
 	"github.com/tokibase/tokibase/modules/backupcheck"
+	"github.com/tokibase/tokibase/modules/computed"
 	"github.com/tokibase/tokibase/modules/denylog"
 	"github.com/tokibase/tokibase/modules/fieldperm"
 	"github.com/tokibase/tokibase/modules/jobs"
@@ -248,6 +249,21 @@ func NewWithConfig(config Config) *PocketBase {
 		})
 	}
 
+	// server-maintained counters and rollups in _computed_fields (see docs/modules/computed.md)
+	computed.Register(pb.App.(core.App))
+	if auditLog != nil {
+		computed.SetAuditSink(func(action, collection, record string, details map[string]any) {
+			after, _ := json.Marshal(details)
+			afterStr := string(after)
+			if err := auditLog.Append(&audit.Entry{
+				ActorKind: "system", Action: action, Collection: collection,
+				Record: record, After: &afterStr,
+			}); err != nil {
+				pb.Logger().Warn("audit: failed to record "+action, "error", err)
+			}
+		})
+	}
+
 	// warn when serving plain HTTP on a reachable address without trusted proxy headers (TOKI_TLS_CHECK=warn|strict|off)
 	tlscheck.Register(pb.App.(core.App))
 
@@ -393,6 +409,7 @@ func (pb *PocketBase) Start() error {
 	pb.RootCmd.AddCommand(cmd.NewTimeCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewDenyCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewFieldPermCommand(pb))
+	pb.RootCmd.AddCommand(computed.NewCommand(pb))
 	for _, c := range mcp.NewCommands(pb) {
 		pb.RootCmd.AddCommand(c)
 	}
