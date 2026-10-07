@@ -32,10 +32,11 @@ func NewCommand(app core.App) *cobra.Command {
 				return err
 			}
 			if listJSON {
-				if all == nil {
-					all = []*Webhook{}
+				out := make([]*Webhook, 0, len(all))
+				for _, w := range all {
+					out = append(out, w.Redacted()) // header values masked, secret never serialized
 				}
-				return printJSON(c.OutOrStdout(), all)
+				return printJSON(c.OutOrStdout(), out)
 			}
 			for _, w := range all {
 				state := "enabled"
@@ -52,7 +53,7 @@ func NewCommand(app core.App) *cobra.Command {
 			return nil
 		},
 	}
-	list.Flags().BoolVar(&listJSON, "json", false, "output JSON (secrets are never printed)")
+	list.Flags().BoolVar(&listJSON, "json", false, "output JSON (secret never printed, header values masked)")
 
 	var name, url, secret, events, collections string
 	add := &cobra.Command{
@@ -76,7 +77,7 @@ func NewCommand(app core.App) *cobra.Command {
 	}
 	add.Flags().StringVar(&name, "name", "", "unique webhook name (required)")
 	add.Flags().StringVar(&url, "url", "", "receiver URL, http(s) (required)")
-	add.Flags().StringVar(&secret, "secret", "", "HMAC secret (generated and printed when empty)")
+	add.Flags().StringVar(&secret, "secret", "", "HMAC secret, at least 16 characters (generated and printed when empty; prefer generated, argv shows in shell history)")
 	add.Flags().StringVar(&events, "events", "", "comma separated events, e.g. record.create,collection.*,auth.login (required)")
 	add.Flags().StringVar(&collections, "collections", "", "comma separated collection names (empty = all)")
 	_ = add.MarkFlagRequired("name")
@@ -143,7 +144,7 @@ func NewCommand(app core.App) *cobra.Command {
 	deliveries.Flags().IntVar(&limit, "limit", 50, "maximum rows")
 	deliveries.Flags().BoolVar(&delJSON, "json", false, "output JSON")
 
-	var dead, now bool
+	var dead, now, force bool
 	replay := &cobra.Command{
 		Use: "replay [delivery-id]", Short: "Re-queue a delivery, or every dead one with --dead", Args: cobra.MaximumNArgs(1), SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
@@ -157,7 +158,11 @@ func NewCommand(app core.App) *cobra.Command {
 			if err := initTable(app); err != nil {
 				return err
 			}
-			n, err := Replay(app, id, now && id != "")
+			replayFn := Replay
+			if force {
+				replayFn = ReplayForce
+			}
+			n, err := replayFn(app, id, now && id != "")
 			if err != nil {
 				return err
 			}
@@ -179,6 +184,7 @@ func NewCommand(app core.App) *cobra.Command {
 		},
 	}
 	replay.Flags().BoolVar(&dead, "dead", false, "re-queue all dead deliveries")
+	replay.Flags().BoolVar(&force, "force", false, "also replay delivered or in-flight deliveries (may cause a duplicate)")
 	replay.Flags().BoolVar(&now, "now", false, "deliver a single delivery synchronously from this process")
 
 	root.AddCommand(list, add, rm, test, deliveries, replay)

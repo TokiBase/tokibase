@@ -78,6 +78,14 @@ var extraBlocked = []netip.Prefix{
 	netip.MustParsePrefix("100.64.0.0/10"), // CGNAT
 	netip.MustParsePrefix("192.0.0.0/24"),
 	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),    // reserved + broadcast
+	netip.MustParsePrefix("192.88.99.0/24"), // 6to4 relay anycast
+	netip.MustParsePrefix("64:ff9b::/96"),   // NAT64: embeds any IPv4, incl. metadata/private
+	netip.MustParsePrefix("64:ff9b:1::/48"), // local-use NAT64
+	netip.MustParsePrefix("2002::/16"),      // 6to4
+	netip.MustParsePrefix("2001::/32"),      // Teredo
+	netip.MustParsePrefix("::/96"),          // IPv4-compatible
+	netip.MustParsePrefix("fec0::/10"),      // site-local
 }
 
 func allowPrivate() bool {
@@ -159,14 +167,29 @@ func deliver(ctx context.Context, app core.App, deliveryID string) error {
 	}
 	wh := webhookOf(rec)
 	if !wh.Enabled && d.Event != EventPing {
-		// hold the delivery until the webhook is enabled again (or replayed)
-		setNext(app, d.Id, nowFn().Add(time.Minute))
+		// stop retrying: park the row as dead (kept for retention, replayable
+		// once the webhook is enabled again)
+		drop(app, d, "webhook disabled: delivery dropped (replay it after enabling the webhook)")
 		return nil
 	}
 
 	status, msg, ms := send(ctx, wh, d)
+	if d.Event != EventPing && status == 0 && ctx.Err() != nil {
+		// shutdown interrupted the attempt: give it back without charging an attempt
+		setNext(app, d.Id, nowFn())
+		return nil
+	}
 	finish(app, d, status, msg, ms, wh.MaxAttempts)
 	return nil
+}
+
+// drop marks a delivery dead without counting an attempt and without audit.
+func drop(app core.App, d *Delivery, reason string) {
+	if _, err := app.AuxDB().Update(DeliveriesTable, dbx.Params{
+		"state": StateDead, "last_error": reason, "updated": fmtTime(nowFn()),
+	}, dbx.HashExp{"id": d.Id}).Execute(); err != nil {
+		app.Logger().Error("webhooks: failed to update delivery", "delivery", d.Id, "error", err)
+	}
 }
 
 // send does the HTTP call. msg is empty on success (2xx).
@@ -187,6 +210,9 @@ func send(ctx context.Context, wh *Webhook, d *Delivery) (status int, msg string
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("X-Toki-Event", d.Event)
 	req.Header.Set("X-Toki-Delivery", d.Id)
+	if d.Seq > 0 {
+		req.Header.Set("X-Toki-Seq", strconv.FormatInt(d.Seq, 10))
+	}
 	req.Header.Set("X-Toki-Timestamp", strconv.FormatInt(ts, 10))
 	req.Header.Set("X-Toki-Signature", Sign(wh.Secret, ts, body))
 
@@ -200,6 +226,9 @@ func send(ctx context.Context, wh *Webhook, d *Delivery) (status int, msg string
 	snippet, _ := io.ReadAll(io.LimitReader(res.Body, maxErrorBytes))
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		return res.StatusCode, "", ms
+	}
+	if res.StatusCode >= 300 && res.StatusCode < 400 {
+		return res.StatusCode, truncate(fmt.Sprintf("HTTP %d: redirects are not followed (not retried): %s", res.StatusCode, snippet)), ms
 	}
 	return res.StatusCode, truncate(fmt.Sprintf("HTTP %d: %s", res.StatusCode, snippet)), ms
 }
@@ -223,7 +252,7 @@ func finish(app core.App, d *Delivery, status int, errMsg string, ms, maxAttempt
 	switch {
 	case errMsg == "":
 		set["state"] = StateDelivered
-	case d.Event == EventPing || attempt >= maxAttempts:
+	case d.Event == EventPing || attempt >= maxAttempts || (status >= 300 && status < 400):
 		set["state"] = StateDead
 		dead = true
 	default:
@@ -256,7 +285,7 @@ func Ping(ctx context.Context, app core.App, wh *Webhook) (*Delivery, error) {
 	p := newPayload(EventPing, "", "", map[string]any{"message": "ping from TokiBase", "webhook": wh.Name})
 	body, _ := jsonMarshal(p)
 	// next_at far ahead so no worker claims it while we deliver synchronously
-	id, err := insertDelivery(app, wh, EventPing, "", "", body, nowFn().Add(claimLease))
+	id, err := insertDelivery(app, wh, EventPing, "", "", body, 0, nowFn().Add(claimLease))
 	if err != nil {
 		return nil, err
 	}

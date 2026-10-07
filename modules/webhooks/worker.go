@@ -20,6 +20,15 @@ func retention() time.Duration {
 	return 7 * 24 * time.Hour
 }
 
+// deadRetention is how long failed/dead deliveries are kept (default 30 days,
+// env TOKI_WEBHOOK_DEAD_RETENTION_HOURS).
+func deadRetention() time.Duration {
+	if h, err := strconv.Atoi(strings.TrimSpace(os.Getenv("TOKI_WEBHOOK_DEAD_RETENTION_HOURS"))); err == nil && h > 0 {
+		return time.Duration(h) * time.Hour
+	}
+	return 30 * 24 * time.Hour
+}
+
 func (m *Module) worker(ctx context.Context, janitor bool) {
 	defer m.wg.Done()
 	tick := time.NewTicker(pollInterval)
@@ -38,6 +47,7 @@ func (m *Module) worker(ctx context.Context, janitor bool) {
 		if janitor && time.Since(lastPrune) > pruneEvery {
 			lastPrune = time.Now()
 			pruneDelivered(m.app, nowFn().Add(-retention()))
+			pruneUnfinished(m.app, nowFn().Add(-deadRetention()))
 		}
 		select {
 		case <-ctx.Done():

@@ -2,7 +2,6 @@ package webhooks
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -20,12 +19,29 @@ import (
 const (
 	hookId       = "__tokiWebhooks__"
 	hookPriority = 1 << 20 // run after other handlers: the event already succeeded
-	cacheTTL     = 30 * time.Second
+	// cacheTTL is how long the webhook config is cached. Changes made by
+	// another process (CLI, second node) are picked up after at most this long;
+	// when the cache is older, capture reads the enabled webhooks from the DB, so
+	// no event is written against a stale list for longer than this.
+	cacheTTL = 5 * time.Second
 
 	defaultTimeoutMs   = 10000
 	defaultMaxAttempts = 8
-	maxTimeoutMs       = 60000
+	maxTimeoutMs       = 30000
+	minTimeoutMs       = 100
+
+	// MinSecretLen is the minimum length of a webhook secret.
+	MinSecretLen = 16
+
+	defaultMaxPayload = 256 << 10
 )
+
+func maxPayloadBytes() int {
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("TOKI_WEBHOOK_MAX_PAYLOAD_BYTES"))); err == nil && n > 0 {
+		return n
+	}
+	return defaultMaxPayload
+}
 
 // Enabled reports whether webhooks are enabled (env TOKI_WEBHOOKS=off disables).
 func Enabled() bool {
@@ -40,7 +56,7 @@ func workerCount() int {
 	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("TOKI_WEBHOOK_WORKERS"))); err == nil && n > 0 {
 		return n
 	}
-	return 2
+	return 4
 }
 
 var (
@@ -89,6 +105,9 @@ func webhookOf(r *core.Record) *Webhook {
 	_ = r.UnmarshalJSONField("headers", &w.Headers)
 	if w.TimeoutMs <= 0 {
 		w.TimeoutMs = defaultTimeoutMs
+	}
+	if w.TimeoutMs < minTimeoutMs {
+		w.TimeoutMs = minTimeoutMs
 	}
 	if w.TimeoutMs > maxTimeoutMs {
 		w.TimeoutMs = maxTimeoutMs
@@ -241,7 +260,38 @@ func Register(app core.App) *Module {
 	return m
 }
 
+// forbiddenHeaders are set by the HTTP stack or by TokiBase and cannot be configured.
+var forbiddenHeaders = map[string]bool{
+	"host": true, "content-length": true, "transfer-encoding": true, "connection": true,
+	"x-toki-signature": true, "x-toki-timestamp": true, "x-toki-delivery": true, "x-toki-event": true, "x-toki-seq": true,
+}
+
+// Redacted returns a copy that is safe to print: header values are masked
+// (they usually hold bearer tokens); the secret is never serialized.
+func (w *Webhook) Redacted() *Webhook {
+	cp := *w
+	cp.Secret = ""
+	if w.Headers != nil {
+		cp.Headers = make(map[string]string, len(w.Headers))
+		for k := range w.Headers {
+			cp.Headers[k] = "***"
+		}
+	}
+	return &cp
+}
+
 func validateConfig(w *Webhook) error {
+	if len(w.Secret) < MinSecretLen {
+		return fmt.Errorf("webhooks: secret is required and must be at least %d characters", MinSecretLen)
+	}
+	for k, v := range w.Headers {
+		if forbiddenHeaders[strings.ToLower(strings.TrimSpace(k))] {
+			return fmt.Errorf("webhooks: header %q cannot be set", k)
+		}
+		if strings.ContainsAny(k, "\r\n") || strings.ContainsAny(v, "\r\n") {
+			return fmt.Errorf("webhooks: header %q contains a line break", k)
+		}
+	}
 	u, err := url.Parse(w.URL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("webhooks: url must be an absolute http(s) URL")
@@ -261,19 +311,26 @@ func (m *Module) invalidate() {
 	m.mu.Unlock()
 }
 
-func (m *Module) webhooks() []*Webhook {
+// webhooks returns the config, re-reading the DB when the cache is older than
+// cacheTTL. On a load error the stale cache is used (and retried on the next
+// event); without any cache the error is returned so the caller can report the
+// lost event instead of silently dropping it.
+func (m *Module) webhooks() ([]*Webhook, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.loadedAt.IsZero() && time.Since(m.loadedAt) < cacheTTL {
-		return m.cache
+		return m.cache, nil
 	}
 	list, err := loadAll(m.app)
 	if err != nil {
 		m.app.Logger().Warn("webhooks: failed to load config", "error", err)
-		return m.cache
+		if m.cache != nil {
+			return m.cache, nil
+		}
+		return nil, err
 	}
 	m.cache, m.loadedAt = list, time.Now()
-	return list
+	return list, nil
 }
 
 func loadAll(app core.App) ([]*Webhook, error) {
@@ -323,6 +380,9 @@ func Add(app core.App, w Webhook) (*Webhook, error) {
 	}
 	if w.Secret == "" {
 		w.Secret = security.RandomString(32)
+	}
+	if len(w.Secret) < MinSecretLen {
+		return nil, fmt.Errorf("secret must be at least %d characters", MinSecretLen)
 	}
 	col, err := app.FindCachedCollectionByNameOrId(ConfigCollection)
 	if err != nil {
@@ -406,19 +466,25 @@ func (m *Module) notify() {
 
 // enqueue creates a delivery for every webhook subscribed to the event.
 func (m *Module) enqueue(event, collection, recordID string, p *Payload) {
-	var body []byte
-	for _, w := range m.webhooks() {
+	hooks, err := m.webhooks()
+	if err != nil {
+		m.app.Logger().Error("webhooks: event dropped, config unavailable", "event", event, "collection", collection, "error", err)
+		return
+	}
+	for _, w := range hooks {
 		if !w.matches(event, collection) {
 			continue
 		}
-		if body == nil {
-			var err error
-			if body, err = json.Marshal(p); err != nil {
-				m.app.Logger().Warn("webhooks: failed to encode payload", "event", event, "error", err)
-				return
-			}
+		seq, err := nextSeq(m.app, w.ID)
+		if err != nil {
+			m.app.Logger().Warn("webhooks: failed to allocate sequence number", "webhook", w.Name, "error", err)
 		}
-		if _, err := insertDelivery(m.app, w, event, collection, recordID, body, nowFn()); err != nil {
+		body, err := encodePayload(p, seq, recordID)
+		if err != nil {
+			m.app.Logger().Warn("webhooks: failed to encode payload", "event", event, "error", err)
+			continue
+		}
+		if _, err := insertDelivery(m.app, w, event, collection, recordID, body, seq, nowFn()); err != nil {
 			m.app.Logger().Warn("webhooks: failed to queue delivery", "event", event, "webhook", w.Name, "error", err)
 			continue
 		}
