@@ -60,7 +60,7 @@ var TokenFunctions = map[string]tokenFunc{
 // For SQLite it is the (extensible) [TokenFunctions] map; custom functions are
 // SQLite SQL by definition, so other dialects only get the built-ins.
 func tokenFunctionsFor(d rule.Dialect) map[string]tokenFunc {
-	if d == sqliteDialect {
+	if isSQLiteDialect(d) {
 		return TokenFunctions
 	}
 

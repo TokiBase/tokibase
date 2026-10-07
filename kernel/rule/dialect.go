@@ -29,9 +29,17 @@ type Dialect interface {
 	Name() string
 
 	// JSONExtract returns a scalar expression for the JSON value of column at
-	// path (empty path means the top level value). path elements are object
-	// keys or decimal array indexes, already sanitized by the resolver.
-	JSONExtract(column string, path []string) (string, error)
+	// path (empty path means the top level value). The segment keys are
+	// already sanitized by the resolver.
+	JSONExtract(column string, path []Segment) (string, error)
+	// JSONExtractTyped is like JSONExtract but keeps the JSON type of the
+	// member (PostgreSQL: jsonb instead of text) so it can be compared with a
+	// number or boolean, see [Dialect.JSONScalar]. A dialect whose
+	// JSONExtract already yields typed values returns the same expression.
+	JSONExtractTyped(column string, path []Segment) (string, error)
+	// JSONScalar converts a number or boolean SQL operand (t is [ValueNumber]
+	// or [ValueBool]) to the type returned by JSONExtractTyped.
+	JSONScalar(expr string, t ValueType) string
 	// JSONArrayLength returns an integer expression: the length of the JSON
 	// array stored in column; 0 for NULL/empty and 1 for a non-array scalar.
 	JSONArrayLength(column string) (string, error)
@@ -53,6 +61,16 @@ type Dialect interface {
 	TextOf(expr string) string
 	// CoalesceEmpty maps NULL to the empty string: COALESCE(expr, '').
 	CoalesceEmpty(expr string) string
+	// NativeCompare reports whether 2 columns of the same type t are compared
+	// with their native type (instead of via COALESCE/text) in equality checks.
+	NativeCompare(t ValueType) bool
+	// EmptyFor returns the SQL for an empty (NULL or "") operand that is
+	// compared with an operand of kind t (a boolean or number operand cannot
+	// be compared with the string '' on every database).
+	EmptyFor(t ValueType) string
+	// NormalizeLikePattern makes a LIKE pattern (already wrapped/escaped by the
+	// engine) valid for the database, e.g. a dangling escape character.
+	NormalizeLikePattern(pattern string) string
 	// NullSafeEq is the NULL-safe (in)equality "left IS right" / "left IS NOT right".
 	NullSafeEq(left, right string, equal bool) string
 	// Like is the case insensitive LIKE with backslash as escape character.
@@ -75,6 +93,37 @@ type Dialect interface {
 	Strftime(args []string) (string, error)
 }
 
+// Segment is a single JSON path element.
+type Segment struct {
+	// Key is the sanitized object key or decimal index.
+	Key string
+	// Index marks a segment that was written as a decimal array index
+	// (decided on the raw user input, before sanitization, like PocketBase does).
+	Index bool
+}
+
+// Keys returns the segment keys.
+func Keys(path []Segment) []string {
+	keys := make([]string, len(path))
+	for i, s := range path {
+		keys[i] = s.Key
+	}
+	return keys
+}
+
+// ValueType is the (coarse) SQL value type of an operand.
+type ValueType uint8
+
+const (
+	// ValueUnknown is an operand of unknown/mixed type.
+	ValueUnknown ValueType = iota
+	ValueText
+	ValueNumber
+	ValueBool
+	ValueDate
+	ValueJSON
+)
+
 // RefKind is the value shape of a resolved identifier.
 type RefKind uint8
 
@@ -92,10 +141,10 @@ const (
 // [Ref.Emit] renders it for a [Dialect].
 type Ref struct {
 	Kind   RefKind
-	Alias  string   // table alias the column belongs to
-	Column string   // sanitized column name
-	Path   []string // RefJSON only
-	Lower  bool     // ":lower" modifier
+	Alias  string    // table alias the column belongs to
+	Column string    // sanitized column name
+	Path   []Segment // RefJSON only
+	Lower  bool      // ":lower" modifier
 }
 
 // Emit renders the reference as a SQL expression.
@@ -123,29 +172,49 @@ func (r Ref) Emit(d Dialect) (string, error) {
 	}
 
 	if r.Lower {
-		sql = "LOWER(" + sql + ")"
+		// LOWER only exists for text on some databases
+		sql = "LOWER(" + d.TextOf(sql) + ")"
 	}
 
 	return sql, nil
 }
 
+// EmitTyped is like [Ref.Emit] for a RefJSON but keeps the JSON type
+// (see [Dialect.JSONExtractTyped]).
+func (r Ref) EmitTyped(d Dialect) (string, error) {
+	if r.Kind != RefJSON || r.Lower {
+		return "", ErrUnsupported
+	}
+
+	return d.JSONExtractTyped(r.Alias+"."+r.Column, r.Path)
+}
+
 // JSONPathString renders path segments in the SQLite/JSONPath notation
 // without the leading "$" ("a.b[0].c", "[0].a").
-func JSONPathString(path []string) string {
+func JSONPathString(path []Segment) string {
 	var sb strings.Builder
 
 	for j, p := range path {
-		if _, err := strconv.Atoi(p); err == nil {
+		if p.Index {
 			sb.WriteString("[")
-			sb.WriteString(p)
+			sb.WriteString(p.Key)
 			sb.WriteString("]")
 		} else {
 			if j > 0 {
 				sb.WriteString(".")
 			}
-			sb.WriteString(p)
+			sb.WriteString(p.Key)
 		}
 	}
 
 	return sb.String()
+}
+
+// SegmentFromRaw builds a [Segment] from a raw user supplied path element:
+// it is an index when the raw value is a decimal integer, its key is the
+// sanitized value. The order (Atoi on the raw value, then sanitize) is the
+// PocketBase one: "1é" is the object key "1", not the index [1].
+func SegmentFromRaw(raw, sanitized string) Segment {
+	_, err := strconv.Atoi(raw)
+	return Segment{Key: sanitized, Index: err == nil}
 }

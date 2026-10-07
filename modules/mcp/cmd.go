@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -182,16 +183,21 @@ func parseExpires(v string, now time.Time) (time.Time, error) {
 		return time.Time{}, nil
 	}
 	if strings.HasSuffix(v, "d") {
-		var n int
-		if _, err := fmt.Sscanf(strings.TrimSuffix(v, "d"), "%d", &n); err == nil && n > 0 {
+		if n, err := strconv.Atoi(strings.TrimSuffix(v, "d")); err == nil && n > 0 {
 			return now.Add(time.Duration(n) * 24 * time.Hour), nil
 		}
 	}
-	if t, err := time.Parse(time.RFC3339, v); err == nil {
-		return t, nil
+	var t time.Time
+	if tt, err := time.Parse(time.RFC3339, v); err == nil {
+		t = tt
+	} else if tt, err := time.Parse("2006-01-02", v); err == nil {
+		t = tt.Add(24*time.Hour - time.Second)
 	}
-	if t, err := time.Parse("2006-01-02", v); err == nil {
-		return t.Add(24*time.Hour - time.Second), nil
+	if !t.IsZero() {
+		if !t.After(now) {
+			return time.Time{}, fmt.Errorf("--expires %q is in the past", v)
+		}
+		return t, nil
 	}
 	return time.Time{}, fmt.Errorf("invalid --expires %q (use RFC 3339, YYYY-MM-DD or Nd)", v)
 }

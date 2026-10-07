@@ -6,7 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/kernel"
@@ -66,6 +69,10 @@ func (h *Host) onBatch(e *kernel.BatchEvent) error {
 		return e.Next()
 	}
 	batch := buildBatchIn(e)
+	dl := h.batchDeadline(e.App)
+	if phase == "after" {
+		defer batchDeadlines.Delete(e.App)
+	}
 	if b, err := json.Marshal(batch); err != nil || len(b) > MaxBatchPayloadBytes {
 		h.app.Logger().Error("wasm: batch payload too large or not encodable, batch refused", "size", len(b), "error", err)
 		return router.NewApiError(http.StatusRequestEntityTooLarge, "Batch too large for validation hooks.", nil)
@@ -75,7 +82,9 @@ func (h *Host) onBatch(e *kernel.BatchEvent) error {
 		// The batch runs inside a transaction: e.App is the transaction app, so
 		// host calls of the guest read and write inside it. A guest failure
 		// (trap, timeout, bad output) fails CLOSED: the batch rolls back.
-		res, err := h.Invoke(context.Background(), m, ev, CallOpts{App: e.App})
+		ctx, cancel := context.WithDeadline(context.Background(), dl)
+		res, err := h.Invoke(ctx, m, ev, CallOpts{App: e.App})
+		cancel()
 		if err != nil {
 			return router.NewApiError(http.StatusInternalServerError, "Hook failed.", nil)
 		}
@@ -108,6 +117,9 @@ func buildBatchIn(e *kernel.BatchEvent) *BatchIn {
 		}
 		if r.Body != nil {
 			q.Body = redactBatchBody(e.App, r.Collection, r.Body)
+			if e.Name == kernel.BatchAfter {
+				dropHidden(e.App, r.Collection, q.Body)
+			}
 		}
 		out.Requests[i] = q
 	}
@@ -157,4 +169,61 @@ func emptyValue(v any) bool {
 		return t == ""
 	}
 	return false
+}
+
+// dropHidden removes hidden and system credential fields from a stored record
+// body (batch.after), mirroring PublicExport for record events.
+func dropHidden(app kernel.App, collection string, body map[string]any) {
+	if body == nil {
+		return
+	}
+	delete(body, "tokenKey")
+	delete(body, "passwordHash")
+	if collection == "" || app == nil {
+		return
+	}
+	col, err := core.AsApp(app).FindCachedCollectionByNameOrId(collection)
+	if err != nil || col == nil {
+		return
+	}
+	for _, f := range col.Fields {
+		if f.GetHidden() {
+			delete(body, f.GetName())
+		}
+	}
+}
+
+// EnvBatchBudget is the total time all modules and both phases of one batch
+// may spend in guests while the batch transaction holds the write lock
+// (Go duration, default 10s). Exceeding it fails the batch closed.
+const EnvBatchBudget = "TOKI_WASM_BATCH_BUDGET"
+
+const defaultBatchBudget = 10 * time.Second
+
+func batchBudget() time.Duration {
+	if d, err := time.ParseDuration(strings.TrimSpace(os.Getenv(EnvBatchBudget))); err == nil && d > 0 {
+		return d
+	}
+	return defaultBatchBudget
+}
+
+var batchDeadlines sync.Map // kernel.App (transaction app) -> time.Time
+
+// batchDeadline returns the deadline shared by the before and after phases of
+// one batch (keyed by the transaction app). Stale entries (batches that never
+// reached `after`) are dropped lazily.
+func (h *Host) batchDeadline(app kernel.App) time.Time {
+	now := time.Now()
+	if v, ok := batchDeadlines.Load(app); ok {
+		return v.(time.Time)
+	}
+	dl := now.Add(batchBudget())
+	batchDeadlines.Range(func(k, v any) bool {
+		if now.After(v.(time.Time).Add(time.Minute)) {
+			batchDeadlines.Delete(k)
+		}
+		return true
+	})
+	batchDeadlines.Store(app, dl)
+	return dl
 }

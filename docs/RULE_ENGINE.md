@@ -77,7 +77,7 @@ Placeholders (`{:name}`) are still substituted textually before parsing, exactly
 
 ## Request auth kind
 
-`@request.auth.kind` is resolved by the field resolver (`kernel.RecordFieldResolver`), not by the parser or an emitter, so the legacy compiler and the AST path produce the same SQL. Values (`kernel.AuthKindOf`): `guest` (no auth), `user` (any auth collection but `_superusers`), `superuser`, `agent` (an MCP agent: `RequestInfo.Auth` is a record of the system collection `_agents`). It is a bound parameter like other static `@request.*` values. If the auth collection has a real field `kind`, that field wins (backward compatibility). For agents `@request.auth.id` is the agent id and `@request.auth.role` (`reader|writer|operator`) joins `_agents` like any auth field; operators bypass rules. Note `@request.auth.id != ""` is true for agents too: use `@request.auth.kind = "user"` for user-only rules. See `docs/modules/mcp.md`.
+`@request.auth.kind` is resolved by the field resolver (`kernel.RecordFieldResolver`), not by the parser or an emitter, so the legacy compiler and the AST path produce the same SQL. Values (`kernel.AuthKindOf`): `guest` (no auth), `user` (any auth collection but `_superusers`), `superuser`, `agent` (an MCP agent: `RequestInfo.Auth` is a record of the system collection `_agents`). It is a bound parameter like other static `@request.*` values. If the auth collection has a real field `kind`, that field wins (backward compatibility). For agents only `@request.auth.id`, `.collectionId`, `.collectionName` and `.kind` resolve at the top level; the agent record is exposed under `@request.auth.agent.*` (`agent.role` = `reader|writer|operator`, `agent.name`, ...; never the key hash) and every other `@request.auth.<name>` is empty, so a user rule on `@request.auth.role` does not match an agent. Implemented in the field resolver (`kernel.AuthAgentNamespace`); operators bypass rules. Note `@request.auth.id != ""` is true for agents too: use `@request.auth.kind = "user"` for user-only rules. See `docs/modules/mcp.md`.
 ## Resolver / emitter split (PR 2)
 
 `kernel/record_field_resolver_runner.go` still walks the identifier and registers joins, but it no longer writes
@@ -121,29 +121,48 @@ nested expressions the resolver builds itself (`:changed`, joined collection lis
 
 ```go
 r := kernel.NewRecordFieldResolver(app, collection, requestInfo, false)
-r.SetDialect(pg.Dialect)
+if err := r.SetDialect(pg.Dialect); err != nil { /* only before the first Resolve */ }
 ast, _ := rule.Parse(`@request.auth.id != "" && title ~ "a"`)
 expr, err := pg.Emit(ast, r) // then query.AndWhere(expr); r.UpdateQuery(query)
 ```
 
-SQL examples (rendered with double quotes, `testdata/rule_pg_golden.txt` has about 55):
+SQL examples (rendered with double quotes, `testdata/rule_pg_golden.txt` has about 90):
 
 ```
-text ~ 'abc'        CAST([[demo1.text]] AS TEXT) ILIKE {:p1} ESCAPE '\'          (p1 = "%abc%")
+text ~ 'abc'        CAST([[demo1.text]] AS TEXT) ILIKE {:p1} ESCAPE E'\\'         (p1 = "%abc%")
 text != 'abc'       [[demo1.text]] IS DISTINCT FROM {:p1}
 text = null         (CAST([[demo1.text]] AS TEXT) = '' OR [[demo1.text]] IS NULL)
-json.a.b = 'x'      (to_jsonb([[demo1.json]]) #>> '{a,b}') IS NOT DISTINCT FROM {:p1}
+json.a.b = 'x'      (to_jsonb([[demo1.json]]) #>> '{"a","b"}') IS NOT DISTINCT FROM {:p1}
+json.n > 5          (to_jsonb([[demo1.json]]) #> '{"n"}') > to_jsonb(CAST({:p1} AS DOUBLE PRECISION))
+json.f = true       (to_jsonb([[demo1.json]]) #> '{"f"}') IS NOT DISTINCT FROM to_jsonb(CAST(TRUE AS BOOLEAN))
+@request.body.b = true   (body field b not sent)   CAST(NULL AS BOOLEAN) IS NOT DISTINCT FROM TRUE
+number = number     [[demo1.number]] IS NOT DISTINCT FROM [[demo1.number]]
 ```
 
 Type assumptions (documented in `kernel/rule/pg`):
 
-- json, geoPoint and multi-value fields are `jsonb` (`json` also works, values go through `to_jsonb`); a multi-value
+- json, geoPoint and multi-value fields are `jsonb` (the `json` type is not supported by the row deduplication, see
+  "Known limitations"; values go through `to_jsonb`); a multi-value
   field is a JSON array, a single-value field a plain scalar. A `geoPoint` is `{"lon":..,"lat":..}`.
 - date fields are text in the PocketBase format or `timestamptz`; time macros and literals are bound as text
   (`2026-10-07 12:34:56.789Z`), which PostgreSQL parses for `timestamptz` and compares lexicographically for text.
 - bool is `boolean`, number is `double precision`/`numeric`.
-- JSON members are text (`#>>`). Comparing one with a number needs an explicit cast in the stored data model; the
-  emitter does not guess. `geoDistance` casts its arguments to `double precision` itself.
+- JSON members are compared as text (`#>>`) with strings and, when the other operand is a number or boolean (literal,
+  parameter, or a number/bool column), as `jsonb` (`#>` against `to_jsonb(CAST(.. AS DOUBLE PRECISION|BOOLEAN))`), so
+  `json.n > 5` is numeric and `json.f = true` works. Such a comparison on a multi-match path (`@collection.x.json.a = 1`)
+  returns `rule.ErrUnsupported`. Path segments are always quoted (`'{"a","null"}'`), a key literally named `null` is a
+  string; `'`, `"`, `\`, `{`, `}`, `,`, spaces and control characters are rejected.
+- Number, bool and date columns carry their type in the resolver result (`ResolverResult.Type`): two columns of the same
+  such type are compared natively (`IS [NOT] DISTINCT FROM`), not through `CAST(.. AS TEXT)`; `NULL` still equals `NULL`
+  and differs from every value, like the SQLite `COALESCE(x, '')` semantics.
+- A missing boolean/number operand (e.g. an unsent `@request.body.flag`) is compared as a typed `NULL`
+  (`CAST(NULL AS BOOLEAN) IS NOT DISTINCT FROM TRUE`) instead of `'' = TRUE`, which PostgreSQL rejects at parse time.
+- `:lower` casts its operand to text first (`LOWER(CAST(x AS TEXT))`).
+- `geoDistance` evaluates every argument once (derived tables) and casts it with a guarded regex, so a non-numeric JSON
+  member yields `NULL` like in SQLite instead of aborting the query.
+- `~` escapes `%`, `_` and `\` in the pattern exactly like SQLite and uses `ESCAPE E'\\'` (independent of
+  `standard_conforming_strings`); a user pattern that ends with a dangling `\` gets the backslash doubled (PostgreSQL
+  would reject it).
 - `~` uses `ILIKE`. SQLite's LIKE is case-insensitive for ASCII only, `ILIKE` follows the database collation: non-ASCII
   letters can match differently.
 - Non-text operands of `=`/`!=`/`~` are compared through `CAST(.. AS TEXT)` where the SQLite code relies on implicit
@@ -155,20 +174,33 @@ Unsupported constructs (the emitter returns an error wrapping `rule.ErrUnsupport
 | --- | --- |
 | `field:each` on a multi-value field, multi-value relation hops (`rel_many.title`, `@collection.x.rel_many.y`), `@request.body.field:each` | need a table valued join (`json_each`); PostgreSQL needs `LATERAL jsonb_array_elements_text(..) AS alias(value)`, which the join builder (`registerJoin` / `UpdateQuery` / multi-match `Join`) cannot express yet |
 | `strftime(...)` | SQLite format specifiers and modifiers (`start of month`, `+1 day`) have no PostgreSQL equivalent; would need a translation layer |
-| custom `search.TokenFunctions` entries | SQLite SQL by definition |
+| custom `search.TokenFunctions` entries | SQLite SQL by definition; the error wraps `rule.ErrUnsupported` (an unknown name stays a plain "unknown function" error) |
 
 Supported but different from SQLite: back-relations through a multi-value relation field use
-`id IN (SELECT jsonb_array_elements_text(..))` (unit tested, not in the golden corpus). `geoDistance` propagates NULL
+`id IN (SELECT jsonb_array_elements_text(..))` (`TestRulePostgresMultiBackRelation` builds the join and the multi-match
+variant end to end). `geoDistance` propagates NULL
 explicitly (`LEAST`/`GREATEST` ignore NULLs, SQLite's `min`/`max` do not).
+
+### Known limitations (documented, not fixed)
+
+| Topic | Behavior |
+| --- | --- |
+| Row deduplication (`SELECT DISTINCT *`) | `UpdateQuery` still emits `SELECT DISTINCT *` for every join. On PostgreSQL that fails for `json` columns (use `jsonb`) and for `ORDER BY` on a joined field ("ORDER BY expressions must appear in select list"). `DISTINCT ON (id)` cannot be used with an arbitrary sort, so a dialect aware dedup (`id IN (subquery)`) is deferred to the store module. |
+| `timestamptz` and the session time zone | A date literal without zone (`created > "2026-01-01 10:00:00"`) is parsed in the session `TimeZone` on `timestamptz` columns, SQLite compares it as UTC text. The store module must `SET TIME ZONE 'UTC'` on every connection. Macros and `@now` carry a `Z`. |
+| JSON text rendering | `jsonb::text` / `#>>` of objects and arrays has a space after `:` and `,` (`{"a": 1}`), SQLite renders minified JSON. `json = '{"a":1}'` and `~` on the text of a multi-value field can differ. |
+| Numeric parameters | Go numbers/bools are bound to placeholders PostgreSQL may infer as `text` (`CAST({:p} AS TEXT)` in `~`/`geoDistance`/`:lower`). Whether the driver (pgx) encodes them is unverified without an integration run; the store module should bind with `QueryExecModeSimpleProtocol` or cast. |
+| JSON numeric segments | `json.a.0` applies index 0 to arrays and key `"0"` to objects on PostgreSQL (negative values index from the end), SQLite `$.a[0]` only matches arrays. |
+| NUL byte | PostgreSQL rejects `\u0000` in text parameters, SQLite accepts it. |
+| `bool` as text | `CAST(true AS TEXT)` is `true`, SQLite stores `1`: `~` or text equality on a bool column differ. |
 
 There is no PostgreSQL in CI: the emitter is tested by golden SQL and by comparison with the SQLite output (see Testing).
 Nothing here selects PostgreSQL at runtime; the store is still SQLite and `pg.Emit` is a building block for a store module.
 
 ## Plugging a dialect in (store modules)
 
-1. Implement `rule.Dialect` (all methods; return `rule.ErrUnsupported`-wrapped errors for what you cannot express).
+1. Implement `rule.Dialect` (all methods, including `JSONExtractTyped`, `JSONScalar`, `NativeCompare`, `EmptyFor`, `NormalizeLikePattern`; a SQLite-like dialect returns the untyped value / `''` / the pattern unchanged; return `rule.ErrUnsupported`-wrapped errors for what you cannot express).
    Start from `kernel/rule/pg` for a server database.
-2. Give the record resolver your dialect: `resolver.SetDialect(d)`.
+2. Give the record resolver your dialect: `resolver.SetDialect(d)` (before the first `Resolve`; it returns an error afterwards; one resolver per request, it is not goroutine-safe). A resolver whose `Dialect()` returns `nil` is rejected. Resolvers that do not implement `search.DialectResolver` cannot be checked against the emitter dialect.
 3. Emit with `search.EmitASTWithDialect(ast, resolver, limit, d)` (wrap it like `pg.Emit`), or call
    `FilterData.BuildExpr(resolver)`, which picks up the resolver's dialect.
 4. Use the same resolver for `UpdateQuery(query)`: joins without a condition get `TRUE` when `OptionalOn()` is non-empty.
@@ -192,13 +224,15 @@ Nothing here selects PostgreSQL at runtime; the store is still SQLite and `pg.Em
   when building fails. Corpus: hand written expressions, an operator x operand matrix, every string literal in
   `*_test.go` files that parses as a filter, and every rule of the `tests/data` collections; run against every
   collection with and without request info and with hidden fields allowed. Also covers placeholder params and the limit.
-- `tools/search/rule_ast_pg_test.go`: PostgreSQL. `TestRulePostgresGolden` compares ~55 expressions with
+- `tools/search/rule_ast_pg_test.go`: PostgreSQL. `TestRulePostgresGolden` compares ~90 expressions with
   `testdata/rule_pg_golden.txt` (regenerate with `TOKI_UPDATE_GOLDEN=1 go test ./tools/search -run TestRulePostgresGolden`
   and review the diff). `TestRulePostgresStructuralParity` builds the whole hand corpus + collection rules for 3
   collections with and without hidden fields on both dialects and requires: identical parameters and placeholder order,
   no SQLite-only constructs in the PostgreSQL SQL (`IS`/`IS NOT` on values, case sensitive `LIKE`, `json_*`, `strftime`,
   `min(`/`max(`), and every PostgreSQL failure to be `rule.ErrUnsupported`. `kernel/rule/pg/dialect_test.go` pins every
-  dialect method.
+  dialect method. `TestRulePostgresTypedCasts` asserts that the dialect specific typed casts (jsonb comparison, typed
+  NULL, native column comparison, `LOWER(CAST(..))`, doubled trailing backslash, guarded geo cast) appear where expected
+  and that SQLite output is unchanged.
 - CI job `test-rule-ast` runs `./kernel/rule/... ./tools/search/... ./kernel/... ./apis/... ./modules/...` with `TOKI_RULE_AST=1`.
 
 The test seam `security.SeedPseudorandomForTest` makes `PseudorandomString` deterministic; it is for tests only (it panics outside a test binary).

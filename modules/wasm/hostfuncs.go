@@ -555,7 +555,7 @@ func hostAllowed(host string) bool {
 // hostMatches reports whether host equals or is covered by one of patterns
 // ("api.example.com", "*.example.com"). Blank patterns are ignored.
 func hostMatches(patterns []string, host string) bool {
-	host = strings.ToLower(host)
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
 	for _, p := range patterns {
 		p = strings.ToLower(strings.TrimSpace(p))
 		switch {

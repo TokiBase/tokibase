@@ -91,8 +91,14 @@ func EmitASTWithDialect(ast *rule.AST, fieldResolver FieldResolver, maxExpressio
 		d = sqliteDialect
 	}
 
-	if dr, ok := fieldResolver.(DialectResolver); ok && dr.Dialect().Name() != d.Name() {
-		return nil, fmt.Errorf("the field resolver dialect %q doesn't match the emitter dialect %q", dr.Dialect().Name(), d.Name())
+	if dr, ok := fieldResolver.(DialectResolver); ok {
+		rd := dr.Dialect()
+		if rd == nil {
+			return nil, errNilDialect
+		}
+		if !sameDialect(rd, d) {
+			return nil, fmt.Errorf("the field resolver dialect %q doesn't match the emitter dialect %q", rd.Name(), d.Name())
+		}
 	}
 
 	return emitGroup(d, ast.Root, fieldResolver, &maxExpressions)

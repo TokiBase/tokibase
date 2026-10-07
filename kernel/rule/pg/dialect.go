@@ -19,6 +19,7 @@ package pg
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/tokibase/tokibase/kernel/rule"
 )
@@ -36,14 +37,74 @@ func unsupported(what string) error {
 
 func jsonb(column string) string { return "to_jsonb([[" + column + "]])" }
 
-func (dialect) JSONExtract(column string, path []string) (string, error) {
-	for _, p := range path {
-		if p == "" || strings.ContainsAny(p, `{},"\ `) {
-			return "", unsupported("invalid JSON path segment " + fmt.Sprintf("%q", p))
+// pgPath renders the text[] literal of a path. Every element is double quoted
+// so that keys like "null" stay strings (an unquoted NULL array element makes
+// the whole "#>"/"#>>" result NULL).
+func pgPath(path []rule.Segment) (string, error) {
+	quoted := make([]string, len(path))
+
+	for i, p := range path {
+		if p.Key == "" || strings.ContainsAny(p.Key, "{},\"\\' ") || strings.IndexFunc(p.Key, unicode.IsControl) >= 0 {
+			return "", unsupported("invalid JSON path segment " + fmt.Sprintf("%q", p.Key))
 		}
+		quoted[i] = `"` + p.Key + `"`
 	}
 
-	return "(" + jsonb(column) + " #>> '{" + strings.Join(path, ",") + "}')", nil
+	return "'{" + strings.Join(quoted, ",") + "}'", nil
+}
+
+func (dialect) JSONExtract(column string, path []rule.Segment) (string, error) {
+	pth, err := pgPath(path)
+	if err != nil {
+		return "", err
+	}
+
+	return "(" + jsonb(column) + " #>> " + pth + ")", nil
+}
+
+func (dialect) JSONExtractTyped(column string, path []rule.Segment) (string, error) {
+	pth, err := pgPath(path)
+	if err != nil {
+		return "", err
+	}
+
+	return "(" + jsonb(column) + " #> " + pth + ")", nil
+}
+
+func (dialect) JSONScalar(expr string, t rule.ValueType) string {
+	switch t {
+	case rule.ValueBool:
+		return "to_jsonb(CAST(" + expr + " AS BOOLEAN))"
+	default:
+		return "to_jsonb(CAST(" + expr + " AS DOUBLE PRECISION))"
+	}
+}
+
+func (dialect) NativeCompare(t rule.ValueType) bool {
+	return t == rule.ValueNumber || t == rule.ValueBool || t == rule.ValueDate
+}
+
+func (dialect) EmptyFor(t rule.ValueType) string {
+	switch t {
+	case rule.ValueBool:
+		return "CAST(NULL AS BOOLEAN)"
+	case rule.ValueNumber:
+		return "CAST(NULL AS DOUBLE PRECISION)"
+	}
+	return "''"
+}
+
+// NormalizeLikePattern doubles a dangling escape character (PostgreSQL rejects
+// "LIKE pattern must not end with escape character", SQLite ignores it).
+func (dialect) NormalizeLikePattern(pattern string) string {
+	n := 0
+	for i := len(pattern) - 1; i >= 0 && pattern[i] == '\\'; i-- {
+		n++
+	}
+	if n%2 == 1 {
+		return pattern + `\`
+	}
+	return pattern
 }
 
 func (dialect) JSONArrayLength(column string) (string, error) {
@@ -102,10 +163,10 @@ func (d dialect) Like(left, right string, negate, rightIsColumn bool) string {
 	}
 
 	if rightIsColumn {
-		return fmt.Sprintf("%s %s ('%%' || %s || '%%') ESCAPE '\\'", d.TextOf(left), op, d.TextOf(right))
+		return fmt.Sprintf("%s %s ('%%' || %s || '%%') ESCAPE E'\\\\'", d.TextOf(left), op, d.TextOf(right))
 	}
 
-	return fmt.Sprintf("%s %s %s ESCAPE '\\'", d.TextOf(left), op, right)
+	return fmt.Sprintf("%s %s %s ESCAPE E'\\\\'", d.TextOf(left), op, right)
 }
 
 func (dialect) OptionalOn() string { return " ON TRUE" }
@@ -121,17 +182,29 @@ func (dialect) ExistsNoneMany(leftSub, leftAlias, rightSub, rightAlias, where st
 	)
 }
 
-func (dialect) GeoDistance(lonA, latA, lonB, latB string) (string, error) {
-	num := func(s string) string { return "CAST(" + s + " AS DOUBLE PRECISION)" }
+// numberRegex matches the text values that CAST(.. AS DOUBLE PRECISION)
+// accepts and SQLite would treat as numbers. Written without "[[" (dbx marker).
+const numberRegex = `^ *[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)? *$`
 
-	inner := `cos(radians(` + num(latA) + `)) * cos(radians(` + num(latB) + `)) * ` +
-		`cos(radians(` + num(lonB) + `) - radians(` + num(lonA) + `)) + ` +
-		`sin(radians(` + num(latA) + `)) * sin(radians(` + num(latB) + `))`
+// GeoDistance evaluates every argument exactly once (derived tables) and
+// converts it with a guarded cast: a non-numeric value yields NULL like in
+// SQLite instead of aborting the whole query.
+func (dialect) GeoDistance(lonA, latA, lonB, latB string) (string, error) {
+	safe := func(col string) string {
+		return "CASE WHEN " + col + " ~ '" + numberRegex + "' THEN CAST(" + col + " AS DOUBLE PRECISION) END"
+	}
+
+	inner := `cos(radians(g.la1)) * cos(radians(g.la2)) * cos(radians(g.lo2) - radians(g.lo1)) + sin(radians(g.la1)) * sin(radians(g.la2))`
 
 	// LEAST/GREATEST ignore NULL arguments (SQLite's min/max return NULL), so
 	// the NULL propagation is explicit.
-	return `(CASE WHEN (` + inner + `) IS NULL THEN NULL ELSE ` +
-		`6371 * acos(LEAST(1, GREATEST(-1, ` + inner + `))) END)`, nil
+	return `(SELECT CASE WHEN (` + inner + `) IS NULL THEN NULL ELSE ` +
+		`6371 * acos(LEAST(1, GREATEST(-1, ` + inner + `))) END FROM (SELECT ` +
+		safe("t.lo1") + ` AS lo1, ` + safe("t.la1") + ` AS la1, ` + safe("t.lo2") + ` AS lo2, ` + safe("t.la2") + ` AS la2 ` +
+		// (the arguments are listed in the order of the SQLite output so that the
+		// placeholders keep the same order)
+		`FROM (SELECT CAST(` + latA + ` AS TEXT) AS la1, CAST(` + latB + ` AS TEXT) AS la2, ` +
+		`CAST(` + lonB + ` AS TEXT) AS lo2, CAST(` + lonA + ` AS TEXT) AS lo1) t) g)`, nil
 }
 
 func (dialect) Strftime(args []string) (string, error) {

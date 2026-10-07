@@ -7,6 +7,7 @@ import (
 
 	"github.com/ganigeorgiev/fexpr"
 	"github.com/pocketbase/dbx"
+	"github.com/tokibase/tokibase/kernel/rule"
 	"github.com/tokibase/tokibase/tools/inflector"
 	"github.com/tokibase/tokibase/tools/list"
 )
@@ -39,6 +40,15 @@ type ResolverResult struct {
 	// MultiMatchSubQuery is an optional sub query expression that will be added
 	// in addition to the combined ResolverResult expression during build.
 	MultiMatchSubQuery *MultiMatchSubquery
+
+	// Type is the optional coarse SQL type of the operand, used by dialects
+	// that need typed comparisons (zero means unknown).
+	Type rule.ValueType
+
+	// JSONTyped is the optional JSON-typed variant of a JSON member Identifier
+	// (see rule.Dialect.JSONExtractTyped); it is used when the member is
+	// compared with a number or boolean. Empty when not applicable.
+	JSONTyped string
 
 	// AfterBuild is an optional function that will be called after building
 	// and combining the result of both resolved operands/sides in a single expression.

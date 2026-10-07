@@ -191,7 +191,7 @@ func ParseManifest(name, file, src string) (*Manifest, error) {
 		return nil, err
 	}
 	for _, p := range m.HTTPAllow {
-		if strings.TrimSpace(p) == "" || strings.ContainsAny(p, " /:") || (strings.Contains(p, "*") && !strings.HasPrefix(p, "*.")) {
+		if strings.TrimSpace(p) == "" || strings.ContainsAny(p, " /:") || (strings.Contains(p, "*") && (!strings.HasPrefix(p, "*.") || len(p) < 4 || strings.Contains(p[1:], "*"))) {
 			return nil, fmt.Errorf("http_allow entry %q: want a host (api.example.com) or *.example.com", p)
 		}
 	}

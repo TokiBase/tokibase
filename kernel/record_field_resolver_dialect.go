@@ -1,6 +1,8 @@
 package kernel
 
 import (
+	"errors"
+
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/kernel/rule"
 	rulesqlite "github.com/tokibase/tokibase/kernel/rule/sqlite"
@@ -21,8 +23,18 @@ func (r *RecordFieldResolver) Dialect() rule.Dialect {
 // SetDialect changes the SQL dialect of the fragments the resolver emits
 // (nil restores SQLite). It must match the dialect of the emitter the
 // resolver is used with, see docs/RULE_ENGINE.md.
-func (r *RecordFieldResolver) SetDialect(d rule.Dialect) {
+//
+// It must be called before the first Resolve: fragments (joins) that were
+// already produced stay in the previous dialect, so a later call returns an
+// error. A resolver is meant for a single request and is not goroutine-safe.
+func (r *RecordFieldResolver) SetDialect(d rule.Dialect) error {
+	if r.resolved || len(r.joins) > 0 {
+		return errors.New("SetDialect must be called before the first Resolve")
+	}
+
 	r.dialect = d
+
+	return nil
 }
 
 // joinOn returns the ON condition of a registered join; joins without

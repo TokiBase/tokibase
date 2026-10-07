@@ -57,6 +57,7 @@ type RecordFieldResolver struct {
 	joins             []*search.Join
 	allowHiddenFields bool
 	dialect           rule.Dialect // nil = SQLite
+	resolved          bool         // set by the first Resolve (see SetDialect)
 	// ---
 	listRuleJoins       []ruleJoin
 	joinAliasSuffix     string // used for uniqueness in the flatten collection list rule join
@@ -122,6 +123,25 @@ func NewRecordFieldResolver(
 				Unhide(authClone.Collection().Fields.FieldNames()...).
 				IgnoreEmailVisibility(true).
 				PublicExport()
+			if authClone.Collection().Name == CollectionNameAgents {
+				// MCP agents: only id/collection/kind stay at the top level so
+				// rules written for user fields (role, name, email...) never
+				// match an agent. Agent attributes live under `agent.*`.
+				attrs := map[string]any{}
+				for k, v := range exp {
+					if k == FieldNameId || k == FieldNameCollectionId || k == FieldNameCollectionName || k == "key_hash" || k == "keyHash" {
+						continue
+					}
+					attrs[k] = v
+				}
+				exp = map[string]any{
+					FieldNameId:             authClone.Id,
+					FieldNameCollectionId:   authClone.Collection().Id,
+					FieldNameCollectionName: authClone.Collection().Name,
+					AuthKindField:           AuthKindAgent,
+					AuthAgentNamespace:      attrs,
+				}
+			}
 			// @request.auth.kind: a real field of the auth collection wins
 			if _, ok := exp[AuthKindField]; !ok {
 				exp[AuthKindField] = AuthKindOf(r.requestInfo.Auth)
@@ -307,6 +327,8 @@ func preferGroupBy(info *dbx.QueryInfo, fullUnquotedGroupByCol string) bool {
 //	@request.body.someField:isset
 //	@collection.product.name
 func (r *RecordFieldResolver) Resolve(fieldName string) (*search.ResolverResult, error) {
+	r.resolved = true
+
 	return parseAndRun(fieldName, r)
 }
 
@@ -386,7 +408,7 @@ func (r *RecordFieldResolver) resolveStaticRequestField(path ...string) (*search
 	// @todo consider deprecating with the introduction of filter functions
 	if modifier == lowerModifier {
 		return &search.ResolverResult{
-			Identifier: "LOWER({:" + placeholder + "})",
+			Identifier: "LOWER(" + r.Dialect().TextOf("{:"+placeholder+"}") + ")",
 			Params:     dbx.Params{placeholder: resultVal},
 		}, nil
 	}

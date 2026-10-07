@@ -215,6 +215,20 @@ func (r *runner) processRequestAuthField() (*search.ResolverResult, error) {
 		return &search.ResolverResult{Identifier: "NULL"}, nil
 	}
 
+	// MCP agent: only id/collectionId/collectionName/kind and the
+	// `agent.*` namespace resolve; every other name (role, name, email, ...)
+	// is empty so user-field rules never match an agent.
+	if r.resolver.requestInfo.Auth.Collection().Name == CollectionNameAgents {
+		if len(r.activeProps) >= 3 {
+			switch name, _, _ := splitModifier(r.activeProps[2]); {
+			case name == AuthAgentNamespace && len(r.activeProps) >= 4,
+				name == FieldNameId, name == FieldNameCollectionId, name == FieldNameCollectionName, name == AuthKindField:
+				return r.resolver.resolveStaticRequestField(r.activeProps[1:]...)
+			}
+		}
+		return &search.ResolverResult{Identifier: "NULL"}, nil
+	}
+
 	// plain auth field
 	// ---
 	if _, ok := plainRequestAuthFields[r.fieldName]; ok {
@@ -318,7 +332,7 @@ func (r *runner) processRequestBodyLowerModifier(bodyField Field) (*search.Resol
 	placeholder := "infoLower" + bodyField.GetName() + security.PseudorandomString(8)
 
 	result := &search.ResolverResult{
-		Identifier: "LOWER({:" + placeholder + "})",
+		Identifier: "LOWER(" + r.resolver.Dialect().TextOf("{:"+placeholder+"}") + ")",
 		Params:     dbx.Params{placeholder: rawValue},
 	}
 
@@ -480,9 +494,11 @@ func (r *runner) processActiveProps() (*search.ResolverResult, error) {
 		// @todo consider moving to the finalizer and converting to "JSONExtractable" interface with optional extra validation for the remaining props?
 		// json or geoPoint field -> treat the rest of the props as json path
 		if field != nil && (field.Type() == FieldTypeJSON || field.Type() == FieldTypeGeoPoint) {
-			jsonPath := make([]string, 0, len(r.activeProps[i+1:]))
+			// note: the index check is on the raw segment and the sanitization
+			// comes second (PocketBase order), "1é" is the key "1", not [1]
+			jsonPath := make([]rule.Segment, 0, len(r.activeProps[i+1:]))
 			for _, p := range r.activeProps[i+1:] {
-				jsonPath = append(jsonPath, inflector.Columnify(p))
+				jsonPath = append(jsonPath, rule.SegmentFromRaw(p, inflector.Columnify(p)))
 			}
 
 			ref := rule.Ref{
@@ -497,9 +513,16 @@ func (r *runner) processActiveProps() (*search.ResolverResult, error) {
 				return nil, err
 			}
 
+			typed, err := ref.EmitTyped(r.resolver.Dialect())
+			if err != nil {
+				return nil, err
+			}
+
 			result := &search.ResolverResult{
 				NullFallback: search.NullFallbackDisabled,
 				Identifier:   identifier,
+				JSONTyped:    typed,
+				Type:         rule.ValueJSON,
 			}
 
 			if r.withMultiMatch {
@@ -896,6 +919,16 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 
 	if ref.Kind == rule.RefJSON {
 		result.NullFallback = search.NullFallbackDisabled
+		result.Type = rule.ValueJSON
+
+		if !ref.Lower {
+			result.JSONTyped, err = ref.EmitTyped(d)
+			if err != nil {
+				return nil, err
+			}
+		}
+	} else if !ref.Lower {
+		result.Type = valueTypeOfField(field)
 	}
 
 	// equality on a blind-index field (modules/crypto)
@@ -915,4 +948,23 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 	}
 
 	return result, nil
+}
+
+// valueTypeOfField maps a field to the coarse SQL type used by the dialects
+// for type aware comparisons.
+func valueTypeOfField(f Field) rule.ValueType {
+	if mv, ok := f.(MultiValuer); ok && mv.IsMultiple() {
+		return rule.ValueUnknown
+	}
+
+	switch f.Type() {
+	case FieldTypeNumber:
+		return rule.ValueNumber
+	case FieldTypeBool:
+		return rule.ValueBool
+	case FieldTypeDate, FieldTypeAutodate:
+		return rule.ValueDate
+	}
+
+	return rule.ValueUnknown
 }
