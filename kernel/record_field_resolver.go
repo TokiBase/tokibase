@@ -57,6 +57,7 @@ type RecordFieldResolver struct {
 	joins             []*search.Join
 	allowHiddenFields bool
 	dialect           rule.Dialect // nil = SQLite
+	resolved          bool         // set by the first Resolve (see SetDialect)
 	// ---
 	listRuleJoins       []ruleJoin
 	joinAliasSuffix     string // used for uniqueness in the flatten collection list rule join
@@ -307,6 +308,8 @@ func preferGroupBy(info *dbx.QueryInfo, fullUnquotedGroupByCol string) bool {
 //	@request.body.someField:isset
 //	@collection.product.name
 func (r *RecordFieldResolver) Resolve(fieldName string) (*search.ResolverResult, error) {
+	r.resolved = true
+
 	return parseAndRun(fieldName, r)
 }
 
@@ -386,7 +389,7 @@ func (r *RecordFieldResolver) resolveStaticRequestField(path ...string) (*search
 	// @todo consider deprecating with the introduction of filter functions
 	if modifier == lowerModifier {
 		return &search.ResolverResult{
-			Identifier: "LOWER({:" + placeholder + "})",
+			Identifier: "LOWER(" + r.Dialect().TextOf("{:"+placeholder+"}") + ")",
 			Params:     dbx.Params{placeholder: resultVal},
 		}, nil
 	}

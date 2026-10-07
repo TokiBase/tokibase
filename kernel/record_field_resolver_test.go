@@ -766,6 +766,13 @@ func TestRecordFieldResolverResolveCollectionFields(t *testing.T) {
 		{"json_array.0", false, "(CASE WHEN json_valid([[demo4.json_array]]) THEN JSON_EXTRACT([[demo4.json_array]], '$[0]') ELSE JSON_EXTRACT(json_object('pb', [[demo4.json_array]]), '$.pb[0]') END)"},
 		{"json_object.a.b.c", false, "(CASE WHEN json_valid([[demo4.json_object]]) THEN JSON_EXTRACT([[demo4.json_object]], '$.a.b.c') ELSE JSON_EXTRACT(json_object('pb', [[demo4.json_object]]), '$.pb.a.b.c') END)"},
 
+		// PocketBase v0.40.4 compatibility: the index check runs on the RAW segment and
+		// the sanitization comes second ("1é" -> key "1", NOT the index [1])
+		{"json_object.a.1", false, "(CASE WHEN json_valid([[demo4.json_object]]) THEN JSON_EXTRACT([[demo4.json_object]], '$.a[1]') ELSE JSON_EXTRACT(json_object('pb', [[demo4.json_object]]), '$.pb.a[1]') END)"},
+		{"json_object.a.1é", false, "(CASE WHEN json_valid([[demo4.json_object]]) THEN JSON_EXTRACT([[demo4.json_object]], '$.a.1') ELSE JSON_EXTRACT(json_object('pb', [[demo4.json_object]]), '$.pb.a.1') END)"},
+		{"json_array.1é", false, "(CASE WHEN json_valid([[demo4.json_array]]) THEN JSON_EXTRACT([[demo4.json_array]], '$.1') ELSE JSON_EXTRACT(json_object('pb', [[demo4.json_array]]), '$.pb.1') END)"},
+		{"json_array.0", false, "(CASE WHEN json_valid([[demo4.json_array]]) THEN JSON_EXTRACT([[demo4.json_array]], '$[0]') ELSE JSON_EXTRACT(json_object('pb', [[demo4.json_array]]), '$.pb[0]') END)"},
+
 		// max relations limit shouldn't apply for json paths
 		{"json_object.a.b.c.e.f.g.h.i.j.k.l.m.n.o.p", false, "(CASE WHEN json_valid([[demo4.json_object]]) THEN JSON_EXTRACT([[demo4.json_object]], '$.a.b.c.e.f.g.h.i.j.k.l.m.n.o.p') ELSE JSON_EXTRACT(json_object('pb', [[demo4.json_object]]), '$.pb.a.b.c.e.f.g.h.i.j.k.l.m.n.o.p') END)"},
 

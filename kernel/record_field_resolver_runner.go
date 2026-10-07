@@ -318,7 +318,7 @@ func (r *runner) processRequestBodyLowerModifier(bodyField Field) (*search.Resol
 	placeholder := "infoLower" + bodyField.GetName() + security.PseudorandomString(8)
 
 	result := &search.ResolverResult{
-		Identifier: "LOWER({:" + placeholder + "})",
+		Identifier: "LOWER(" + r.resolver.Dialect().TextOf("{:"+placeholder+"}") + ")",
 		Params:     dbx.Params{placeholder: rawValue},
 	}
 
@@ -480,9 +480,11 @@ func (r *runner) processActiveProps() (*search.ResolverResult, error) {
 		// @todo consider moving to the finalizer and converting to "JSONExtractable" interface with optional extra validation for the remaining props?
 		// json or geoPoint field -> treat the rest of the props as json path
 		if field != nil && (field.Type() == FieldTypeJSON || field.Type() == FieldTypeGeoPoint) {
-			jsonPath := make([]string, 0, len(r.activeProps[i+1:]))
+			// note: the index check is on the raw segment and the sanitization
+			// comes second (PocketBase order), "1é" is the key "1", not [1]
+			jsonPath := make([]rule.Segment, 0, len(r.activeProps[i+1:]))
 			for _, p := range r.activeProps[i+1:] {
-				jsonPath = append(jsonPath, inflector.Columnify(p))
+				jsonPath = append(jsonPath, rule.SegmentFromRaw(p, inflector.Columnify(p)))
 			}
 
 			ref := rule.Ref{
@@ -497,9 +499,16 @@ func (r *runner) processActiveProps() (*search.ResolverResult, error) {
 				return nil, err
 			}
 
+			typed, err := ref.EmitTyped(r.resolver.Dialect())
+			if err != nil {
+				return nil, err
+			}
+
 			result := &search.ResolverResult{
 				NullFallback: search.NullFallbackDisabled,
 				Identifier:   identifier,
+				JSONTyped:    typed,
+				Type:         rule.ValueJSON,
 			}
 
 			if r.withMultiMatch {
@@ -896,6 +905,16 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 
 	if ref.Kind == rule.RefJSON {
 		result.NullFallback = search.NullFallbackDisabled
+		result.Type = rule.ValueJSON
+
+		if !ref.Lower {
+			result.JSONTyped, err = ref.EmitTyped(d)
+			if err != nil {
+				return nil, err
+			}
+		}
+	} else if !ref.Lower {
+		result.Type = valueTypeOfField(field)
 	}
 
 	// allow querying only auth records with emails marked as public
@@ -910,4 +929,23 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 	}
 
 	return result, nil
+}
+
+// valueTypeOfField maps a field to the coarse SQL type used by the dialects
+// for type aware comparisons.
+func valueTypeOfField(f Field) rule.ValueType {
+	if mv, ok := f.(MultiValuer); ok && mv.IsMultiple() {
+		return rule.ValueUnknown
+	}
+
+	switch f.Type() {
+	case FieldTypeNumber:
+		return rule.ValueNumber
+	case FieldTypeBool:
+		return rule.ValueBool
+	case FieldTypeDate, FieldTypeAutodate:
+		return rule.ValueDate
+	}
+
+	return rule.ValueUnknown
 }

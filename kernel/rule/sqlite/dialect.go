@@ -16,9 +16,22 @@ type dialect struct{}
 
 func (dialect) Name() string { return "sqlite" }
 
-func (dialect) JSONExtract(column string, path []string) (string, error) {
+func (dialect) JSONExtract(column string, path []rule.Segment) (string, error) {
 	return dbutils.JSONExtract(column, rule.JSONPathString(path)), nil
 }
+
+// JSONExtractTyped is JSONExtract: json_extract already returns typed values.
+func (d dialect) JSONExtractTyped(column string, path []rule.Segment) (string, error) {
+	return d.JSONExtract(column, path)
+}
+
+func (dialect) JSONScalar(expr string, t rule.ValueType) string { return expr }
+
+func (dialect) NativeCompare(t rule.ValueType) bool { return false }
+
+func (dialect) EmptyFor(t rule.ValueType) string { return "''" }
+
+func (dialect) NormalizeLikePattern(pattern string) string { return pattern }
 
 func (dialect) JSONArrayLength(column string) (string, error) {
 	return dbutils.JSONArrayLength(column), nil

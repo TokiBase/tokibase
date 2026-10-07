@@ -185,7 +185,7 @@ Every deviation must be listed here with: what changed, why, migration path.
 - What: experimental switch, read once at process start (default off). With `1` filters and rules are parsed into an AST and emitted by `tools/search.EmitAST`; the SQL and parameters are byte-identical to the default compiler (differential tests). Both paths now also reject filters longer than 65536 bytes or nested deeper than 64 groups with a `400`-class filter error (upstream has no such limits).
 - Why: groundwork for other SQL dialects and an in-memory rule evaluator.
 - Migration: nothing needed; unset the variable to use the default path. See `docs/RULE_ENGINE.md`.
-- Rule engine PR 2 (`rule.Dialect`, `kernel/rule/pg`) changes nothing user-visible: the SQLite SQL, parameters and error texts are byte-identical (same differential corpus).
+- Rule engine PR 2 (`rule.Dialect`, `kernel/rule/pg`) changes nothing user-visible: the SQLite SQL, parameters and error texts are byte-identical (same differential corpus). Compat restore (QC round 5): PR 2 had changed the JSON path segment handling (a segment like `1é` gave `$.a[1]` instead of PocketBase's `$.a.1`); the PocketBase order (index check on the raw segment, then sanitizing) is back and pinned by `TestRecordFieldResolverResolveCollectionFields` / `TestSegmentFromRawUpstreamOrder`.
 
 ## Not promised
 
