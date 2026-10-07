@@ -16,7 +16,7 @@ The table is created with `CREATE TABLE IF NOT EXISTS` at bootstrap (or immediat
 | `id` | 15-char text pk |
 | `created` | UTC `2006-01-02 15:04:05.000Z` |
 | `seq` | integer, unique, gapless, starts at 1 |
-| `actor_kind` | `superuser` \| `user` \| `agent` \| `system` (`agent` is reserved, not emitted yet) |
+| `actor_kind` | `superuser` \| `user` \| `agent` \| `system` (`agent` is emitted by `modules/mcp` for AI agent tool calls: `agent.<tool>` actions, see `docs/modules/mcp.md`) |
 | `actor_id`, `actor_collection` | auth record id and collection name; empty for `system` |
 | `impersonated_by` | `NULL`, or `unknown` for impersonated sessions (the static token does not carry the issuer) |
 | `action` | `record.create/update/delete`, `collection.create/update/delete`, `settings.update`, `auth.impersonate`, `backup.create`, `backup.restore` |

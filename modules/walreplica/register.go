@@ -168,7 +168,7 @@ func skipCommand(args []string) bool {
 		}
 	}
 	switch cmd {
-	case "superuser", "rule", "migrate", "version", "completion", "help":
+	case "superuser", "rule", "migrate", "version", "completion", "help", "mcp", "agent", "gen":
 		return true
 	case "replica":
 		return sub != "snapshot"
