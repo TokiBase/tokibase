@@ -3,30 +3,31 @@
 package wasm
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/mail"
-	"net/netip"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/pocketbase/dbx"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/internal/netguard"
 	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/mailer"
+	"github.com/tokibase/tokibase/tools/search"
 )
 
 func hashBytes(b []byte) string {
@@ -99,6 +100,8 @@ func (h *Host) dispatch(ctx context.Context, m api.Module, name, need string, fn
 		resp = errResp(fmt.Sprintf("capability %q not granted: add it to needs in %s.toml", need, c.mod.Name))
 	case n > MaxHostReqBytes:
 		resp = errResp("request too large")
+	case ctx.Err() != nil:
+		resp = errResp("call deadline exceeded")
 	default:
 		req, ok := m.Memory().Read(ptr, n)
 		if !ok {
@@ -108,6 +111,9 @@ func (h *Host) dispatch(ctx context.Context, m api.Module, name, need string, fn
 		req = append([]byte(nil), req...)
 		var err error
 		resp, err = fn(ctx, c, req)
+		if err == nil && ctx.Err() != nil {
+			err = errors.New("call deadline exceeded")
+		}
 		if err != nil {
 			resp = errResp(err.Error())
 		}
@@ -136,6 +142,28 @@ func decode(req []byte, v any) error {
 }
 
 // ---- records ----
+//
+// needs=records is NOT superuser: system collections (names starting with "_"
+// or System=true: _superusers, _webhooks, _agents, ...) are never reachable,
+// writes run the record request hook chain as a guest (fieldperm, computed,
+// crypto and ruleguard guards apply) and reservedFields cannot be set.
+
+var errSystemCollection = errors.New("system collections (names starting with \"_\") are not accessible to guests")
+
+// hostCollection resolves a collection a guest may touch.
+func hostCollection(app core.App, name string) (*core.Collection, error) {
+	if name == "" || strings.HasPrefix(name, "_") {
+		return nil, errSystemCollection
+	}
+	col, err := app.FindCachedCollectionByNameOrId(name)
+	if err != nil {
+		return nil, err
+	}
+	if col.System || strings.HasPrefix(col.Name, "_") {
+		return nil, errSystemCollection
+	}
+	return col, nil
+}
 
 func (h *Host) recordsFind(ctx context.Context, c *call, req []byte) (map[string]any, error) {
 	var r struct {
@@ -150,9 +178,14 @@ func (h *Host) recordsFind(ctx context.Context, c *call, req []byte) (map[string
 	if err := decode(req, &r); err != nil {
 		return nil, err
 	}
+	app := c.db()
+	col, err := hostCollection(app, r.Collection)
+	if err != nil {
+		return nil, err
+	}
 	if r.ID != "" {
-		rec, err := h.app.FindRecordById(r.Collection, r.ID)
-		if err != nil {
+		rec := &core.Record{}
+		if err := app.RecordQuery(col).AndWhere(dbx.HashExp{col.Name + ".id": r.ID}).Limit(1).WithContext(ctx).One(rec); err != nil {
 			return nil, err
 		}
 		return map[string]any{"records": []any{rec.PublicExport()}}, nil
@@ -160,7 +193,7 @@ func (h *Host) recordsFind(ctx context.Context, c *call, req []byte) (map[string
 	if r.Limit <= 0 || r.Limit > 500 {
 		r.Limit = 100
 	}
-	recs, err := h.app.FindRecordsByFilter(r.Collection, r.Filter, r.Sort, r.Limit, r.Offset, dbx.Params(r.Params))
+	recs, err := findByFilter(ctx, app, col, r.Filter, r.Sort, r.Limit, r.Offset, dbx.Params(r.Params))
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +202,73 @@ func (h *Host) recordsFind(ctx context.Context, c *call, req []byte) (map[string
 		out[i] = rec.PublicExport()
 	}
 	return map[string]any{"records": out}, nil
+}
+
+// findByFilter is FindRecordsByFilter with a context (the query is canceled
+// with the call deadline).
+func findByFilter(ctx context.Context, app core.App, col *core.Collection, filter, sort string, limit, offset int, params dbx.Params) ([]*core.Record, error) {
+	q := app.RecordQuery(col)
+	resolver := core.NewRecordFieldResolver(app, col, nil, true)
+	if filter != "" {
+		expr, err := search.FilterData(filter).BuildExpr(resolver, params)
+		if err != nil {
+			return nil, fmt.Errorf("invalid filter expression: %w", err)
+		}
+		q.AndWhere(expr)
+	}
+	if sort != "" {
+		for _, sf := range search.ParseSortFromString(sort) {
+			expr, err := sf.BuildExpr(resolver)
+			if err != nil {
+				return nil, err
+			}
+			if expr != "" {
+				q.AndOrderBy(expr)
+			}
+		}
+	}
+	if err := resolver.UpdateQuery(q); err != nil {
+		return nil, err
+	}
+	if offset > 0 {
+		q.Offset(int64(offset))
+	}
+	if limit > 0 {
+		q.Limit(int64(limit))
+	}
+	recs := []*core.Record{}
+	if err := q.WithContext(ctx).All(&recs); err != nil {
+		return nil, err
+	}
+	return recs, nil
+}
+
+// guestWriteGuard runs the record create/update request hook chain (with a
+// no-op terminal handler) as a guest request carrying data as the body, so
+// the request-level guards of other modules apply to guest writes.
+func guestWriteGuard(ctx context.Context, app core.App, col *core.Collection, rec *core.Record, data map[string]any, create bool) error {
+	method, hk := http.MethodPatch, app.OnRecordUpdateRequest()
+	if create {
+		method, hk = http.MethodPost, app.OnRecordCreateRequest()
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	hreq, err := http.NewRequestWithContext(ctx, method, "http://localhost/wasm", bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	hreq.Header.Set("Content-Type", "application/json")
+	ev := new(core.RecordRequestEvent)
+	ev.RequestEvent = &core.RequestEvent{App: app}
+	ev.Request = hreq
+	ev.Collection = col
+	ev.Record = rec
+	if err := hk.Trigger(ev, func(*core.RecordRequestEvent) error { return nil }); err != nil {
+		return fmt.Errorf("write denied: %v", err)
+	}
+	return nil
 }
 
 func (h *Host) recordsSave(ctx context.Context, c *call, req []byte) (map[string]any, error) {
@@ -180,29 +280,38 @@ func (h *Host) recordsSave(ctx context.Context, c *call, req []byte) (map[string
 	if err := decode(req, &r); err != nil {
 		return nil, err
 	}
+	app := c.db()
+	col, err := hostCollection(app, r.Collection)
+	if err != nil {
+		return nil, err
+	}
+	for k := range r.Data {
+		if reservedFields[k] {
+			return nil, fmt.Errorf("field %q cannot be set by a guest", k)
+		}
+	}
 	if c.dry {
 		c.addEffect("records_save", map[string]any{"collection": r.Collection, "id": r.ID, "data": r.Data})
 		return map[string]any{"record": r.Data, "dry_run": true}, nil
 	}
 	var rec *core.Record
 	if r.ID != "" {
-		var err error
-		if rec, err = h.app.FindRecordById(r.Collection, r.ID); err != nil {
+		rec = &core.Record{}
+		if err := app.RecordQuery(col).AndWhere(dbx.HashExp{col.Name + ".id": r.ID}).Limit(1).WithContext(ctx).One(rec); err != nil {
 			return nil, err
 		}
 	} else {
-		col, err := h.app.FindCachedCollectionByNameOrId(r.Collection)
-		if err != nil {
-			return nil, err
-		}
 		rec = core.NewRecord(col)
 	}
 	for k, v := range r.Data {
 		rec.Set(k, v)
 	}
+	if err := guestWriteGuard(ctx, app, col, rec, r.Data, r.ID == ""); err != nil {
+		return nil, err
+	}
 	internalSaves.Store(rec, struct{}{})
 	defer internalSaves.Delete(rec)
-	if err := h.app.Save(rec); err != nil {
+	if err := app.SaveWithContext(ctx, rec); err != nil {
 		return nil, err
 	}
 	return map[string]any{"record": rec.PublicExport()}, nil
@@ -216,17 +325,22 @@ func (h *Host) recordsDelete(ctx context.Context, c *call, req []byte) (map[stri
 	if err := decode(req, &r); err != nil {
 		return nil, err
 	}
+	app := c.db()
+	col, err := hostCollection(app, r.Collection)
+	if err != nil {
+		return nil, err
+	}
 	if c.dry {
 		c.addEffect("records_delete", map[string]any{"collection": r.Collection, "id": r.ID})
 		return map[string]any{"dry_run": true}, nil
 	}
-	rec, err := h.app.FindRecordById(r.Collection, r.ID)
-	if err != nil {
+	rec := &core.Record{}
+	if err := app.RecordQuery(col).AndWhere(dbx.HashExp{col.Name + ".id": r.ID}).Limit(1).WithContext(ctx).One(rec); err != nil {
 		return nil, err
 	}
 	internalSaves.Store(rec, struct{}{})
 	defer internalSaves.Delete(rec)
-	return map[string]any{}, h.app.Delete(rec)
+	return map[string]any{}, app.DeleteWithContext(ctx, rec)
 }
 
 // ---- mail ----
@@ -259,7 +373,15 @@ func (h *Host) mailSend(ctx context.Context, c *call, req []byte) (map[string]an
 		c.addEffect("mail_send", map[string]any{"to": r.To, "subject": r.Subject})
 		return map[string]any{"dry_run": true}, nil
 	}
-	return map[string]any{}, h.app.NewMailClient().Send(msg)
+	// the mailer has no context: bound it by the call deadline
+	done := make(chan error, 1)
+	go func() { done <- h.app.NewMailClient().Send(msg) }()
+	select {
+	case err := <-done:
+		return map[string]any{}, err
+	case <-ctx.Done():
+		return nil, errors.New("mail_send: call deadline exceeded")
+	}
 }
 
 // ---- kv ----
@@ -279,7 +401,10 @@ func (h *Host) kvGet(ctx context.Context, c *call, req []byte) (map[string]any, 
 		Expires int64  `db:"expires"`
 	}
 	err := h.app.AuxDB().NewQuery(`SELECT [[value]], [[expires]] FROM {{_wasm_kv}} WHERE [[module]]={:m} AND [[key]]={:k}`).
-		Bind(dbx.Params{"m": c.mod.Name, "k": r.Key}).One(&row)
+		WithContext(ctx).Bind(dbx.Params{"m": c.mod.Name, "k": r.Key}).One(&row)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
 	if err != nil || (row.Expires > 0 && row.Expires < time.Now().Unix()) {
 		return map[string]any{"found": false, "value": ""}, nil
 	}
@@ -311,7 +436,7 @@ func (h *Host) kvSet(ctx context.Context, c *call, req []byte) (map[string]any, 
 	}
 	_, err := h.app.AuxNonconcurrentDB().NewQuery(`INSERT INTO {{_wasm_kv}} ([[module]],[[key]],[[value]],[[expires]]) VALUES ({:m},{:k},{:v},{:e})
 		ON CONFLICT([[module]],[[key]]) DO UPDATE SET [[value]]=excluded.[[value]], [[expires]]=excluded.[[expires]]`).
-		Bind(dbx.Params{"m": c.mod.Name, "k": r.Key, "v": r.Value, "e": exp}).Execute()
+		WithContext(ctx).Bind(dbx.Params{"m": c.mod.Name, "k": r.Key, "v": r.Value, "e": exp}).Execute()
 	return map[string]any{}, err
 }
 
@@ -326,6 +451,12 @@ func (h *Host) jobsEnqueue(ctx context.Context, c *call, req []byte) (map[string
 	}
 	if err := decode(req, &r); err != nil {
 		return nil, err
+	}
+	if len(r.Payload) > 64<<10 {
+		return nil, errors.New("payload exceeds 64 KiB")
+	}
+	if r.DelayS > 30*24*3600 {
+		return nil, errors.New("delay_s exceeds 30 days")
 	}
 	declared := false
 	for _, e := range c.mod.Parsed {
@@ -347,7 +478,7 @@ func (h *Host) jobsEnqueue(ctx context.Context, c *call, req []byte) (map[string
 	if r.Unique != "" {
 		opts = append(opts, kernel.Unique("wasm:"+c.mod.Name+":"+r.Unique))
 	}
-	id, err := kernel.Jobs(h.app).Enqueue(ctx, jobKindJob, jobPayload{Module: c.mod.Name, Name: r.Name, Payload: r.Payload}, opts...)
+	id, err := kernel.Jobs(c.db()).Enqueue(ctx, jobKindJob, jobPayload{Module: c.mod.Name, Name: r.Name, Payload: r.Payload}, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -429,62 +560,8 @@ func hostAllowed(host string) bool {
 	return false
 }
 
-var extraBlocked = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("192.0.0.0/24"), netip.MustParsePrefix("198.18.0.0/15"),
-	netip.MustParsePrefix("240.0.0.0/4"), netip.MustParsePrefix("192.88.99.0/24"),
-	netip.MustParsePrefix("64:ff9b::/96"), netip.MustParsePrefix("64:ff9b:1::/48"),
-	netip.MustParsePrefix("2002::/16"), netip.MustParsePrefix("2001::/32"),
-	netip.MustParsePrefix("::/96"), netip.MustParsePrefix("fec0::/10"),
-}
-
-func blockedIP(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
-		return true
-	}
-	for _, p := range extraBlocked {
-		if p.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-func allowPrivate() bool {
-	v := strings.TrimSpace(os.Getenv("TOKI_WASM_ALLOW_PRIVATE"))
-	return v == "1" || strings.EqualFold(v, "true")
-}
-
-// guardControl checks the already resolved IP of every connection (defeats
-// DNS rebinding and redirects to internal hosts).
-func guardControl(network, address string, _ syscall.RawConn) error {
-	if allowPrivate() {
-		return nil
-	}
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return err
-	}
-	ip, err := netip.ParseAddr(host)
-	if err != nil {
-		return fmt.Errorf("cannot parse resolved address %q", host)
-	}
-	if blockedIP(ip) {
-		return errors.New("target resolves to a private, loopback or link-local address (set TOKI_WASM_ALLOW_PRIVATE=1 to allow)")
-	}
-	return nil
-}
+var errBlockedTarget = errors.New("target resolves to a private, loopback or link-local address (set TOKI_WASM_ALLOW_PRIVATE=1 to allow)")
 
 func newHTTPClient(timeout time.Duration) *http.Client {
-	dialer := &net.Dialer{Timeout: 10 * time.Second, Control: guardControl}
-	return &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			Proxy: nil, DialContext: dialer.DialContext, DisableKeepAlives: true,
-			TLSHandshakeTimeout: 10 * time.Second,
-		},
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
+	return netguard.NewClient(timeout, "TOKI_WASM_ALLOW_PRIVATE", errBlockedTarget)
 }

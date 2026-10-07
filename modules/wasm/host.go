@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,14 +71,15 @@ type Host struct {
 	cache wazero.CompilationCache
 	reg   atomic.Pointer[registry]
 
-	mu       sync.Mutex // serializes Reload
-	errs     map[string]error
-	cronIDs  []string
-	routes   map[string]bool
-	served   bool
-	stash    sync.Map // *core.Record -> *core.RequestEvent
-	stopOnce sync.Once
-	stop     chan struct{}
+	mu         sync.Mutex // serializes Reload
+	errs       map[string]error
+	cronIDs    []string
+	routes     map[string]bool
+	served     bool
+	stash      sync.Map // *core.Record -> *core.RequestEvent
+	inlineCron sync.Map
+	stopOnce   sync.Once
+	stop       chan struct{}
 }
 
 // Register wires the module into app. It adds the --wasmHooksDir and
@@ -112,15 +114,7 @@ func HostOf(app core.App) *Host {
 }
 
 func newHost(app core.App, cfg Config) *Host {
-	var cache wazero.CompilationCache
-	if d := strings.TrimSpace(os.Getenv("TOKI_WASM_CACHE_DIR")); d != "" {
-		if c, err := wazero.NewCompilationCacheWithDir(d); err == nil {
-			cache = c
-		}
-	}
-	if cache == nil {
-		cache = wazero.NewCompilationCache()
-	}
+	cache := openCompilationCache(strings.TrimSpace(os.Getenv("TOKI_WASM_CACHE_DIR")), app.Logger())
 	h := &Host{app: app, cfg: cfg, cache: cache, routes: map[string]bool{}, errs: map[string]error{}, stop: make(chan struct{})}
 	h.reg.Store(&registry{byName: map[string]*Module{}})
 	app.Store().Set(storeKey, h)
@@ -233,6 +227,8 @@ func (h *Host) install() {
 func (h *Host) Close() {
 	h.stopOnce.Do(func() { close(h.stop) })
 	h.FlushStats()
+	// the cache is released once the last call finished (calls are bounded by their timeout)
+	time.AfterFunc(MaxTimeoutMS*time.Millisecond+10*time.Second, func() { _ = h.cache.Close(context.Background()) })
 }
 
 // Reload rescans the hooks directory and atomically swaps the module set;
@@ -241,17 +237,40 @@ func (h *Host) Close() {
 func (h *Host) Reload() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	prev := h.reg.Load()
+	if _, err := os.Stat(h.Dir()); err != nil && len(prev.mods) > 0 {
+		h.app.Logger().Error("wasm: hooks directory unreadable, keeping the loaded modules", "dir", h.Dir(), "error", err)
+		return
+	}
 	mans, errs := discover(h.Dir())
 	next := &registry{byName: map[string]*Module{}}
+	kept := map[*Module]bool{}
+	// fail closed: a module that no longer compiles or parses keeps its previous
+	// good version (a broken file must never silently drop a validation hook)
+	keepPrev := func(name string, err error) {
+		if pm := prev.byName[name]; pm != nil {
+			h.app.Logger().Error("wasm: reload failed, keeping the previous version of the module", "module", name, "error", err)
+			next.mods = append(next.mods, pm)
+			next.byName[name] = pm
+			kept[pm] = true
+		}
+	}
 	for _, m := range mans {
 		cm, err := h.compileModule(m)
 		if err != nil {
 			errs[m.Name] = err
+			keepPrev(m.Name, err)
 			continue
 		}
 		next.mods = append(next.mods, cm)
 		next.byName[cm.Name] = cm
 	}
+	for name, err := range errs {
+		if next.byName[name] == nil {
+			keepPrev(name, err)
+		}
+	}
+	sort.Slice(next.mods, func(i, j int) bool { return next.mods[i].Name < next.mods[j].Name })
 	for name, err := range errs {
 		h.app.Logger().Error("wasm: module not loaded", "module", name, "error", err)
 	}
@@ -259,7 +278,9 @@ func (h *Host) Reload() {
 	old := h.reg.Swap(next)
 	h.flushRegistry(old)
 	for _, m := range old.mods {
-		m.retire()
+		if !kept[m] {
+			m.retire()
+		}
 	}
 	// warn about duplicate route claims and routes that need a restart
 	seen := map[string]string{}
@@ -308,6 +329,51 @@ func (h *Host) startBackground() {
 	}
 }
 
+// ReloadDebounce is the quiet period after the last file event before a reload.
+const ReloadDebounce = time.Second
+
+// reloadWhenStable waits until the size of every .wasm/.toml file of the hooks
+// directory is the same across two reads (a copy or scp in progress changes
+// it), then reloads. A reload of a still broken file fails closed anyway.
+func (h *Host) reloadWhenStable() {
+	if !waitStable(h.Dir(), 250*time.Millisecond, 40) {
+		h.app.Logger().Warn("wasm: hooks directory still changing, reloading anyway", "dir", h.Dir())
+	}
+	h.Reload()
+}
+
+func dirSizes(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		if ext := filepath.Ext(e.Name()); ext != ".wasm" && ext != ".toml" {
+			continue
+		}
+		if fi, err := e.Info(); err == nil {
+			fmt.Fprintf(&b, "%s:%d;", e.Name(), fi.Size())
+		}
+	}
+	return b.String()
+}
+
+// waitStable polls the file sizes every interval until two consecutive reads
+// agree (true) or tries is exhausted (false).
+func waitStable(dir string, interval time.Duration, tries int) bool {
+	prev := dirSizes(dir)
+	for i := 0; i < tries; i++ {
+		time.Sleep(interval)
+		cur := dirSizes(dir)
+		if cur == prev {
+			return true
+		}
+		prev = cur
+	}
+	return false
+}
+
 func (h *Host) startWatcher() error {
 	dir := h.Dir()
 	if _, err := os.Stat(dir); err != nil {
@@ -338,7 +404,7 @@ func (h *Host) startWatcher() error {
 				if timer != nil {
 					timer.Stop()
 				}
-				timer = time.AfterFunc(250*time.Millisecond, h.Reload)
+				timer = time.AfterFunc(ReloadDebounce, h.reloadWhenStable)
 			case err, ok := <-w.Errors:
 				if !ok {
 					return
@@ -370,6 +436,7 @@ func (h *Host) flushRegistry(r *registry) {
 			Bind(map[string]any{"m": sn.Module, "c": sn.Calls, "e": sn.Errors, "t": sn.TotalMS, "le": sn.LastErr, "lc": last}).Execute()
 		if err != nil {
 			h.app.Logger().Warn("wasm: failed to flush stats", "module", m.Name, "error", err)
+			m.Stats.restore(sn)
 		}
 	}
 }
@@ -518,10 +585,10 @@ func (h *Host) runRecord(after bool, action string, e *core.RecordEvent) error {
 		}
 		if re != nil {
 			if info, err := re.RequestInfo(); err == nil {
-				ev.RequestInfo = &RequestInfoIn{Method: info.Method, Context: info.Context, Query: info.Query, Headers: info.Headers, Body: info.Body}
+				ev.RequestInfo = sanitizeRequestInfo(info)
 			}
 		}
-		res, err := h.Invoke(ctx, m, ev, CallOpts{})
+		res, err := h.Invoke(ctx, m, ev, CallOpts{App: e.App})
 		if err != nil {
 			if after {
 				return nil
@@ -592,15 +659,28 @@ func (h *Host) syncCron(r *registry) {
 	}
 }
 
-// cronTick enqueues one durable job per schedule slot when the kernel job
-// queue exists (deduplicated across processes while pending), else it runs
-// the guest inline.
+// cronTick enqueues one durable job per schedule slot. The slot key is the
+// jobs cron_key (a FULL unique index, kept after the job finished), so several
+// processes sharing the DB run a slot once even when the first run already
+// completed. MaxAttempts is 1: a failed or timed out cron guest is NOT retried,
+// because its side effects (mail, http POST) may already have happened. Cron
+// guests must still be idempotent (a crashed worker re-delivers the job).
+// Without a job queue the guest runs inline on its own goroutine (never on the
+// shared cron goroutine) and overlapping runs of the same schedule are skipped.
 func (h *Host) cronTick(mod, expr string) {
 	slot := time.Now().UTC().Truncate(time.Minute).Format("200601021504")
 	_, err := kernel.Jobs(h.app).Enqueue(context.Background(), jobKindCron, jobPayload{Module: mod, Expr: expr},
-		kernel.Unique("wasm.cron:"+mod+":"+expr+":"+slot), kernel.MaxAttempts(3))
+		kernel.CronKey("wasm.cron:"+mod+":"+expr+":"+slot), kernel.MaxAttempts(1))
 	if errors.Is(err, kernel.ErrNoJobQueue) {
-		_ = h.cronJob(context.Background(), h.app, &kernel.Job{Payload: mustJSON(jobPayload{Module: mod, Expr: expr})})
+		key := mod + "\x00" + expr
+		if _, running := h.inlineCron.LoadOrStore(key, struct{}{}); running {
+			h.app.Logger().Warn("wasm: previous inline cron run still active, tick skipped", "module", mod, "expr", expr)
+			return
+		}
+		go func() {
+			defer h.inlineCron.Delete(key)
+			_ = h.cronJob(context.Background(), h.app, &kernel.Job{Payload: mustJSON(jobPayload{Module: mod, Expr: expr})})
+		}()
 		return
 	}
 	if err != nil {
@@ -677,9 +757,20 @@ func (h *Host) bindRoutes(r *router.Router[*core.RequestEvent]) {
 			}
 			h.routes[k] = true
 			method, path := e.Method, e.Path
-			r.Route(method, path, func(re *core.RequestEvent) error { return h.serveRoute(method, path, re) })
+			h.registerRoute(r, m.Name, method, path)
 		}
 	}
+}
+
+// registerRoute binds one route; a ServeMux pattern conflict panics, which must
+// not crash the server because of a sidecar file.
+func (h *Host) registerRoute(r *router.Router[*core.RequestEvent], mod, method, path string) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			h.app.Logger().Error("wasm: route could not be registered", "module", mod, "route", method+" "+path, "panic", fmt.Sprint(rec))
+		}
+	}()
+	r.Route(method, path, func(re *core.RequestEvent) error { return h.serveRoute(method, path, re) })
 }
 
 func (h *Host) findRoute(method, path string) *Module {
@@ -698,16 +789,21 @@ func (h *Host) serveRoute(method, path string, re *core.RequestEvent) error {
 	if m == nil {
 		return router.NewNotFoundError("", nil)
 	}
-	body, err := io.ReadAll(io.LimitReader(re.Request.Body, MaxHostReqBytes+1))
+	body, err := io.ReadAll(io.LimitReader(re.Request.Body, MaxRouteBodyBytes+1))
 	if err != nil {
 		return router.NewBadRequestError("Failed to read the request body.", nil)
 	}
-	if len(body) > MaxHostReqBytes {
+	if len(body) > MaxRouteBodyBytes {
 		return router.NewApiError(http.StatusRequestEntityTooLarge, "Request body too large.", nil)
 	}
 	hdr := map[string]string{}
+	hsize := 0
 	for k := range re.Request.Header {
-		hdr[strings.ToLower(k)] = re.Request.Header.Get(k)
+		v := re.Request.Header.Get(k)
+		if hsize += len(k) + len(v); hsize > MaxRouteHeaderBytes {
+			return router.NewApiError(http.StatusRequestHeaderFieldsTooLarge, "Request headers too large.", nil)
+		}
+		hdr[strings.ToLower(k)] = v
 	}
 	q := map[string]string{}
 	for k, v := range re.Request.URL.Query() {

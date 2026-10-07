@@ -43,6 +43,7 @@ type EnqueueOptions struct {
 	Delay       time.Duration
 	MaxAttempts int           // 0 = queue default
 	UniqueKey   string        // "" = no deduplication
+	CronKey     string        // "" = none; once-ever slot key, see [CronKey]
 	MaxRuntime  time.Duration // 0 = handler/queue default
 }
 
@@ -63,6 +64,14 @@ func MaxRuntime(d time.Duration) EnqueueOption { return func(o *EnqueueOptions) 
 // (queued, running or waiting for a retry) Enqueue returns its id instead of
 // creating a new one.
 func Unique(key string) EnqueueOption { return func(o *EnqueueOptions) { o.UniqueKey = key } }
+
+// CronKey claims a schedule slot: unlike [Unique] the key is kept after the
+// job finished (the jobs module maps it to its cron_key column, which has a
+// full unique index), so the same slot is enqueued once even when several
+// processes tick and the first run already completed. Enqueue returns the id
+// of the existing job for a taken slot. The job may still be delivered more
+// than once after a crash: handlers must stay idempotent.
+func CronKey(key string) EnqueueOption { return func(o *EnqueueOptions) { o.CronKey = key } }
 
 // ResolveEnqueueOptions applies opts (helper for queue implementations).
 func ResolveEnqueueOptions(opts ...EnqueueOption) EnqueueOptions {

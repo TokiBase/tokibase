@@ -501,6 +501,33 @@ func TestJ3_CronSlotDedupeSurvivesDone(t *testing.T) {
 	}
 }
 
+// W6: kernel.CronKey claims a slot ever (cron_key column) without needing the "cron:" prefix.
+func TestCronKeyOption(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	runs := 0
+	e.m.Register("t.ck", func(context.Context, kernel.App, *kernel.Job) error { runs++; return nil })
+	other := New(e.app)
+	other.Now = e.m.Now
+	id1, err := e.m.Enqueue(ctx, "t.ck", nil, kernel.CronKey("wasm.cron:m:*/5:202610011200"), kernel.MaxAttempts(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := e.m.ProcessOnce(ctx); !ok {
+		t.Fatal("not processed")
+	}
+	id2, err := other.Enqueue(ctx, "t.ck", nil, kernel.CronKey("wasm.cron:m:*/5:202610011200"))
+	if err != nil || id2 != id1 {
+		t.Fatalf("second enqueue after done = %q %v, want %q", id2, err, id1)
+	}
+	if ok, _ := e.m.ProcessOnce(ctx); ok || runs != 1 {
+		t.Fatalf("slot ran twice: %d", runs)
+	}
+	if id3, err := e.m.Enqueue(ctx, "t.ck", nil, kernel.CronKey("wasm.cron:m:*/5:202610011205")); err != nil || id3 == id1 {
+		t.Fatalf("next slot must be accepted: %q %v", id3, err)
+	}
+}
+
 // J3: tables created by an older version are migrated in place.
 func TestJ3_SchemaMigration(t *testing.T) {
 	e := setup(t)

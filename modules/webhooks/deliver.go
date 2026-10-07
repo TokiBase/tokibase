@@ -12,17 +12,14 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
-	"net"
 	"net/http"
 	"net/netip"
-	"os"
 	"strconv"
-	"strings"
-	"syscall"
 	"time"
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/internal/netguard"
 )
 
 const (
@@ -73,79 +70,15 @@ func Sign(secret string, ts int64, body []byte) string {
 	return "v1=" + hex.EncodeToString(mac.Sum(nil))
 }
 
-// ---- SSRF guard ----
-
-var extraBlocked = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),
-	netip.MustParsePrefix("100.64.0.0/10"), // CGNAT
-	netip.MustParsePrefix("192.0.0.0/24"),
-	netip.MustParsePrefix("198.18.0.0/15"),
-	netip.MustParsePrefix("240.0.0.0/4"),    // reserved + broadcast
-	netip.MustParsePrefix("192.88.99.0/24"), // 6to4 relay anycast
-	netip.MustParsePrefix("64:ff9b::/96"),   // NAT64: embeds any IPv4, incl. metadata/private
-	netip.MustParsePrefix("64:ff9b:1::/48"), // local-use NAT64
-	netip.MustParsePrefix("2002::/16"),      // 6to4
-	netip.MustParsePrefix("2001::/32"),      // Teredo
-	netip.MustParsePrefix("::/96"),          // IPv4-compatible
-	netip.MustParsePrefix("fec0::/10"),      // site-local
-}
-
-func allowPrivate() bool {
-	v := strings.TrimSpace(os.Getenv("TOKI_WEBHOOK_ALLOW_PRIVATE"))
-	return v == "1" || strings.EqualFold(v, "true")
-}
-
-// blockedIP reports whether ip is a loopback, private, link-local,
-// unspecified, multicast or otherwise non-public address.
-func blockedIP(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
-		return true
-	}
-	for _, p := range extraBlocked {
-		if p.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
+// ---- SSRF guard (shared: internal/netguard) ----
 
 // ErrBlockedAddress is returned when the target resolves to a non-public IP.
 var ErrBlockedAddress = errors.New("webhook target resolves to a private, loopback or link-local address (set TOKI_WEBHOOK_ALLOW_PRIVATE=1 to allow)")
 
-// guardControl runs on every outgoing connection with the already resolved
-// IP, so it also defeats DNS rebinding and redirects to internal hosts.
-func guardControl(network, address string, _ syscall.RawConn) error {
-	if allowPrivate() {
-		return nil
-	}
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return err
-	}
-	ip, err := netip.ParseAddr(host)
-	if err != nil {
-		return fmt.Errorf("webhook: cannot parse resolved address %q", host)
-	}
-	if blockedIP(ip) {
-		return ErrBlockedAddress
-	}
-	return nil
-}
+func blockedIP(ip netip.Addr) bool { return netguard.BlockedIP(ip) }
 
 func newClient(timeout time.Duration) *http.Client {
-	dialer := &net.Dialer{Timeout: 10 * time.Second, Control: guardControl}
-	return &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			Proxy:               nil, // a proxy would bypass the address guard
-			DialContext:         dialer.DialContext,
-			DisableKeepAlives:   true,
-			TLSHandshakeTimeout: 10 * time.Second,
-		},
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
+	return netguard.NewClient(timeout, "TOKI_WEBHOOK_ALLOW_PRIVATE", ErrBlockedAddress)
 }
 
 // ---- delivery ----

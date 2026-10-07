@@ -20,6 +20,9 @@ const (
 	MaxMemoryPages     = 16384
 	MaxStdoutBytes     = 1 << 20
 	MaxHostReqBytes    = 4 << 20
+	// MaxRouteBodyBytes and MaxRouteHeaderBytes cap what a route guest receives.
+	MaxRouteBodyBytes   = 1 << 20
+	MaxRouteHeaderBytes = 32 << 10
 )
 
 // Capabilities a sidecar may grant through `needs`.
