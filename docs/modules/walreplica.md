@@ -147,6 +147,7 @@ When replication starts the node writes a lease object `<url>/.toki-lease.json`:
 - No automatic failure detection or failover: a human or your orchestrator runs `toki replica promote`.
 - Only `data.db` and `auxiliary.db`; `pb_data/storage`, `backups/` and `pb_hooks` are not replicated.
 - `toki replica snapshot` cannot talk to a running server.
+- A forced `walreplica.Snapshot` can collide with Litestream's own snapshot monitor writing the same snapshot file (the file client stages uploads in a fixed `<name>.tmp`, the loser gets ENOENT on rename). `Snapshot` retries up to 6 times with backoff on that error.
 
 ## Go API
 

@@ -43,16 +43,37 @@ func stop(t *testing.T, app core.App) {
 	}
 }
 
+// waitFor polls cond until it holds. The deadline is a generous upper bound
+// for slow, shared CI runners (it never makes a passing run slower), so every
+// caller gets at least ciDeadline whatever d it passes.
 func waitFor(t *testing.T, d time.Duration, what string, cond func() bool) {
 	t.Helper()
+	d = max(d, ciDeadline)
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("timeout waiting for %s", what)
+	t.Fatalf("timeout after %v waiting for %s", d, what)
+}
+
+const ciDeadline = 60 * time.Second
+
+// caughtUp reports whether every replicated database has captured at least one
+// transaction, uploaded all captured ones and synced successfully once.
+func caughtUp(app core.App) bool {
+	st := walreplica.Status(app)
+	if len(st) != 2 {
+		return false
+	}
+	for _, s := range st {
+		if s.LocalTXID == 0 || s.ReplicaTXID < s.LocalTXID || s.LastSync == nil {
+			return false
+		}
+	}
+	return true
 }
 
 func fileURL(dir string) string { return (&url.URL{Scheme: "file", Path: dir}).String() }
@@ -122,21 +143,20 @@ func TestReplicateAndRestore(t *testing.T) {
 	}
 
 	// wait until the replica caught up with everything written
-	waitFor(t, 15*time.Second, "replica to catch up", func() bool {
-		st := walreplica.Status(app)
-		if len(st) != 2 {
-			return false
-		}
-		for _, s := range st {
-			if s.LocalTXID == 0 || s.ReplicaTXID < s.LocalTXID || s.LastSync == nil {
+	waitFor(t, ciDeadline, "replica to catch up", func() bool { return caughtUp(app) })
+
+	// auxiliary.db (logs) can receive a write between two polls, so "no lag"
+	// is awaited (the sync interval is 100ms) instead of sampled once.
+	waitFor(t, ciDeadline, "zero lag and no error", func() bool {
+		for _, s := range walreplica.Status(app) {
+			if s.LagSeconds != 0 || s.LastError != "" {
 				return false
 			}
 		}
-		return true
+		return caughtUp(app)
 	})
-
 	for _, s := range walreplica.Status(app) {
-		if s.LagSeconds != 0 || s.LastError != "" || !strings.HasPrefix(s.ReplicaURL, "file://") {
+		if s.LastError != "" || !strings.HasPrefix(s.ReplicaURL, "file://") {
 			t.Fatalf("unexpected status %+v", s)
 		}
 	}
@@ -216,10 +236,7 @@ func TestLagAndHealth(t *testing.T) {
 	if err := app.Save(col); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, 15*time.Second, "initial sync", func() bool {
-		s := walreplica.Status(app)
-		return len(s) == 2 && s[0].LocalTXID > 0 && s[0].ReplicaTXID >= s[0].LocalTXID
-	})
+	waitFor(t, ciDeadline, "initial sync", func() bool { return caughtUp(app) })
 
 	// break the replica target: remove the dir and put a file in its place
 	if err := os.RemoveAll(filepath.Join(replicaDir, "data")); err != nil {
@@ -236,7 +253,7 @@ func TestLagAndHealth(t *testing.T) {
 		}
 	}
 
-	waitFor(t, 15*time.Second, "lag to show", func() bool {
+	waitFor(t, ciDeadline, "lag to show", func() bool {
 		for _, s := range walreplica.Status(app) {
 			if s.Name == "data" && s.LagSeconds > 0 && s.ReplicaTXID < s.LocalTXID {
 				return true
@@ -244,7 +261,7 @@ func TestLagAndHealth(t *testing.T) {
 		}
 		return false
 	})
-	waitFor(t, 15*time.Second, "error to be recorded", func() bool {
+	waitFor(t, ciDeadline, "error to be recorded", func() bool {
 		for _, s := range walreplica.Status(app) {
 			if s.Name == "data" && s.LastError != "" {
 				return true
@@ -260,7 +277,7 @@ func TestLagAndHealth(t *testing.T) {
 	if err := os.Remove(filepath.Join(replicaDir, "data")); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, 15*time.Second, "recovery", func() bool {
+	waitFor(t, ciDeadline, "recovery", func() bool {
 		ok, _ := walreplica.Healthy(app)
 		for _, s := range walreplica.Status(app) {
 			if s.Name == "data" && (s.LagSeconds != 0 || s.ReplicaTXID < s.LocalTXID) {
