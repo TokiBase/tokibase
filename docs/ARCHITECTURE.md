@@ -60,7 +60,7 @@ Exit gate: all modules on by default in profile `solo`, failover drill RTO under
 - [x] mcp (PR 1): Model Context Protocol server over stdio, `_agents` identities, core tools, resources, prompts, `toki agent|mcp|gen` (`docs/modules/mcp.md`).
 - [ ] mcp (PR 2): streamable HTTP transport, `@request.auth.kind = "agent"` in rules, sandbox mode.
 
-## Size budgets (stripped; CI enforces solo 36 MiB, no_ui 33 MiB, solo+replica_s3 45 MiB)
+## Size budgets (stripped; CI enforces solo 40 MiB, no_ui 37 MiB, solo+replica_s3 50 MiB; phase 2 modules add about 1 MB each, mcp 2 MB)
 
 | Profile | Budget |
 | --- | --- |

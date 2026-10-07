@@ -37,9 +37,9 @@ jobs:
         run: |
           s=$(stat -c %s out/toki-solo); n=$(stat -c %s out/toki-noui); x=$(stat -c %s out/toki-solo-s3)
           echo "solo=$((s/1024/1024))MB noui=$((n/1024/1024))MB solo+s3=$((x/1024/1024))MB"
-          test $s -le $((36*1024*1024)) || { echo "solo over 36MB budget"; exit 1; }
-          test $n -le $((33*1024*1024)) || { echo "no_ui over 33MB budget"; exit 1; }
-          test $x -le $((45*1024*1024)) || { echo "solo+s3 over 45MB budget"; exit 1; }
+          test $s -le $((40*1024*1024)) || { echo "solo over 40MB budget"; exit 1; }
+          test $n -le $((37*1024*1024)) || { echo "no_ui over 37MB budget"; exit 1; }
+          test $x -le $((50*1024*1024)) || { echo "solo+s3 over 50MB budget"; exit 1; }
   lint:
     runs-on: ubuntu-latest
     steps:
