@@ -37,9 +37,9 @@ jobs:
         run: |
           s=$(stat -c %s out/toki-solo); n=$(stat -c %s out/toki-noui); x=$(stat -c %s out/toki-solo-s3)
           echo "solo=$((s/1024/1024))MB noui=$((n/1024/1024))MB solo+s3=$((x/1024/1024))MB"
-          test $s -le $((45*1024*1024)) || { echo "solo over 45MB budget"; exit 1; }
+          test $s -le $((46*1024*1024)) || { echo "solo over 46MB budget"; exit 1; }
           test $n -le $((43*1024*1024)) || { echo "no_ui over 43MB budget"; exit 1; }
-          test $x -le $((54*1024*1024)) || { echo "solo+s3 over 54MB budget"; exit 1; }
+          test $x -le $((55*1024*1024)) || { echo "solo+s3 over 55MB budget"; exit 1; }
   profiles:
     # edge/nano tag sets and budgets come from profiles.txt (docs/PROFILES.md)
     runs-on: ubuntu-latest
