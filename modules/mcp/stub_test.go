@@ -17,7 +17,7 @@ func TestHTTPRouteAbsentWithoutModule(t *testing.T) {
 		Method: http.MethodPost, URL: "/api/mcp",
 		Headers:         map[string]string{"Authorization": "Bearer tka_x"},
 		ExpectedStatus:  404,
-		ExpectedContent: []string{`"code":404`},
+		ExpectedContent: []string{`"status":404`},
 		TestAppFactory: func(tb testing.TB) *tests.TestApp {
 			app, err := tests.NewTestApp()
 			if err != nil {

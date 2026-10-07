@@ -156,7 +156,7 @@ func TestHTTPToolsList(t *testing.T) {
 	// revocation applies to the running session on its next call
 	a, _ := Authenticate(e.app, key)
 	e.setEnabled(a.ID, false)
-	mustFail(t, cs, "records.query", map[string]any{"collection": "notes"}, "revoked")
+	mustFail(t, cs, "records.query", map[string]any{"collection": "notes"}, "Forbidden")
 }
 
 func TestHTTPWriteIsAuditedWithTransport(t *testing.T) {
