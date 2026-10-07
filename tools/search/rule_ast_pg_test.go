@@ -17,8 +17,8 @@ import (
 	"github.com/tokibase/tokibase/kernel/rule/pg"
 	rulesql "github.com/tokibase/tokibase/kernel/rule/sql"
 	"github.com/tokibase/tokibase/tests"
-	"github.com/tokibase/tokibase/tools/security"
 	"github.com/tokibase/tokibase/tools/search"
+	"github.com/tokibase/tokibase/tools/security"
 )
 
 // There is no PostgreSQL in CI. The PostgreSQL emitter is verified by
