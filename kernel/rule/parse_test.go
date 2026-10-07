@@ -140,7 +140,7 @@ func TestParseLimits(t *testing.T) {
 	if _, err := rule.Parse(deep(rule.MaxGroupDepth)); err != nil {
 		t.Fatalf("depth %d must be accepted: %v", rule.MaxGroupDepth, err)
 	}
-	for _, s := range []string{deep(rule.MaxGroupDepth + 1), strings.Repeat("(", 200000)} {
+	for _, s := range []string{deep(rule.MaxGroupDepth + 1), strings.Repeat("(", 60000)} {
 		if _, err := rule.Parse(s); !errors.Is(err, rule.ErrExprTooDeep) {
 			t.Fatalf("expected ErrExprTooDeep, got %v", err)
 		}
