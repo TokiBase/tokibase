@@ -143,6 +143,11 @@ Every deviation must be listed here with: what changed, why, migration path.
 - What: new flags `--wasmHooksDir` (default `<dataDir>/../pb_hooks_wasm`) and `--wasmHooksWatch`; `*.wasm` modules found there run as sandboxed record, cron, route and job hooks (a record before-hook can change fields or reject with a 4xx/5xx the guest chooses; a failing guest answers `500 {"message":"Hook failed."}`); custom routes only appear when a module declares them; new `wasm` CLI command; two small tables `_wasm_kv` and `_wasm_stats` in `auxiliary.db` (not collections, not visible in the REST API). No existing endpoint, status code or response shape changes, and with an empty or missing directory nothing runs. JS `pb_hooks` are untouched and run after WASM handlers of the same event.
 - Why: business logic in any language with CPU/memory/time limits, without goja.
 - Migration: nothing needed. `TOKI_WASM=off` or `-tags no_wasm` removes the feature; upstream PocketBase ignores the directory and the auxiliary tables.
+### New `/api/collections/{collection}/totp/*` and `auth-with-totp` endpoints, `_totp` collection, `totp_required` error (phase 2, `modules/totp`)
+
+- What: additive endpoints `POST .../totp/setup`, `POST .../totp/confirm`, `DELETE .../totp`, `POST .../totp/recovery/regenerate` (auth record, fresh auth) and `POST .../auth-with-totp` (`{mfaId, code}`, completes an MFA challenge with the standard auth response, `AuthMethod` `totp`). New system collection `_totp` (superusers only; created when a key is configured). New error: a login can answer `403` with `data.totp.code = "totp_required"` when `TOKI_TOTP_REQUIRED_ROLES` / `TOKI_TOTP_REQUIRE_SUPERUSERS` apply and the user has no TOTP and no grace window. New `totp` CLI command. Without enforcement env/params no existing endpoint, status code or body shape changes.
+- Why: authenticator-app second factor and recovery codes without a custom backend.
+- Migration: nothing needed for REST clients and SDKs. Upstream PocketBase ignores the endpoints and treats `_totp` as a normal base collection; delete it to return to a pristine schema. See `docs/modules/totp.md`.
 
 ## Not promised
 

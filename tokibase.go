@@ -34,6 +34,7 @@ import (
 	"github.com/tokibase/tokibase/modules/store/sqlite"
 	"github.com/tokibase/tokibase/modules/timelint"
 	"github.com/tokibase/tokibase/modules/tlscheck"
+	"github.com/tokibase/tokibase/modules/totp"
 	"github.com/tokibase/tokibase/modules/walreplica"
 	"github.com/tokibase/tokibase/modules/wasm"
 	"github.com/tokibase/tokibase/modules/webhooks"
@@ -229,6 +230,23 @@ func NewWithConfig(config Config) *PocketBase {
 	passkey.SetLockedSink(lockout.IsLocked)
 	if auditLog != nil {
 		passkey.SetAuditSink(func(action, collection, record string, details map[string]any) {
+			after, _ := json.Marshal(details)
+			afterStr := string(after)
+			if err := auditLog.Append(&audit.Entry{
+				ActorKind: "system", Action: action, Collection: collection,
+				Record: record, After: &afterStr,
+			}); err != nil {
+				pb.Logger().Warn("audit: failed to record "+action, "error", err)
+			}
+		})
+	}
+
+	// TOTP (RFC 6238) as an MFA method plus recovery codes and enforcement (see docs/modules/totp.md)
+	totp.Register(pb.App.(core.App))
+	totp.SetFailureSink(lockout.RecordFailureFor)
+	totp.SetLockedSink(lockout.IsLocked)
+	if auditLog != nil {
+		totp.SetAuditSink(func(action, collection, record string, details map[string]any) {
 			after, _ := json.Marshal(details)
 			afterStr := string(after)
 			if err := auditLog.Append(&audit.Entry{
@@ -465,6 +483,7 @@ func (pb *PocketBase) Start() error {
 	pb.RootCmd.AddCommand(cmd.NewLockoutCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewSessionsCommand(pb))
 	pb.RootCmd.AddCommand(passkey.NewCommand(pb))
+	pb.RootCmd.AddCommand(totp.NewCommand(pb))
 	if jobs.Enabled() {
 		pb.RootCmd.AddCommand(jobs.NewCommand(pb))
 	}

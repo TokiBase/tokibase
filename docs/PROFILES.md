@@ -18,7 +18,7 @@ make edge GOOS=linux GOARCH=arm64   # cross-compile
 | solo | none | 39.8 MiB | 37.6 MiB | 46 MiB |
 | team | none (= solo) | 39.8 MiB | 37.6 MiB | 46 MiB |
 | cluster | `replica_s3` | 48.0 MiB | 44.8 MiB | 56 MiB |
-| edge | `no_mcp no_passkey no_push no_webhooks no_ui no_adminlock` | 32.2 MiB | 30.3 MiB | 34 MiB |
+| edge | `no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm` | 32.2 MiB | 30.3 MiB | 34 MiB |
 | nano | edge + `no_replica no_backupcheck no_audit` | 29.1 MiB | 27.4 MiB | 31 MiB |
 
 Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.
@@ -44,7 +44,7 @@ Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.
 | push | `no_push` | yes | yes | no | no |
 | passkey | `no_passkey` | yes | yes | no | no |
 | mcp | `no_mcp` | yes | yes | no | no |
-| adminlock | `no_adminlock` | yes | yes | no | no |
+| adminlock | `no_adminlock no_wasm` | yes | yes | no | no |
 | Admin UI | `no_ui` | yes | yes | no | no |
 
 `jobs` has no tag: push, webhooks and computed enqueue work through it, it is small, and `TOKI_JOBS=off` disables it at runtime. Under `no_adminlock` the Admin UI mode switch (`TOKI_ADMIN_UI`) does not exist; edge and nano also drop the UI, so there is nothing to lock.
