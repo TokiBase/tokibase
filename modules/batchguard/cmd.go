@@ -148,7 +148,7 @@ func NewCommand(app core.App) *cobra.Command {
 				return err
 			}
 			reqs := parseRequests(app, body.Requests)
-			m := &Module{app: app, timeout: EvalTimeout}
+			m := &Module{app: app, timeout: EvalTimeout, listRules: List}
 			failed := 0
 			for _, r := range rs {
 				if only != "" && r.Name != only {
@@ -161,6 +161,9 @@ func NewCommand(app core.App) *cobra.Command {
 				if r.Assert == "" {
 					fmt.Fprintf(c.OutOrStdout(), "skip  %s (only assert_post)\n", r.Name)
 					continue
+				}
+				if strings.Contains(r.Assert, "@request.auth") {
+					fmt.Fprintf(c.OutOrStdout(), "note  %s uses @request.auth; the dry run evaluates it as anonymous\n", r.Name)
 				}
 				start := time.Now()
 				if err := m.check(app, r, r.Assert, "assert", reqs, nil); err != nil {

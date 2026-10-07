@@ -383,6 +383,29 @@ func (p *parser) call(name string) (node, error) {
 	return cn, nil
 }
 
+// referencedNames adds every string literal and `req(i).body.<path>` segment
+// of the expression to set: the names a rule may use as field names.
+func referencedNames(n node, set map[string]bool) {
+	switch x := n.(type) {
+	case litNode:
+		if str, ok := x.v.(string); ok {
+			set[str] = true
+		}
+	case unaryNode:
+		referencedNames(x.x, set)
+	case binNode:
+		referencedNames(x.l, set)
+		referencedNames(x.r, set)
+	case callNode:
+		for _, a := range x.args {
+			referencedNames(a, set)
+		}
+		for _, p := range x.path {
+			set[p] = true
+		}
+	}
+}
+
 // ----- evaluation -----
 
 type reqView struct {
@@ -392,6 +415,7 @@ type reqView struct {
 	ID         string
 	Data       map[string]any
 	Deleted    bool
+	Upsert     bool // a PUT upsert; Method holds the resolved POST or PATCH
 }
 
 type evalCtx struct {
@@ -496,20 +520,26 @@ func (c *evalCtx) evalBin(x binNode) (any, error) {
 		if !ok1 || !ok2 {
 			return nil, fmt.Errorf("%s needs numbers", x.op)
 		}
+		var res float64
 		switch x.op {
 		case "+":
-			return a + b, nil
+			res = a + b
 		case "-":
-			return a - b, nil
+			res = a - b
 		case "*":
-			return a * b, nil
+			res = a * b
+		default:
+			if b == 0 {
+				return nil, errors.New("division by zero")
+			}
+			res = a / b
 		}
-		if b == 0 {
-			return nil, errors.New("division by zero")
+		if math.IsNaN(res) || math.IsInf(res, 0) {
+			return nil, errors.New("arithmetic overflow")
 		}
-		return a / b, nil
+		return res, nil
 	}
-	return compare(l, x.op, r)
+	return compare(l, x.op, r, false)
 }
 
 func toNum(v any) (float64, bool) {
@@ -524,10 +554,21 @@ func toNum(v any) (float64, bool) {
 		return f, true
 	}
 	f, err := cast.ToFloat64E(v)
-	if err != nil {
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
 		return 0, false
 	}
 	return f, true
+}
+
+func bothNumericStrings(l, r any) bool {
+	ls, ok1 := l.(string)
+	rs, ok2 := r.(string)
+	if !ok1 || !ok2 {
+		return false
+	}
+	_, a := toNum(ls)
+	_, b := toNum(rs)
+	return a && b
 }
 
 func isNumber(v any) bool {
@@ -540,9 +581,11 @@ func isNumber(v any) bool {
 }
 
 // compare: nil only supports == and != (an ordering with nil is false, so a
-// missing field never satisfies a bound); numbers and numeric strings compare
-// numerically, other strings lexically.
-func compare(l any, op string, r any) (any, error) {
+// missing field never satisfies a bound). When one side is a number the other
+// is parsed as a number. Two strings compare numerically only when
+// numericStrings is set (the field is number typed) and both parse as
+// numbers; every other string pair compares lexically.
+func compare(l any, op string, r any, numericStrings bool) (any, error) {
 	if l == nil || r == nil {
 		switch op {
 		case "==":
@@ -571,7 +614,7 @@ func compare(l any, op string, r any) (any, error) {
 		} else {
 			cmp = 1
 		}
-	case isNumber(l) || isNumber(r):
+	case isNumber(l) || isNumber(r) || (numericStrings && bothNumericStrings(l, r)):
 		a, ok1 := toNum(l)
 		b, ok2 := toNum(r)
 		if !ok1 || !ok2 {
@@ -650,7 +693,7 @@ func (c *evalCtx) evalCall(x callNode) (any, error) {
 			return nil, err
 		}
 		f, ok := toNum(iv)
-		if !ok || f != math.Trunc(f) || f < 0 || int(f) >= len(c.reqs) {
+		if !ok || f != math.Trunc(f) || f < 0 || f >= float64(len(c.reqs)) {
 			return nil, fmt.Errorf("req(%v): no such request (batch has %d)", iv, len(c.reqs))
 		}
 		r := c.reqs[int(f)]
@@ -709,6 +752,9 @@ func (c *evalCtx) evalCall(x callNode) (any, error) {
 				return nil, fmt.Errorf("sum(): %s.%s of request %d is not a number", coll, field, r.Index)
 			}
 			total += f
+			if math.IsInf(total, 0) {
+				return nil, errors.New("sum(): overflow")
+			}
 		}
 		return total, nil
 
@@ -738,6 +784,12 @@ func (c *evalCtx) evalCall(x callNode) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		numeric := false
+		if c.app != nil {
+			if col, err := c.app.FindCachedCollectionByNameOrId(coll); err == nil {
+				_, numeric = col.Fields.GetByName(field).(*core.NumberField)
+			}
+		}
 		for _, r := range c.of(coll, "") {
 			if r.Deleted {
 				continue
@@ -746,7 +798,7 @@ func (c *evalCtx) evalCall(x callNode) (any, error) {
 			if r.Data != nil {
 				got = r.Data[field]
 			}
-			v, err := compare(got, op, want)
+			v, err := compare(got, op, want, numeric)
 			if err != nil {
 				return nil, err
 			}

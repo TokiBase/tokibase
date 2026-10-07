@@ -1,6 +1,10 @@
 package kernel
 
-import "github.com/tokibase/tokibase/tools/hook"
+import (
+	"sync"
+
+	"github.com/tokibase/tokibase/tools/hook"
+)
 
 // Names of the batch events.
 const (
@@ -39,8 +43,21 @@ type BatchEvent struct {
 	App  App
 }
 
-// OnBatch is the process wide list of batch handlers. It lets modules
-// (for example the WASM host) observe batches without importing the module
-// that emits the events. Bind with hook.Handler; emitting is done by
-// modules/batchguard when it is registered.
-var OnBatch = &hook.Hook[*BatchEvent]{}
+var batchHooks sync.Map // App -> *hook.Hook[*BatchEvent]
+
+// OnBatchFor returns the batch handler list of ONE app instance. It lets
+// modules (for example the WASM host) observe the batches of that app without
+// importing the module that emits the events. Handlers bound for one app never
+// see the batches of another app in the same process (embedded instances).
+// Bind with hook.Handler; emitting is done by modules/batchguard.
+// Use the same App value that was passed to batchguard.Register.
+func OnBatchFor(app App) *hook.Hook[*BatchEvent] {
+	if h, ok := batchHooks.Load(app); ok {
+		return h.(*hook.Hook[*BatchEvent])
+	}
+	h, _ := batchHooks.LoadOrStore(app, &hook.Hook[*BatchEvent]{})
+	return h.(*hook.Hook[*BatchEvent])
+}
+
+// ReleaseBatchHooks drops the handler list of app (called on terminate).
+func ReleaseBatchHooks(app App) { batchHooks.Delete(app) }
