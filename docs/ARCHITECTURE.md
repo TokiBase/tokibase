@@ -59,6 +59,7 @@ Exit gate: all modules on by default in profile `solo`, failover drill RTO under
 - [x] webhooks: outbound record/collection/auth events with HMAC signatures, retries, dead-letter, replay, `toki webhooks` (`docs/modules/webhooks.md`). Own delivery table for now; moves onto the kernel job queue when `modules/jobs` lands.
 - [x] push: FCM HTTP v1 and APNs (JWT, HTTP/2) with device registry, topics, `/api/push/*` and delivery as `push.send` jobs, `toki push` (`docs/modules/push.md`).
 - [x] mcp (PR 1): Model Context Protocol server over stdio, `_agents` identities, core tools, resources, prompts, `toki agent|mcp|gen` (`docs/modules/mcp.md`).
+- [x] computed (PR 1): server-maintained counters and rollups (count/sum/avg/min/max/last) on existing number fields, defined in `_computed_fields`, client writes rejected, `toki computed list|add|rm|backfill|verify|drift` (`docs/modules/computed.md`). Nested rollups and multi-relation sources come later.
 - [ ] mcp (PR 2): streamable HTTP transport, `@request.auth.kind = "agent"` in rules, sandbox mode.
 
 ## Size budgets (stripped; CI enforces solo 40 MiB, no_ui 37 MiB, solo+replica_s3 50 MiB; phase 2 modules add about 1 MB each, mcp 2 MB)
