@@ -23,6 +23,7 @@ import (
 	"github.com/tokibase/tokibase/modules/fieldperm"
 	"github.com/tokibase/tokibase/modules/jobs"
 	"github.com/tokibase/tokibase/modules/lockout"
+	"github.com/tokibase/tokibase/modules/mcp"
 	"github.com/tokibase/tokibase/modules/ruleguard"
 	"github.com/tokibase/tokibase/modules/sessions"
 	"github.com/tokibase/tokibase/modules/store/sqlite"
@@ -321,6 +322,30 @@ func NewWithConfig(config Config) *PocketBase {
 		})
 	}
 
+	// MCP server for AI agents: `_agents` identities, stdio transport (no env switch in PR 1; TOKI_MCP=off is reserved for the HTTP transport)
+	mcp.Register(pb.App.(core.App))
+	if auditLog != nil {
+		mcp.SetAuditSink(func(action, collection, record string, details map[string]any) {
+			after, _ := json.Marshal(details)
+			afterStr := string(after)
+			en := &audit.Entry{
+				ActorKind: audit.ActorAgent, ActorCollection: mcp.CollectionName,
+				Action: action, Collection: collection, Record: record, After: &afterStr,
+			}
+			if id, _ := details["agent_id"].(string); id != "" {
+				en.ActorID = id
+			}
+			if cli, _ := details["cli"].(bool); cli {
+				// created/revoked from the command line by a human operator
+				en.ActorKind, en.ActorID, en.ActorCollection = audit.ActorSystem, "", ""
+			}
+			if err := auditLog.Append(en); err != nil {
+				pb.App.Logger().Warn("audit: failed to record "+action, "error", err)
+			}
+		})
+	}
+	mcp.SetProviders(mcpProviders(auditLog != nil))
+
 	// hide the default help command (allow only `--help` flag)
 	pb.RootCmd.SetHelpCommand(&cobra.Command{Hidden: true})
 
@@ -368,6 +393,9 @@ func (pb *PocketBase) Start() error {
 	pb.RootCmd.AddCommand(cmd.NewTimeCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewDenyCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewFieldPermCommand(pb))
+	for _, c := range mcp.NewCommands(pb) {
+		pb.RootCmd.AddCommand(c)
+	}
 
 	return pb.Execute()
 }

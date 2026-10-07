@@ -111,6 +111,11 @@ Every deviation must be listed here with: what changed, why, migration path.
 - What: new superuser-only collection `_webhooks` in `data.db` (appears in `GET /api/collections` for superusers, field `secret` is hidden) and new `_webhook_deliveries` table in `auxiliary.db`; the process sends signed HTTP POSTs to configured URLs after record, collection and `auth.login` events; new `webhooks` CLI command. Existing endpoints, status codes and response shapes are unchanged; with no webhook configured nothing is sent.
 - Why: integrations without polling or custom `pb_hooks`.
 - Migration path: nothing needed. `TOKI_WEBHOOKS=off` skips registration (the collection and table are then not created; existing ones stay). Upstream PocketBase ignores the auxiliary table and treats `_webhooks` as a normal base collection; delete it to return to a pristine schema. See `docs/modules/webhooks.md`.
+### `_agents` system collection for MCP agent identities (phase 2, `modules/mcp`)
+
+- What: a new system collection `_agents` (main `data.db`: `name`, `key_hash` (hidden), `role`, `collections`, `rate_per_min`, `enabled`, `created`, `updated`; all API rules null, superusers only) is created at bootstrap when missing. It shows up in `GET /api/collections` for superusers like any system collection. No endpoint, status code or body shape changes. PR 1 agents evaluate collection rules as guest and write after a role and allowlist check (`docs/modules/mcp.md`, "Limitations of PR 1"); rules gain no new syntax yet.
+- Why: agent identity and revocation must live in the same database as the data, and rules of a later phase will reference it.
+- Migration: nothing needed for REST clients and SDKs. Built with `-tags no_mcp` the collection is not created. Code that enumerates all collections (for example schema exporters) should skip `_agents` like the other system collections.
 
 ## Not promised
 
