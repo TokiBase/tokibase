@@ -33,6 +33,20 @@ func setup(t *testing.T) *env {
 	return e
 }
 
+
+// waitRow polls until the row reaches state or the deadline passes, then returns the last row seen.
+func (e *env) waitRow(t *testing.T, id, state string, d time.Duration) Row {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for {
+		r := e.row(t, id)
+		if r.State == state || time.Now().After(deadline) {
+			return r
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
 func (e *env) row(t *testing.T, id string) Row {
 	t.Helper()
 	rows, err := List(e.app, "", 0)
@@ -562,7 +576,8 @@ func TestJ5_StopBoundedAndAttemptNotBurned(t *testing.T) {
 	if d := time.Since(begin); d > 3*time.Second {
 		t.Fatalf("Stop took %s", d)
 	}
-	r := e.row(t, id)
+	// the worker releases the row shortly after Stop returns; poll instead of a single read
+	r := e.waitRow(t, id, StateQueued, 3*time.Second)
 	if r.State != StateQueued || r.Attempt != 0 {
 		t.Fatalf("interrupted job: %+v", r)
 	}
@@ -581,7 +596,7 @@ func TestJ5_CooperativeCancelDoesNotFailJob(t *testing.T) {
 	e.m.Start(1)
 	<-started
 	e.m.Stop(300 * time.Millisecond)
-	r := e.row(t, id)
+	r := e.waitRow(t, id, StateQueued, 3*time.Second)
 	if r.State != StateQueued || r.Attempt != 0 {
 		t.Fatalf("job was charged for the shutdown: %+v", r)
 	}
