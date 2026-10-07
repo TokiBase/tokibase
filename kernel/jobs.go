@@ -41,8 +41,9 @@ type JobStats struct {
 // EnqueueOptions holds the resolved [EnqueueOption] values.
 type EnqueueOptions struct {
 	Delay       time.Duration
-	MaxAttempts int    // 0 = queue default
-	UniqueKey   string // "" = no deduplication
+	MaxAttempts int           // 0 = queue default
+	UniqueKey   string        // "" = no deduplication
+	MaxRuntime  time.Duration // 0 = handler/queue default
 }
 
 // EnqueueOption customizes a single Enqueue call.
@@ -53,6 +54,10 @@ func Delay(d time.Duration) EnqueueOption { return func(o *EnqueueOptions) { o.D
 
 // MaxAttempts overrides the queue default number of attempts (n > 0).
 func MaxAttempts(n int) EnqueueOption { return func(o *EnqueueOptions) { o.MaxAttempts = n } }
+
+// MaxRuntime caps one execution of the job (the handler context is canceled
+// after d and the attempt counts as failed). 0 keeps the default.
+func MaxRuntime(d time.Duration) EnqueueOption { return func(o *EnqueueOptions) { o.MaxRuntime = d } }
 
 // Unique deduplicates by key: while a job with the same key is still pending
 // (queued, running or waiting for a retry) Enqueue returns its id instead of

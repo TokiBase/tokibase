@@ -3,6 +3,8 @@ package jobs
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -332,5 +334,308 @@ func TestEchoHandler(t *testing.T) {
 	e.m.ProcessOnce(ctx)
 	if e.row(t, a).State != StateDone || e.row(t, b).State != StateFailed {
 		t.Fatal("echo states")
+	}
+}
+
+// lockedClock is a goroutine-safe fake clock for tests that advance time while
+// handlers run.
+type lockedClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *lockedClock) Now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *lockedClock) Add(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for %s", what)
+}
+
+// J1: a late completion of a reclaimed job must not overwrite its new state.
+func TestJ1_FencedCompletionAfterReclaim(t *testing.T) {
+	e := setup(t)
+	clk := &lockedClock{t: e.now}
+	e.m.Now = clk.Now
+	ctx := context.Background()
+	started, release := make(chan struct{}), make(chan struct{})
+	e.m.Register("t.slow", func(context.Context, kernel.App, *kernel.Job) error {
+		close(started)
+		<-release
+		return nil
+	})
+	id, _ := e.m.Enqueue(ctx, "t.slow", nil)
+	finished := make(chan struct{})
+	go func() { _, _ = e.m.ProcessOnce(ctx); close(finished) }()
+	<-started
+	clk.Add(StaleLockAfter + time.Minute)
+	if n, err := e.m.ReclaimStale(ctx); err != nil || n != 1 {
+		t.Fatalf("reclaim = %d %v", n, err)
+	}
+	close(release)
+	<-finished
+	r := e.row(t, id)
+	if r.State != StateFailed || !strings.Contains(r.LastError, "lock expired") {
+		t.Fatalf("late completion overwrote the row: %+v", r)
+	}
+}
+
+// J1: the heartbeat keeps a long running job from being reclaimed.
+func TestJ1_HeartbeatPreventsReclaim(t *testing.T) {
+	e := setup(t)
+	clk := &lockedClock{t: e.now}
+	e.m.Now = clk.Now
+	e.m.Heartbeat = 10 * time.Millisecond
+	ctx := context.Background()
+	started, release := make(chan struct{}), make(chan struct{})
+	e.m.Register("t.slow", func(context.Context, kernel.App, *kernel.Job) error {
+		close(started)
+		<-release
+		return nil
+	})
+	id, _ := e.m.Enqueue(ctx, "t.slow", nil)
+	finished := make(chan struct{})
+	go func() { _, _ = e.m.ProcessOnce(ctx); close(finished) }()
+	<-started
+	clk.Add(StaleLockAfter + time.Minute)
+	want := fmtTime(clk.Now())
+	waitFor(t, "heartbeat", func() bool { return e.row(t, id).LockedAt == want })
+	if n, _ := e.m.ReclaimStale(ctx); n != 0 {
+		t.Fatal("job with a live heartbeat was reclaimed")
+	}
+	close(release)
+	<-finished
+	if r := e.row(t, id); r.State != StateDone {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// J2: a non-cooperative handler is cut off at MaxRuntime and counts as failed.
+func TestJ2_EnqueueMaxRuntimeTimesOut(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	e.m.Register("t.hang", func(context.Context, kernel.App, *kernel.Job) error { <-block; return nil })
+	id, _ := e.m.Enqueue(ctx, "t.hang", nil, kernel.MaxRuntime(50*time.Millisecond))
+	start := time.Now()
+	if ok, err := e.m.ProcessOnce(ctx); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("ProcessOnce was not released by the timeout")
+	}
+	r := e.row(t, id)
+	if r.State != StateFailed || r.Attempt != 1 || !strings.Contains(r.LastError, "timeout") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestJ2_RegisterWithMaxRuntimeCancelsContext(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	e.m.RegisterWith("t.coop", func(c context.Context, _ kernel.App, _ *kernel.Job) error {
+		<-c.Done()
+		return c.Err()
+	}, kernel.MaxRuntime(30*time.Millisecond))
+	id, _ := e.m.Enqueue(ctx, "t.coop", nil, kernel.MaxAttempts(1))
+	_, _ = e.m.ProcessOnce(ctx)
+	r := e.row(t, id)
+	if r.State != StateDead || !strings.Contains(r.LastError, "timeout") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// J3: a cron slot enqueued by a second process after the first run finished
+// must not create a second job.
+func TestJ3_CronSlotDedupeSurvivesDone(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	runs := 0
+	e.m.Register("t.cron", func(context.Context, kernel.App, *kernel.Job) error { runs++; return nil })
+	other := New(e.app) // second "process" on the same DB
+	other.Now = e.m.Now
+	id1, err := e.m.Enqueue(ctx, "t.cron", nil, kernel.Unique("cron:x:202610011200"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := e.m.ProcessOnce(ctx); !ok {
+		t.Fatal("not processed")
+	}
+	id2, err := other.Enqueue(ctx, "t.cron", nil, kernel.Unique("cron:x:202610011200"))
+	if err != nil || id2 != id1 {
+		t.Fatalf("second enqueue = %q %v, want %q", id2, err, id1)
+	}
+	if ok, _ := e.m.ProcessOnce(ctx); ok || runs != 1 {
+		t.Fatalf("ran twice: runs=%d", runs)
+	}
+	// non-cron unique keys still free up once the job is done
+	a, _ := e.m.Enqueue(ctx, "t.cron", nil, kernel.Unique("user-key"))
+	_, _ = e.m.ProcessOnce(ctx)
+	if b, _ := e.m.Enqueue(ctx, "t.cron", nil, kernel.Unique("user-key")); b == a {
+		t.Fatal("user key must be reusable after done")
+	}
+}
+
+// J3: tables created by an older version are migrated in place.
+func TestJ3_SchemaMigration(t *testing.T) {
+	e := setup(t)
+	db := e.app.AuxDB()
+	for _, q := range []string{`DROP INDEX IF EXISTS idx__jobs_cron`, `ALTER TABLE _jobs DROP COLUMN cron_key`, `ALTER TABLE _jobs DROP COLUMN max_runtime_ms`} {
+		if _, err := db.NewQuery(q).Execute(); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	if err := initSchema(e.app); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.m.Enqueue(context.Background(), "t.x", nil, kernel.Unique("cron:a:1"), kernel.MaxRuntime(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// J4: automatic retention.
+func TestJ4_PurgeRetention(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	e.m.Register("t.ok", func(context.Context, kernel.App, *kernel.Job) error { return nil })
+	e.m.Register("t.bad", func(context.Context, kernel.App, *kernel.Job) error { return errors.New("x") })
+	doneID, _ := e.m.Enqueue(ctx, "t.ok", nil)
+	deadID, _ := e.m.Enqueue(ctx, "t.bad", nil, kernel.MaxAttempts(1))
+	for i := 0; i < 2; i++ {
+		_, _ = e.m.ProcessOnce(ctx)
+	}
+	if n, _ := e.m.Purge(ctx); n != 0 {
+		t.Fatalf("fresh rows purged: %d", n)
+	}
+	e.now = e.now.Add(8 * 24 * time.Hour)
+	if n, _ := e.m.Purge(ctx); n != 1 {
+		t.Fatalf("done purge = %d", n)
+	}
+	rows, _ := List(e.app, "", 0)
+	if len(rows) != 1 || rows[0].ID != deadID {
+		t.Fatalf("rows after 8d: %+v (done=%s)", rows, doneID)
+	}
+	e.now = e.now.Add(23 * 24 * time.Hour)
+	if n, _ := e.m.Purge(ctx); n != 1 {
+		t.Fatalf("dead purge = %d", n)
+	}
+}
+
+func TestJ4_RetentionEnv(t *testing.T) {
+	t.Setenv("TOKI_JOBS_RETENTION_HOURS", "2")
+	t.Setenv("TOKI_JOBS_DEAD_RETENTION_HOURS", "bogus")
+	if DoneRetention() != 2*time.Hour || DeadRetention() != DefaultDeadRetention {
+		t.Fatal(DoneRetention(), DeadRetention())
+	}
+}
+
+// J5: Stop is bounded even when the handler ignores ctx, and the interrupted
+// job returns to the queue without losing an attempt.
+func TestJ5_StopBoundedAndAttemptNotBurned(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	started := make(chan struct{})
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	e.m.Register("t.deaf", func(context.Context, kernel.App, *kernel.Job) error {
+		close(started)
+		<-block
+		return nil
+	})
+	id, _ := e.m.Enqueue(ctx, "t.deaf", nil, kernel.MaxAttempts(1))
+	e.m.Start(1)
+	<-started
+	begin := time.Now()
+	e.m.Stop(600 * time.Millisecond)
+	if d := time.Since(begin); d > 3*time.Second {
+		t.Fatalf("Stop took %s", d)
+	}
+	r := e.row(t, id)
+	if r.State != StateQueued || r.Attempt != 0 {
+		t.Fatalf("interrupted job: %+v", r)
+	}
+}
+
+func TestJ5_CooperativeCancelDoesNotFailJob(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	started := make(chan struct{})
+	e.m.Register("t.coop", func(c context.Context, _ kernel.App, _ *kernel.Job) error {
+		close(started)
+		<-c.Done()
+		return c.Err()
+	})
+	id, _ := e.m.Enqueue(ctx, "t.coop", nil, kernel.MaxAttempts(1))
+	e.m.Start(1)
+	<-started
+	e.m.Stop(300 * time.Millisecond)
+	r := e.row(t, id)
+	if r.State != StateQueued || r.Attempt != 0 {
+		t.Fatalf("job was charged for the shutdown: %+v", r)
+	}
+}
+
+// J6: Retry must not abort the batch on a unique key collision.
+func TestJ6_RetryUniqueCollision(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	e.m.Register("t.bad", func(context.Context, kernel.App, *kernel.Job) error { return errors.New("x") })
+	for i := 0; i < 2; i++ {
+		if _, err := e.m.Enqueue(ctx, "t.bad", nil, kernel.MaxAttempts(1), kernel.Unique("k")); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = e.m.ProcessOnce(ctx) // dead, key free again
+	}
+	n, err := Retry(e.app, "", e.now)
+	if err != nil || n != 1 {
+		t.Fatalf("Retry = %d %v", n, err)
+	}
+}
+
+// Multiple workers on two module instances execute each job exactly once.
+func TestConcurrentWorkersExactlyOnce(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	var mu sync.Mutex
+	seen := map[string]int{}
+	h := func(_ context.Context, _ kernel.App, j *kernel.Job) error {
+		mu.Lock()
+		seen[j.ID]++
+		mu.Unlock()
+		return nil
+	}
+	e.m.Register("t.n", h)
+	other := New(e.app)
+	other.Now = e.m.Now
+	other.Register("t.n", h)
+	const N = 40
+	for i := 0; i < N; i++ {
+		_, _ = e.m.Enqueue(ctx, "t.n", i)
+	}
+	e.m.PollEvery, other.PollEvery = 10*time.Millisecond, 10*time.Millisecond
+	e.m.Start(3)
+	other.Start(3)
+	waitFor(t, "all jobs", func() bool { s, _ := e.m.Stats(ctx); return s.Done == N })
+	e.m.Stop(time.Second)
+	other.Stop(time.Second)
+	for id, c := range seen {
+		if c != 1 {
+			t.Fatalf("job %s ran %d times", id, c)
+		}
+	}
+	if len(seen) != N {
+		t.Fatalf("ran %d of %d", len(seen), N)
 	}
 }
