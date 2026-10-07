@@ -28,7 +28,7 @@ Every collection has API rules per operation: ` + "`listRule`, `viewRule`, `crea
 - Fields of the record: ` + "`status = \"public\"`, `owner = @request.auth.id`" + `.
 - Operators: ` + "`=  !=  >  >=  <  <=  ~ (like/contains)  !~  ?=  ?!=  ?>  ?~`" + ` (the ` + "`?`" + ` prefix makes a multi-value field match when ANY element matches). Combine with ` + "`&&`, `||`" + ` and parentheses. Strings use single or double quotes; ` + "`true false null`" + ` and numbers are literals.
 - Relations are traversed with dots: ` + "`author.verified = true`" + `, back relations ` + "`posts_via_author.id ?= \"x\"`" + `.
-- Request data: ` + "`@request.auth.id`, `@request.auth.<field>`, `@request.body.<field>`, `@request.query.<k>`, `@request.headers.<k>`, `@request.method`, `@request.context`" + `. A guest has ` + "`@request.auth.id = \"\"`" + `. ` + "`@request.auth.kind`" + ` is guest, user, superuser or agent; an MCP agent has kind agent, its id and ` + "`@request.auth.role`" + ` (reader/writer/operator).
+- Request data: ` + "`@request.auth.id`, `@request.auth.<field>`, `@request.body.<field>`, `@request.query.<k>`, `@request.headers.<k>`, `@request.method`, `@request.context`" + `. A guest has ` + "`@request.auth.id = \"\"`" + `. ` + "`@request.auth.kind`" + ` is guest, user, superuser or agent; an MCP agent has kind agent and its id; its own attributes are under ` + "`@request.auth.agent.role`" + ` (reader/writer/operator) and ` + "`@request.auth.agent.name`" + `. Every other ` + "`@request.auth.<field>`" + ` (role, name, email, ...) is empty for an agent.
 - Other collections: ` + "`@collection.memberships.user ?= @request.auth.id`" + `.
 - Dates: ` + "`@now`, `@todayStart`, `@yearEnd`, ...`created > @now`" + `. Functions: ` + "`geoDistance(lonA, latA, lonB, latB)`" + `, and the ` + "`:lower` `:length` `:each` `:isset`" + ` modifiers (` + "`name:lower = \"x\"`, `@request.body.role:isset = false`" + `).
 
@@ -49,7 +49,7 @@ Every collection has API rules per operation: ` + "`listRule`, `viewRule`, `crea
 
 ## In this MCP server (PR 1)
 
-reader/writer agents are evaluated as GUEST. Role operator bypasses rules (superuser-like) and is audited. Use ` + "`rule.explain`" + ` to see a rule and (operator) test records.
+reader/writer agents are evaluated with the agent auth record (kind agent, NOT a guest): ` + "`@request.auth.id != \"\"`" + ` is true for them. This also holds for field permissions and record hooks. Role operator bypasses rules (superuser-like) and is audited. Use ` + "`rule.explain`" + ` to see a rule and (operator) test records.
 `
 
 func (s *Server) agentNow(ctx context.Context) (*Agent, error) {

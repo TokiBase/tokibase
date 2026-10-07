@@ -280,3 +280,60 @@ func TestParseBatchEventsAndHTTPAllow(t *testing.T) {
 		t.Error("hostMatches")
 	}
 }
+
+func TestBatchAfterHidesHiddenFields(t *testing.T) {
+	e := batchEnv(t)
+	col, _ := e.app.FindCollectionByNameOrId("order_items")
+	col.Fields.Add(&core.TextField{Name: "private_note", Hidden: true})
+	if err := e.app.Save(col); err != nil {
+		t.Fatal(err)
+	}
+	data := map[string]any{"qty": 1, "private_note": "s3cret", "tokenKey": "k", "vault": ""}
+	after := buildBatchIn(&kernel.BatchEvent{Name: kernel.BatchAfter, App: e.app,
+		Requests: []kernel.BatchRequest{{Collection: "order_items", Method: "POST", ID: "abc", Body: data}}})
+	b := after.Requests[0].Body
+	if _, ok := b["private_note"]; ok {
+		t.Fatalf("hidden field reached the guest: %v", b)
+	}
+	if _, ok := b["tokenKey"]; ok || b["qty"] != 1 {
+		t.Fatalf("unexpected body: %v", b)
+	}
+	// the submission (batch.before) is shown as sent
+	before := buildBatchIn(&kernel.BatchEvent{Name: kernel.BatchBefore, App: e.app,
+		Requests: []kernel.BatchRequest{{Collection: "order_items", Method: "POST", Body: data}}})
+	if before.Requests[0].Body["private_note"] != "s3cret" {
+		t.Fatalf("before must keep the submitted body: %v", before.Requests[0].Body)
+	}
+}
+
+func TestBatchTotalBudgetFailsClosed(t *testing.T) {
+	t.Setenv(EnvBatchBudget, "300ms")
+	e := batchEnv(t, modSpec{"spin", guest(t, "batch"), batchTOML("spin", `"batch.before"`, 60000)})
+	start := time.Now()
+	var code int
+	var body string
+	within(t, 15*time.Second, "batch with a spinning guest", func() {
+		code, body = e.do("POST", "/api/batch", itemsBatch(1), "")
+	})
+	if code != 500 || !strings.Contains(body, "Hook failed.") {
+		t.Fatalf("budget overrun must fail closed: %d %s", code, body)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("budget not enforced: %s", d)
+	}
+	if n := rowCount(t, e, "order_items"); n != 0 {
+		t.Fatalf("rows %d", n)
+	}
+}
+
+func TestHTTPAllowWildcardNeedsLabel(t *testing.T) {
+	if hostMatches([]string{"*.example.com"}, "evil.com.") {
+		t.Error("trailing dot host matched")
+	}
+	if !hostMatches([]string{"*.example.com"}, "a.example.com.") {
+		t.Error("fqdn form must match")
+	}
+	if _, err := ParseManifest("m", "m.toml", "events = [\"batch.before\"]\nhttp_allow = [\"*.\"]\n"); err == nil {
+		t.Error("`*.` must be refused")
+	}
+}

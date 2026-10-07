@@ -231,6 +231,12 @@ func CreateAgentOpts(app kernel.App, name string, role Role, collections []strin
 	if _, err := app.FindFirstRecordByData(coll, "name", name); err == nil {
 		return nil, "", fmt.Errorf("agent %q already exists", name)
 	}
+	if coll.Fields.GetByName("sandbox") == nil && opts.Sandbox {
+		return nil, "", errors.New("the _agents collection lacks the sandbox field (its migration failed, see the server log): refusing to create a non-sandboxed agent")
+	}
+	if coll.Fields.GetByName("expires") == nil && !opts.Expires.IsZero() {
+		return nil, "", errors.New("the _agents collection lacks the expires field (its migration failed, see the server log): refusing to create an agent without expiry")
+	}
 	key := keyPfx + security.RandomString(40)
 	rec := kernel.NewRecord(coll)
 	rec.Set("name", name)

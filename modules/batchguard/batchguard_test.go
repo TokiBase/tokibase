@@ -557,3 +557,69 @@ func TestBatchHooksPerApp(t *testing.T) {
 		t.Fatalf("foreign handler called %d times", called)
 	}
 }
+
+func TestAfterHookNeverSeesHiddenFields(t *testing.T) {
+	e := setup(t)
+	open := ""
+	c := core.NewBaseCollection("vault")
+	c.Fields.Add(&core.TextField{Name: "title"}, &core.TextField{Name: "api_secret", Hidden: true})
+	c.CreateRule = &open
+	if err := e.app.Save(c); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	id := kernel.OnBatchFor(e.app).Bind(&hook.Handler[*kernel.BatchEvent]{Func: func(ev *kernel.BatchEvent) error {
+		if ev.Name == kernel.BatchAfter {
+			got = ev.Requests[0].Body
+		}
+		return ev.Next()
+	}})
+	defer kernel.OnBatchFor(e.app).Unbind(id)
+	if code, out := e.batch(t, post("vault", map[string]any{"title": "t", "api_secret": "s3cret"})); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if got == nil || got["title"] != "t" {
+		t.Fatalf("after body: %v", got)
+	}
+	if _, ok := got["api_secret"]; ok {
+		t.Fatalf("hidden field reached the hook: %v", got)
+	}
+}
+
+func TestAddedIDNotLeakedToClient(t *testing.T) {
+	e := setup(t)
+	e.rule(t, Rule{Name: "cap", Match: []Match{{"order_items", "POST"}}, AssertPost: "sum(order_items, qty) <= 10"})
+	code, out := e.batch(t, postURL("/api/collections/order_items/records?fields=product", map[string]any{"qty": 1, "product": "p"}))
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	res, _ := out["results"].([]any)
+	body, _ := res[0].(map[string]any)["body"].(map[string]any)
+	if _, ok := body["id"]; ok || body["product"] != "p" {
+		t.Fatalf("client asked for fields=product only: %v", body)
+	}
+}
+
+func TestHookBoundMidRequestFailsClosed(t *testing.T) {
+	e := setup(t)
+	e.rule(t, Rule{Name: "t", Match: []Match{{"orders", "POST"}}, Assert: "req(0).body.total_qty == 3"})
+	bound := false
+	e.app.OnRecordCreateRequest("orders").BindFunc(func(ev *core.RecordRequestEvent) error {
+		if !bound {
+			bound = true
+			kernel.OnBatchFor(e.app).Bind(&hook.Handler[*kernel.BatchEvent]{Id: "late", Func: func(b *kernel.BatchEvent) error { return b.Next() }})
+		}
+		return ev.Next()
+	})
+	defer kernel.OnBatchFor(e.app).Unbind("late")
+	code, out := e.batch(t, post("orders", map[string]any{"total_qty": 3}))
+	if !bound {
+		t.Fatal("record hook did not run inside the batch")
+	}
+	if code != 503 {
+		t.Fatalf("want 503 fail-closed, got %d %v", code, out)
+	}
+	if e.count(t, "orders") != 0 {
+		t.Fatal("must roll back")
+	}
+}

@@ -11,6 +11,11 @@ const (
 	// CollectionNameAgents is the system collection of MCP agent identities
 	// (modules/mcp). A record of it as RequestInfo.Auth is an agent.
 	CollectionNameAgents = "_agents"
+
+	// AuthAgentNamespace is the rule prefix under which the attributes of an
+	// agent are exposed: `@request.auth.agent.role`. Other `@request.auth.*`
+	// names (except id, collectionId, collectionName, kind) are empty for agents.
+	AuthAgentNamespace = "agent"
 )
 
 // AuthKindOf returns the value of `@request.auth.kind` for an auth record

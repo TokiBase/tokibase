@@ -215,6 +215,20 @@ func (r *runner) processRequestAuthField() (*search.ResolverResult, error) {
 		return &search.ResolverResult{Identifier: "NULL"}, nil
 	}
 
+	// MCP agent: only id/collectionId/collectionName/kind and the
+	// `agent.*` namespace resolve; every other name (role, name, email, ...)
+	// is empty so user-field rules never match an agent.
+	if r.resolver.requestInfo.Auth.Collection().Name == CollectionNameAgents {
+		if len(r.activeProps) >= 3 {
+			switch name, _, _ := splitModifier(r.activeProps[2]); {
+			case name == AuthAgentNamespace && len(r.activeProps) >= 4,
+				name == FieldNameId, name == FieldNameCollectionId, name == FieldNameCollectionName, name == AuthKindField:
+				return r.resolver.resolveStaticRequestField(r.activeProps[1:]...)
+			}
+		}
+		return &search.ResolverResult{Identifier: "NULL"}, nil
+	}
+
 	// plain auth field
 	// ---
 	if _, ok := plainRequestAuthFields[r.fieldName]; ok {
