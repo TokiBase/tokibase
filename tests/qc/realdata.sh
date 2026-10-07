@@ -54,8 +54,8 @@ done
 grep -qiE 'panic|fatal' "$LOG"; [ $? = 1 ]; check "no_panic_in_log" $? "$(grep -iE 'panic|fatal' "$LOG" | head -2)"
 
 # 8. memory of the serving process
-PID=$(cat "$WORK/pid"); RSS=$(grep VmRSS /proc/$PID/status 2>/dev/null | awk '{print $2}'); [ -n "$RSS" ] && [ "$RSS" -lt 1000000 ]; check rss_under_1gb $? "VmRSS ${RSS:-?} kB"
+PID=$(pgrep -f "serve --dir $DATA" | head -1); RSS=$(grep VmRSS /proc/${PID:-0}/status 2>/dev/null | awk '{print $2}'); [ -n "$RSS" ] && [ "$RSS" -lt 1000000 ]; check rss_under_1gb $? "VmRSS ${RSS:-?} kB"
 
-kill "$PID" 2>/dev/null; sleep 1
+kill "$PID" "$(cat "$WORK/pid")" 2>/dev/null; sleep 1
 echo "{\"summary\":\"$([ $FAIL = 0 ] && echo PASS || echo FAIL)\",\"toki\":\"$("$TOKI" --version 2>/dev/null | head -1)\",\"date\":\"$(date -u +%FT%TZ)\"}"
 exit $FAIL
