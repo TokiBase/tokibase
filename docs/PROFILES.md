@@ -15,13 +15,13 @@ make edge GOOS=linux GOARCH=arm64   # cross-compile
 
 | Profile | Tags | Size linux/amd64 | linux/arm64 | Budget |
 | --- | --- | --- | --- | --- |
-| solo | none | 39.8 MiB | 37.6 MiB | 46 MiB |
-| team | none (= solo) | 39.8 MiB | 37.6 MiB | 46 MiB |
-| cluster | `replica_s3` | 48.0 MiB | 44.8 MiB | 56 MiB |
-| edge | `no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm` | 32.2 MiB | 30.3 MiB | 34 MiB |
-| nano | edge + `no_replica no_backupcheck no_audit` | 29.1 MiB | 27.4 MiB | 31 MiB |
+| solo | none | 42.8 MiB | 40.4 MiB | 45 MiB |
+| team | none (= solo) | 42.8 MiB | 40.4 MiB | 45 MiB |
+| cluster | `replica_s3` | 51.1 MiB | 47.6 MiB | 54 MiB |
+| edge | `no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd` | 25.0 MiB | 23.5 MiB | 28 MiB |
+| nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo` | 21.7 MiB | 20.4 MiB | 24 MiB |
 
-Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.
+Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.  darwin/arm64 solo measures 41.6 MiB.
 
 ## Modules per profile
 
@@ -46,6 +46,11 @@ Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.
 | mcp | `no_mcp` | yes | yes | no | no |
 | adminlock | `no_adminlock no_wasm` | yes | yes | no | no |
 | Admin UI | `no_ui` | yes | yes | no | no |
+| totp | `no_totp` | yes | yes | yes | no |
+| geo | `no_geo` | yes | yes | yes | no |
+| jsvm plugin (pb_hooks, JS migrations) | `no_jsvm` | yes | yes | no | no |
+| migrate command | `no_migratecmd` | yes | yes | no | no |
+| ghupdate (`update` command) | `no_ghupdate` | yes | yes | no | no |
 
 `jobs` has no tag: push, webhooks and computed enqueue work through it, it is small, and `TOKI_JOBS=off` disables it at runtime. Under `no_adminlock` the Admin UI mode switch (`TOKI_ADMIN_UI`) does not exist; edge and nano also drop the UI, so there is nothing to lock.
 
@@ -67,11 +72,21 @@ If anything is found the process refuses to start with an error listing the modu
 - The MCP provider wiring (`tokibase_mcp.go`) is only built without `no_mcp`.
 - `/api/health` omits replica fields under `no_replica`.
 
-## Size and the JS plugin
+## Plugins (`examples/base`)
 
-`./examples/base` links `plugins/jsvm`, `ghupdate` and `migratecmd`. Measured with a bare `tokibase.New().Start()` main, the same tag sets give edge 24.8 MiB and nano 21.6 MiB (linux/amd64): about 7.4 MiB of the profile sizes above is the plugin set, not tokibase modules. A no-plugin example binary is the way to reach the original 28 MiB (edge) and 14 MiB (nano) design goals.
+`./examples/base` links three optional plugins, each behind its own tag through small tagged files (`plugins_<name>.go` with `//go:build !no_<name>`, `plugins_<name>_stub.go` with the inverse), so `main.go` stays the same in every build:
+
+| Tag | Plugin | Under the tag |
+| --- | --- | --- |
+| `no_jsvm` | `plugins/jsvm` | no `pb_hooks`/JS migrations; the `--hooks*` flags are still accepted and ignored |
+| `no_migratecmd` | `plugins/migratecmd` | no `migrate` command, no automigrate; the `--migrationsDir`/`--automigrate` flags are still accepted and ignored |
+| `no_ghupdate` | `plugins/ghupdate` | no `update` command |
+
+Without any of these tags (solo, team, cluster) the binary, its flags and its behavior are unchanged. The three plugins weigh about 7 MiB together; with them removed, edge reaches 25.0 MiB and nano 21.7 MiB (linux/amd64), under the design targets of this phase (edge 30 MiB, nano 22 MiB). nano also drops `totp` and `geo`. The original 28 MiB (edge) and 14 MiB (nano) design goals of the architecture doc are not met by `./examples/base`.
+
+Like the module tags, a binary without `no_migratecmd`/`no_jsvm` removed features: databases migrated by JS migrations (`pb_migrations/*.js`) are not migrated by a build with `no_jsvm`.
 
 ## Checking
 
-- `go test -run 'TestProfile|TestEachStub' .` builds and vets every profile and every single `no_*` tag (skipped with `-short`).
+- `go test -run 'TestProfile|TestEachStub' .` builds and vets every profile and every single `no_*` tag, and `TestExamplePluginTags` builds and vets `./examples/base` with each plugin tag (all skipped with `-short`).
 - CI job `profiles` builds edge and nano for linux/amd64 and linux/arm64, enforces the budgets from `profiles.txt` and vets with the profile tags.

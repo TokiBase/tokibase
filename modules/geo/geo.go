@@ -1,3 +1,5 @@
+//go:build !no_geo
+
 // Package geo adds radius and bounding-box queries on geoPoint fields with
 // exact distance ordering, via the additive endpoint
 // GET /api/collections/{collection}/records/near, a Go API (Near) and an

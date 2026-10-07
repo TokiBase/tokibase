@@ -9,9 +9,6 @@ import (
 	"github.com/tokibase/tokibase"
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
-	"github.com/tokibase/tokibase/plugins/ghupdate"
-	"github.com/tokibase/tokibase/plugins/jsvm"
-	"github.com/tokibase/tokibase/plugins/migratecmd"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/osutils"
 )
@@ -85,23 +82,11 @@ func main() {
 	// Plugins and hooks:
 	// ---------------------------------------------------------------
 
-	// load jsvm (pb_hooks and pb_migrations)
-	jsvm.MustRegister(app, jsvm.Config{
-		MigrationsDir: migrationsDir,
-		HooksDir:      hooksDir,
-		HooksWatch:    hooksWatch,
-		HooksPoolSize: hooksPool,
-	})
-
-	// migrate command (with js templates)
-	migratecmd.MustRegister(app, app.RootCmd, migratecmd.Config{
-		TemplateLang: migratecmd.TemplateLangJS,
-		Automigrate:  automigrate,
-		Dir:          migrationsDir,
-	})
-
-	// GitHub selfupdate
-	ghupdate.MustRegister(app, app.RootCmd, ghupdate.Config{})
+	// optional plugins; each one is compiled out by its no_<plugin> build tag
+	// (plugins_*.go and plugins_*_stub.go)
+	registerJSVM(app, migrationsDir, hooksDir, hooksWatch, hooksPool)
+	registerMigrateCmd(app, migrationsDir, automigrate)
+	registerGHUpdate(app)
 
 	// static route to serves files from the provided public dir
 	// (if publicDir exists and the route path is not already defined)

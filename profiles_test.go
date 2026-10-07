@@ -83,7 +83,8 @@ func goRun(t *testing.T, tags []string, args ...string) {
 
 // TestProfilesDefined checks that profiles.txt only uses known tags.
 func TestProfilesDefined(t *testing.T) {
-	known := map[string]bool{"replica_s3": true, "no_ui": true, "no_mcp": true}
+	known := map[string]bool{"replica_s3": true, "no_ui": true, "no_mcp": true,
+		"no_jsvm": true, "no_ghupdate": true, "no_migratecmd": true} // examples/base plugin tags
 	for _, tag := range removableTags(t) {
 		known[tag] = true
 	}
@@ -130,6 +131,26 @@ func TestEachStubBuilds(t *testing.T) {
 	for _, tag := range removableTags(t) {
 		t.Run(tag, func(t *testing.T) {
 			goRun(t, []string{tag}, "build", "./...")
+		})
+	}
+}
+
+// TestExamplePluginTags builds ./examples/base with each optional plugin tag
+// (no_jsvm, no_ghupdate, no_migratecmd) alone and all together, so the tagged
+// plugins_*.go / plugins_*_stub.go pairs cannot drift apart.
+func TestExamplePluginTags(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping plugin tag builds in -short mode")
+	}
+	plugins := []string{"no_jsvm", "no_ghupdate", "no_migratecmd"}
+	cases := map[string][]string{"all": plugins}
+	for _, p := range plugins {
+		cases[p] = []string{p}
+	}
+	for name, tags := range cases {
+		t.Run(name, func(t *testing.T) {
+			goRun(t, tags, "build", "-o", os.DevNull, "./examples/base")
+			goRun(t, tags, "vet", "./examples/base")
 		})
 	}
 }

@@ -3,6 +3,6 @@
 # Budgets are for the stripped linux binary of ./examples/base (see docs/PROFILES.md).
 solo    46
 team    46
-cluster 56 replica_s3
-edge    34 no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm
-nano    31 no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_replica no_backupcheck no_audit no_wasm
+cluster 55 replica_s3
+edge    28 no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd
+nano    24 no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_replica no_backupcheck no_audit no_wasm no_jsvm no_ghupdate no_migratecmd no_totp no_geo

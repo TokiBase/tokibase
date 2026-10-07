@@ -70,14 +70,14 @@ Exit gate: all modules on by default in profile `solo`, failover drill RTO under
 - [x] rule engine (PR 1): dialect-neutral rule AST in `kernel/rule` (`Parse` on top of fexpr) and a SQLite emitter (`kernel/rule/sql.Emit`) with byte-identical SQL/params to the legacy compiler; opt-in via `TOKI_RULE_AST=1` (default off), differential tests in `tools/search`, CI job `test-rule-ast` (`docs/RULE_ENGINE.md`). PostgreSQL emitter and in-memory evaluator are later PRs.
 - [ ] mcp (PR 2): streamable HTTP transport, `@request.auth.kind = "agent"` in rules, sandbox mode.
 
-## Size budgets (stripped; CI enforces the numbers in `profiles.txt`: solo 46 MiB, no_ui 43 MiB, solo+replica_s3 56 MiB, edge 34 MiB, nano 31 MiB). The full-featured `solo` build has reached the 45 MB design budget with passkey (+2.1 MB, go-webauthn/TPM/CBOR), mcp (+2 MB) and push; the `edge`/`nano` profiles exclude these through build tags (`no_mcp`, `no_passkey`, `no_push`, `no_webhooks`, `no_crypto`, ... see `docs/PROFILES.md`).
+## Size budgets (stripped; CI enforces the numbers in `profiles.txt`: solo 45 MiB, no_ui 43 MiB, solo+replica_s3 54 MiB, edge 28 MiB, nano 24 MiB). The full-featured `solo` build has reached the 45 MB design budget with passkey (+2.1 MB, go-webauthn/TPM/CBOR), mcp (+2 MB) and push; the `edge`/`nano` profiles exclude these through build tags (`no_mcp`, `no_passkey`, `no_push`, `no_webhooks`, `no_crypto`, ... see `docs/PROFILES.md`).
 
 | Profile | Design budget | Measured linux/amd64 (arm64) | CI budget |
 | --- | --- | --- | --- |
-| nano | 14 MB per arch | 29.1 MiB (27.4) | 31 MiB |
-| edge | 28 MB | 32.2 MiB (30.3) | 34 MiB |
-| solo | 45 MB | 39.8 MiB (37.6) | 46 MiB |
-| team | 60 MB | 39.8 MiB (= solo) | 46 MiB |
-| cluster | 60 MB | 48.0 MiB (44.8) | 56 MiB |
+| nano | 14 MB per arch | 21.7 MiB (20.4) | 24 MiB |
+| edge | 28 MB | 25.0 MiB (23.5) | 28 MiB |
+| solo | 45 MB | 42.8 MiB (40.4) | 45 MiB |
+| team | 60 MB | 42.8 MiB (= solo) | 45 MiB |
+| cluster | 60 MB | 51.1 MiB (47.6) | 54 MiB |
 
-TODO: nano and edge miss their design budgets because `./examples/base` links the JS plugin set (about 7.4 MiB); a main without `plugins/jsvm` measures nano 21.6 MiB and edge 24.8 MiB. The CI budgets are measured + 2 MiB until a no-plugin example binary exists.
+Edge and nano exclude the JS plugin set of `./examples/base` through `no_jsvm no_ghupdate no_migratecmd` (about 7 MiB); nano also drops `no_totp no_geo`. They meet the phase targets (edge 30 MiB, nano 22 MiB) but not the original 28/14 MB design budgets. CI budgets are measured + 2 MiB, rounded up.
