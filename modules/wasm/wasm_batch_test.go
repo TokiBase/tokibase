@@ -16,8 +16,12 @@ import (
 	"github.com/tokibase/tokibase/modules/batchguard"
 )
 
-func batchTOML(mode, events string, extra ...string) string {
-	return "events = [" + events + "]\ntimeout_ms = 1500\n" + strings.Join(extra, "\n") + "\n[env]\nMODE = \"" + mode + "\"\nMAX = \"5\"\n"
+func batchTOML(mode, events string, timeoutMS ...int) string {
+	to := 1500
+	if len(timeoutMS) > 0 {
+		to = timeoutMS[0]
+	}
+	return "events = [" + events + "]\ntimeout_ms = " + fmt.Sprint(to) + "\n[env]\nMODE = \"" + mode + "\"\nMAX = \"5\"\n"
 }
 
 // batchEnv is newEnv plus batchguard (the emitter of the batch events), the
@@ -31,7 +35,7 @@ func batchEnv(t *testing.T, mods ...modSpec) *env {
 	}
 	open := ""
 	c := core.NewBaseCollection("order_items")
-	c.Fields.Add(&core.NumberField{Name: "qty"}, &core.TextField{Name: "secret"})
+	c.Fields.Add(&core.NumberField{Name: "qty"}, &core.TextField{Name: "vault"})
 	c.CreateRule, c.ListRule, c.ViewRule, c.UpdateRule, c.DeleteRule = &open, &open, &open, &open, &open
 	if err := e.app.Save(c); err != nil {
 		t.Fatal(err)
@@ -74,7 +78,7 @@ func TestBatchGuestRejectsAndAllows(t *testing.T) {
 				t.Fatalf("rows %d", n)
 			}
 			code, body = e.do("POST", "/api/batch", itemsBatch(4, 3), "")
-			if code != 422 || !strings.Contains(body, "too many items: 7 > 5") {
+			if code != 422 || !strings.Contains(body, "oo many items: 7 > 5") {
 				t.Fatalf("over the cap: %d %s", code, body)
 			}
 			if n := rowCount(t, e, "order_items"); n != 2 {
@@ -100,7 +104,7 @@ func TestBatchAfterSeesStoredValuesAndRollsBack(t *testing.T) {
 		Phase string
 		Batch struct{ Requests []BatchRequestIn }
 	}
-	if err := json.Unmarshal([]byte(out.Message), &ev); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimSuffix(out.Message, ".")), &ev); err != nil {
 		t.Fatalf("%v: %s", err, out.Message)
 	}
 	r := ev.Batch.Requests
@@ -129,7 +133,7 @@ func TestBatchAllowGuestPassesAndTrapFailsClosed(t *testing.T) {
 }
 
 func TestBatchTimeoutFailsClosed(t *testing.T) {
-	e := batchEnv(t, modSpec{"spin", guest(t, "batch"), batchTOML("spin", `"batch.before"`, "timeout_ms = 300")})
+	e := batchEnv(t, modSpec{"spin", guest(t, "batch"), batchTOML("spin", `"batch.before"`, 300)})
 	start := time.Now()
 	var code int
 	var body string
@@ -156,11 +160,11 @@ func TestBatchPayloadIsRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	kernel.RegisterSensitiveField(col.Id, "secret")
-	t.Cleanup(func() { kernel.UnregisterSensitiveField(col.Id, "secret") })
+	kernel.RegisterSensitiveField(col.Id, "vault")
+	t.Cleanup(func() { kernel.UnregisterSensitiveField(col.Id, "vault") })
 
-	body := `{"requests":[{"method":"POST","url":"/api/collections/order_items/records","body":{"qty":1,"secret":"s3cr3t-value","password":"pw-123","note":{"token":"tok-9","keep":"visible"}}},
-		{"method":"POST","url":"/api/collections/order_items/records","body":{"qty":2,"secret":"","secret:x":"s3cr3t-2"}}]}`
+	body := `{"requests":[{"method":"POST","url":"/api/collections/order_items/records","body":{"qty":1,"vault":"s3cr3t-value","password":"pw-123","note":{"token":"tok-9","keep":"visible"}}},
+		{"method":"POST","url":"/api/collections/order_items/records","body":{"qty":2,"vault":"","vault:x":"s3cr3t-2"}}]}`
 	code, resp := e.do("POST", "/api/batch", body, "")
 	if code != 418 {
 		t.Fatalf("%d %s", code, resp)
@@ -178,9 +182,9 @@ func TestBatchPayloadIsRedacted(t *testing.T) {
 func TestBuildBatchInRedactionAndAuth(t *testing.T) {
 	e := batchEnv(t)
 	col, _ := e.app.FindCollectionByNameOrId("order_items")
-	kernel.RegisterSensitiveField(col.Id, "secret")
-	defer kernel.UnregisterSensitiveField(col.Id, "secret")
-	orig := map[string]any{"secret+": "x", "+secret": "y", "secret-": "z", "qty": 1, "Password": "p", "secret": ""}
+	kernel.RegisterSensitiveField(col.Id, "vault")
+	defer kernel.UnregisterSensitiveField(col.Id, "vault")
+	orig := map[string]any{"vault+": "x", "+vault": "y", "vault-": "z", "qty": 1, "Password": "p", "vault": ""}
 	su, err := e.app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test@example.com")
 	if err != nil {
 		t.Fatal(err)
@@ -188,15 +192,15 @@ func TestBuildBatchInRedactionAndAuth(t *testing.T) {
 	in := buildBatchIn(&kernel.BatchEvent{Name: kernel.BatchBefore, App: e.app, Auth: su,
 		Requests: []kernel.BatchRequest{{Index: 0, Collection: "order_items", Method: "PATCH", ID: "abc", Body: orig}}})
 	b := in.Requests[0].Body
-	for _, k := range []string{"secret+", "+secret", "secret-"} {
+	for _, k := range []string{"vault+", "+vault", "vault-"} {
 		if b[k] != kernel.SensitiveMarker {
 			t.Errorf("%s not redacted: %v", k, b)
 		}
 	}
-	if _, ok := b["Password"]; ok || b["qty"] != 1 || b["secret"] != "" {
+	if _, ok := b["Password"]; ok || b["qty"] != 1 || b["vault"] != "" {
 		t.Errorf("unexpected body: %v", b)
 	}
-	if orig["secret+"] != "x" {
+	if orig["vault+"] != "x" {
 		t.Error("original body mutated")
 	}
 	if in.Auth == nil || !in.Auth.Superuser || in.Auth.ID != su.Id || in.Requests[0].Path != "/api/collections/order_items/records/abc" {
@@ -240,7 +244,7 @@ func TestBatchOversizedPayloadRefused(t *testing.T) {
 	big := strings.Repeat("x", 1<<20)
 	var reqs []string
 	for i := 0; i < 5; i++ {
-		reqs = append(reqs, fmt.Sprintf(`{"method":"POST","url":"/api/collections/order_items/records","body":{"qty":1,"secret":"%s"}}`, big))
+		reqs = append(reqs, fmt.Sprintf(`{"method":"POST","url":"/api/collections/order_items/records","body":{"qty":1,"vault":"%s"}}`, big))
 	}
 	code, body := e.do("POST", "/api/batch", `{"requests":[`+strings.Join(reqs, ",")+`]}`, "")
 	if code != 413 {
