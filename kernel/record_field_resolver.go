@@ -10,6 +10,7 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/spf13/cast"
+	"github.com/tokibase/tokibase/kernel/rule"
 	"github.com/tokibase/tokibase/tools/inflector"
 	"github.com/tokibase/tokibase/tools/search"
 	"github.com/tokibase/tokibase/tools/security"
@@ -55,6 +56,7 @@ type RecordFieldResolver struct {
 	allowedFields     []string
 	joins             []*search.Join
 	allowHiddenFields bool
+	dialect           rule.Dialect // nil = SQLite
 	// ---
 	listRuleJoins       []ruleJoin
 	joinAliasSuffix     string // used for uniqueness in the flatten collection list rule join
@@ -144,7 +146,7 @@ func (r *RecordFieldResolver) UpdateQuery(query *dbx.SelectQuery) error {
 		for _, join := range r.joins {
 			query.LeftJoin(
 				(join.TableName + " " + join.TableAlias),
-				join.On,
+				r.joinOn(join),
 			)
 		}
 	}
@@ -204,7 +206,7 @@ func (r *RecordFieldResolver) updateQueryWithCollectionListRule(c *Collection, t
 		for _, j := range cloneR.joins {
 			query.LeftJoin(
 				(j.TableName + " " + j.TableAlias),
-				j.On,
+				r.joinOn(j),
 			)
 		}
 	}

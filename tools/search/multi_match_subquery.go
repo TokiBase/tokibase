@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/pocketbase/dbx"
+	"github.com/tokibase/tokibase/kernel/rule"
 )
 
 var _ dbx.Expression = (*MultiMatchSubquery)(nil)
@@ -24,6 +25,8 @@ type MultiMatchSubquery struct {
 	ValueIdentifier  string
 	Joins            []*Join
 	Params           dbx.Params
+	// Dialect renders the dialect specific parts (nil means SQLite).
+	Dialect rule.Dialect
 }
 
 // Build converts the expression into a SQL fragment.
@@ -55,6 +58,8 @@ func (m *MultiMatchSubquery) Build(db *dbx.DB, params dbx.Params) string {
 		if j.On != nil {
 			mergedJoins.WriteString(" ON ")
 			mergedJoins.WriteString(j.On.Build(db, params))
+		} else if m.Dialect != nil {
+			mergedJoins.WriteString(m.Dialect.OptionalOn())
 		}
 	}
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/spf13/cast"
+	"github.com/tokibase/tokibase/kernel/rule"
 	"github.com/tokibase/tokibase/tools/dbutils"
 	"github.com/tokibase/tokibase/tools/inflector"
 	"github.com/tokibase/tokibase/tools/list"
@@ -147,6 +148,7 @@ func (r *runner) prepare() {
 	r.multiMatch = &search.MultiMatchSubquery{
 		TargetTableAlias: r.activeTableAlias,
 		Params:           dbx.Params{},
+		Dialect:          r.resolver.Dialect(),
 	}
 	r.multiMatch.FromTableName = inflector.Columnify(r.activeCollectionName)
 	r.multiMatch.FromTableAlias = "__mm_" + r.activeTableAlias
@@ -351,7 +353,10 @@ func (r *runner) processRequestBodyEachModifier(bodyField Field) (*search.Resolv
 
 	placeholder := "dataEach" + security.PseudorandomString(8)
 	cleanFieldName := inflector.Columnify(bodyField.GetName())
-	jeTable := fmt.Sprintf("json_each({:%s})", placeholder)
+	jeTable, err := r.resolver.Dialect().JSONEachParam(placeholder)
+	if err != nil {
+		return nil, err
+	}
 	jeAlias := "__dataEach_je_" + cleanFieldName + r.resolver.joinAliasSuffix
 
 	err = r.resolver.registerJoin(jeTable, jeAlias, nil)
@@ -370,7 +375,10 @@ func (r *runner) processRequestBodyEachModifier(bodyField Field) (*search.Resolv
 
 	if r.withMultiMatch {
 		placeholder2 := "mm" + placeholder
-		jeTable2 := fmt.Sprintf("json_each({:%s})", placeholder2)
+		jeTable2, err := r.resolver.Dialect().JSONEachParam(placeholder2)
+		if err != nil {
+			return nil, err
+		}
 		jeAlias2 := "__mm_" + jeAlias
 
 		r.multiMatch.Joins = append(r.multiMatch.Joins, &search.Join{
@@ -472,28 +480,34 @@ func (r *runner) processActiveProps() (*search.ResolverResult, error) {
 		// @todo consider moving to the finalizer and converting to "JSONExtractable" interface with optional extra validation for the remaining props?
 		// json or geoPoint field -> treat the rest of the props as json path
 		if field != nil && (field.Type() == FieldTypeJSON || field.Type() == FieldTypeGeoPoint) {
-			var jsonPath strings.Builder
-			for j, p := range r.activeProps[i+1:] {
-				if _, err := strconv.Atoi(p); err == nil {
-					jsonPath.WriteString("[")
-					jsonPath.WriteString(inflector.Columnify(p))
-					jsonPath.WriteString("]")
-				} else {
-					if j > 0 {
-						jsonPath.WriteString(".")
-					}
-					jsonPath.WriteString(inflector.Columnify(p))
-				}
+			jsonPath := make([]string, 0, len(r.activeProps[i+1:]))
+			for _, p := range r.activeProps[i+1:] {
+				jsonPath = append(jsonPath, inflector.Columnify(p))
 			}
-			jsonPathStr := jsonPath.String()
+
+			ref := rule.Ref{
+				Kind:   rule.RefJSON,
+				Alias:  r.activeTableAlias,
+				Column: inflector.Columnify(prop),
+				Path:   jsonPath,
+			}
+
+			identifier, err := ref.Emit(r.resolver.Dialect())
+			if err != nil {
+				return nil, err
+			}
 
 			result := &search.ResolverResult{
 				NullFallback: search.NullFallbackDisabled,
-				Identifier:   dbutils.JSONExtract(r.activeTableAlias+"."+inflector.Columnify(prop), jsonPathStr),
+				Identifier:   identifier,
 			}
 
 			if r.withMultiMatch {
-				r.multiMatch.ValueIdentifier = dbutils.JSONExtract(r.multiMatchActiveTableAlias+"."+inflector.Columnify(prop), jsonPathStr)
+				ref.Alias = r.multiMatchActiveTableAlias
+				r.multiMatch.ValueIdentifier, err = ref.Emit(r.resolver.Dialect())
+				if err != nil {
+					return nil, err
+				}
 				result.MultiMatchSubQuery = r.multiMatch
 			}
 
@@ -575,17 +589,16 @@ func (r *runner) processActiveProps() (*search.ResolverResult, error) {
 				}
 			} else {
 				jeAlias := "__je_" + newTableAlias
-				err := r.resolver.registerJoin(
-					newCollectionName,
-					newTableAlias,
-					dbx.NewExp(fmt.Sprintf(
-						"[[%s.id]] IN (SELECT [[%s.value]] FROM %s {{%s}})",
-						r.activeTableAlias,
-						jeAlias,
-						dbutils.JSONEach(newTableAlias+"."+cleanBackFieldName),
-						jeAlias,
-					)),
+				memberOn, err := r.resolver.Dialect().JSONArrayMember(
+					r.activeTableAlias+".id",
+					jeAlias,
+					newTableAlias+"."+cleanBackFieldName,
 				)
+				if err != nil {
+					return nil, err
+				}
+
+				err = r.resolver.registerJoin(newCollectionName, newTableAlias, dbx.NewExp(memberOn))
 				if err != nil {
 					return nil, err
 				}
@@ -619,18 +632,21 @@ func (r *runner) processActiveProps() (*search.ResolverResult, error) {
 				)
 			} else {
 				jeAlias2 := "__je_" + newTableAlias2
+				memberOn2, err := r.resolver.Dialect().JSONArrayMember(
+					r.multiMatchActiveTableAlias+".id",
+					jeAlias2,
+					newTableAlias2+"."+cleanBackFieldName,
+				)
+				if err != nil {
+					return nil, err
+				}
+
 				r.multiMatch.Joins = append(
 					r.multiMatch.Joins,
 					&search.Join{
 						TableName:  newCollectionName,
 						TableAlias: newTableAlias2,
-						On: dbx.NewExp(fmt.Sprintf(
-							"[[%s.id]] IN (SELECT [[%s.value]] FROM %s {{%s}})",
-							r.multiMatchActiveTableAlias,
-							jeAlias2,
-							dbutils.JSONEach(newTableAlias2+"."+cleanBackFieldName),
-							jeAlias2,
-						)),
+						On:         dbx.NewExp(memberOn2),
 					},
 				)
 			}
@@ -684,7 +700,12 @@ func (r *runner) processActiveProps() (*search.ResolverResult, error) {
 		} else {
 			jeAlias := "__je_" + newTableAlias
 
-			err := r.resolver.registerJoin(dbutils.JSONEach(prefixedFieldName), jeAlias, nil)
+			jeTable, err := r.resolver.Dialect().JSONEach(prefixedFieldName)
+			if err != nil {
+				return nil, err
+			}
+
+			err = r.resolver.registerJoin(jeTable, jeAlias, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -723,10 +744,15 @@ func (r *runner) processActiveProps() (*search.ResolverResult, error) {
 			)
 		} else {
 			jeAlias2 := r.multiMatchActiveTableAlias + "_" + cleanFieldName + "_je"
+			jeTable2, err := r.resolver.Dialect().JSONEach(prefixedFieldName2)
+			if err != nil {
+				return nil, err
+			}
+
 			r.multiMatch.Joins = append(
 				r.multiMatch.Joins,
 				&search.Join{
-					TableName:  dbutils.JSONEach(prefixedFieldName2),
+					TableName:  jeTable2,
 					TableAlias: jeAlias2,
 				},
 				&search.Join{
@@ -766,18 +792,26 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 
 	cleanFieldName := inflector.Columnify(field.GetName())
 
+	d := r.resolver.Dialect()
+
 	// arrayable fields with ":length" modifier
 	// -------------------------------------------------------
 	if modifier == lengthModifier && isMultivaluer {
-		jePair := r.activeTableAlias + "." + cleanFieldName
+		ref := rule.Ref{Kind: rule.RefArrayLength, Alias: r.activeTableAlias, Column: cleanFieldName}
 
-		result := &search.ResolverResult{
-			Identifier: dbutils.JSONArrayLength(jePair),
+		identifier, err := ref.Emit(d)
+		if err != nil {
+			return nil, err
 		}
 
+		result := &search.ResolverResult{Identifier: identifier}
+
 		if r.withMultiMatch {
-			jePair2 := r.multiMatchActiveTableAlias + "." + cleanFieldName
-			r.multiMatch.ValueIdentifier = dbutils.JSONArrayLength(jePair2)
+			ref.Alias = r.multiMatchActiveTableAlias
+			r.multiMatch.ValueIdentifier, err = ref.Emit(d)
+			if err != nil {
+				return nil, err
+			}
 			result.MultiMatchSubQuery = r.multiMatch
 		}
 
@@ -790,7 +824,12 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 		jePair := r.activeTableAlias + "." + cleanFieldName
 		jeAlias := "__je_" + r.activeTableAlias + "_" + cleanFieldName + r.resolver.joinAliasSuffix
 
-		err := r.resolver.registerJoin(dbutils.JSONEach(jePair), jeAlias, nil)
+		jeTable, err := d.JSONEach(jePair)
+		if err != nil {
+			return nil, err
+		}
+
+		err = r.resolver.registerJoin(jeTable, jeAlias, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -807,8 +846,13 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 			jePair2 := r.multiMatchActiveTableAlias + "." + cleanFieldName
 			jeAlias2 := "__je_" + r.multiMatchActiveTableAlias + "_" + cleanFieldName + r.resolver.joinAliasSuffix
 
+			jeTable2, err := d.JSONEach(jePair2)
+			if err != nil {
+				return nil, err
+			}
+
 			r.multiMatch.Joins = append(r.multiMatch.Joins, &search.Join{
-				TableName:  dbutils.JSONEach(jePair2),
+				TableName:  jeTable2,
 				TableAlias: jeAlias2,
 			})
 			r.multiMatch.ValueIdentifier = fmt.Sprintf("[[%s.value]]", jeAlias2)
@@ -821,13 +865,37 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 
 	// default
 	// -------------------------------------------------------
-	result := &search.ResolverResult{
-		Identifier: "[[" + r.activeTableAlias + "." + cleanFieldName + "]]",
+	// (wrap json fields in json_extract to ensure that top-level primitives
+	// stored as json work correctly when compared to their SQL equivalent,
+	// https://github.com/tokibase/tokibase/issues/4068)
+	ref := rule.Ref{
+		Kind:   rule.RefColumn,
+		Alias:  r.activeTableAlias,
+		Column: cleanFieldName,
+		Lower:  modifier == lowerModifier,
+	}
+	if field.Type() == FieldTypeJSON {
+		ref.Kind = rule.RefJSON
 	}
 
+	identifier, err := ref.Emit(d)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &search.ResolverResult{Identifier: identifier}
+
 	if r.withMultiMatch {
-		r.multiMatch.ValueIdentifier = "[[" + r.multiMatchActiveTableAlias + "." + cleanFieldName + "]]"
+		ref.Alias = r.multiMatchActiveTableAlias
+		r.multiMatch.ValueIdentifier, err = ref.Emit(d)
+		if err != nil {
+			return nil, err
+		}
 		result.MultiMatchSubQuery = r.multiMatch
+	}
+
+	if ref.Kind == rule.RefJSON {
+		result.NullFallback = search.NullFallbackDisabled
 	}
 
 	// allow querying only auth records with emails marked as public
@@ -838,25 +906,6 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 				r.activeTableAlias,
 				FieldNameEmailVisibility,
 			))))
-		}
-	}
-
-	// wrap in json_extract to ensure that top-level primitives
-	// stored as json work correctly when compared to their SQL equivalent
-	// (https://github.com/tokibase/tokibase/issues/4068)
-	if field.Type() == FieldTypeJSON {
-		result.NullFallback = search.NullFallbackDisabled
-		result.Identifier = dbutils.JSONExtract(r.activeTableAlias+"."+cleanFieldName, "")
-		if r.withMultiMatch {
-			r.multiMatch.ValueIdentifier = dbutils.JSONExtract(r.multiMatchActiveTableAlias+"."+cleanFieldName, "")
-		}
-	}
-
-	// account for the ":lower" modifier
-	if modifier == lowerModifier {
-		result.Identifier = "LOWER(" + result.Identifier + ")"
-		if r.withMultiMatch {
-			r.multiMatch.ValueIdentifier = "LOWER(" + r.multiMatch.ValueIdentifier + ")"
 		}
 	}
 

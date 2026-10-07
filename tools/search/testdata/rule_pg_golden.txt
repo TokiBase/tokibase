@@ -1,0 +1,208 @@
+## text = 'abc'
+SELECT * FROM "demo1" WHERE [[demo1.text]] = {:p1}
+p1="abc"
+
+## text != 'abc'
+SELECT * FROM "demo1" WHERE [[demo1.text]] IS DISTINCT FROM {:p1}
+p1="abc"
+
+## text ~ 'abc'
+SELECT * FROM "demo1" WHERE CAST([[demo1.text]] AS TEXT) ILIKE {:p1} ESCAPE '\'
+p1="%abc%"
+
+## text !~ 'a_b'
+SELECT * FROM "demo1" WHERE CAST([[demo1.text]] AS TEXT) NOT ILIKE {:p1} ESCAPE '\'
+p1="%a\\_b%"
+
+## number > 1
+SELECT * FROM "demo1" WHERE [[demo1.number]] > {:p1}
+p1=1
+
+## number <= 1.5
+SELECT * FROM "demo1" WHERE [[demo1.number]] <= {:p1}
+p1=1.5
+
+## text = null
+SELECT * FROM "demo1" WHERE ((CAST([[demo1.text]] AS TEXT) = '' OR [[demo1.text]] IS NULL))
+
+
+## text != ''
+SELECT * FROM "demo1" WHERE ((CAST([[demo1.text]] AS TEXT) IS DISTINCT FROM '' AND [[demo1.text]] IS NOT NULL))
+
+
+## text = number
+SELECT * FROM "demo1" WHERE COALESCE(CAST([[demo1.text]] AS TEXT), '') = COALESCE(CAST([[demo1.number]] AS TEXT), '')
+
+
+## number != text
+SELECT * FROM "demo1" WHERE COALESCE(CAST([[demo1.number]] AS TEXT), '') IS DISTINCT FROM COALESCE(CAST([[demo1.text]] AS TEXT), '')
+
+
+## bool = true
+SELECT * FROM "demo1" WHERE [[demo1.bool]] = TRUE
+
+
+## bool != false
+SELECT * FROM "demo1" WHERE [[demo1.bool]] IS DISTINCT FROM FALSE
+
+
+## true = false
+SELECT * FROM "demo1" WHERE TRUE = FALSE
+
+
+## text = email && number != 3 || bool = true
+SELECT * FROM "demo1" WHERE (COALESCE(CAST([[demo1.text]] AS TEXT), '') = COALESCE(CAST([[demo1.email]] AS TEXT), '') AND [[demo1.number]] IS DISTINCT FROM {:p1} OR [[demo1.bool]] = TRUE)
+p1=3
+
+## (text ~ 'a' || text ~ 'b') && number >= 1
+SELECT * FROM "demo1" WHERE ((CAST([[demo1.text]] AS TEXT) ILIKE {:p1} ESCAPE '\' OR CAST([[demo1.text]] AS TEXT) ILIKE {:p2} ESCAPE '\') AND [[demo1.number]] >= {:p3})
+p1="%a%" p2="%b%" p3=1
+
+## text ~ email
+SELECT * FROM "demo1" WHERE CAST([[demo1.text]] AS TEXT) ILIKE ('%' || CAST([[demo1.email]] AS TEXT) || '%') ESCAPE '\'
+
+
+## json.a.b = 'x'
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #>> '{a,b}') IS NOT DISTINCT FROM {:p1}
+p1="x"
+
+## json.a.0 = 1
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #>> '{a,0}') IS NOT DISTINCT FROM {:p1}
+p1=1
+
+## json = 'x'
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #>> '{}') IS NOT DISTINCT FROM {:p1}
+p1="x"
+
+## json:length = 1
+SELECT * FROM "demo1" WHERE (to_jsonb([[demo1.json]]) #>> '{}') IS NOT DISTINCT FROM {:p1}
+p1=1
+
+## select_many:length > 1
+SELECT * FROM "demo1" WHERE (CASE WHEN [[demo1.select_many]] IS NULL THEN 0 WHEN jsonb_typeof(to_jsonb([[demo1.select_many]])) = 'array' THEN jsonb_array_length(to_jsonb([[demo1.select_many]])) WHEN CAST([[demo1.select_many]] AS TEXT) = '' THEN 0 ELSE 1 END) > {:p1}
+p1=1
+
+## text:lower = 'abc'
+SELECT * FROM "demo1" WHERE LOWER([[demo1.text]]) = {:p1}
+p1="abc"
+
+## email:lower ~ 'a'
+SELECT * FROM "demo1" WHERE CAST(LOWER([[demo1.email]]) AS TEXT) ILIKE {:p1} ESCAPE '\'
+p1="%a%"
+
+## rel_one.text = 'x'
+SELECT DISTINCT * FROM "demo1" LEFT JOIN "demo1" "demo1_rel_one" ON [[demo1_rel_one.id]] = [[demo1.rel_one]] WHERE [[demo1_rel_one.text]] = {:p1}
+p1="x"
+
+## rel_one.id = 'x'
+SELECT * FROM "demo1" WHERE [[demo1.rel_one]] = {:p1}
+p1="x"
+
+## rel_one.text != rel_one.text
+SELECT DISTINCT * FROM "demo1" LEFT JOIN "demo1" "demo1_rel_one" ON [[demo1_rel_one.id]] = [[demo1.rel_one]] WHERE COALESCE(CAST([[demo1_rel_one.text]] AS TEXT), '') IS DISTINCT FROM COALESCE(CAST([[demo1_rel_one.text]] AS TEXT), '')
+
+
+## rel_one.rel_one.text ~ 'x'
+SELECT DISTINCT * FROM "demo1" LEFT JOIN "demo1" "demo1_rel_one" ON [[demo1_rel_one.id]] = [[demo1.rel_one]] LEFT JOIN "demo1" "demo1_rel_one_rel_one" ON [[demo1_rel_one_rel_one.id]] = [[demo1_rel_one.rel_one]] WHERE CAST([[demo1_rel_one_rel_one.text]] AS TEXT) ILIKE {:p1} ESCAPE '\'
+p1="%x%"
+
+## demo1_via_rel_one.text = 'x'
+SELECT DISTINCT * FROM "demo1" LEFT JOIN "demo1" "demo1_demo1_via_rel_one" ON [[demo1_demo1_via_rel_one.rel_one]] = [[demo1.id]] WHERE ((([[demo1_demo1_via_rel_one.text]] = {:p1}) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm_demo1_demo1_via_rel_one.text]] as [[multiMatchValue]] FROM "demo1" "__mm_demo1" LEFT JOIN "demo1" "__mm_demo1_demo1_via_rel_one" ON [[__mm_demo1_demo1_via_rel_one.rel_one]] = [[__mm_demo1.id]] WHERE "__mm_demo1"."id" = "demo1"."id") {{__smX}} WHERE NOT ([[__smX.multiMatchValue]] = {:p1})))))
+p1="x"
+
+## demo1_via_rel_many.text ?= 'x'
+ERR invalid left operand "demo1_via_rel_many.text" - invalid collection reference of a back relation field "rel_many"
+
+## demo1_via_rel_many.text = 'x'
+ERR invalid left operand "demo1_via_rel_many.text" - invalid collection reference of a back relation field "rel_many"
+
+## rel_many.title = 'a'
+ERR invalid left operand "rel_many.title" - rule: construct not supported by the SQL dialect: postgres: JOIN over the elements of a multi-value column (:each, multi relations); needs LATERAL jsonb_array_elements_text support in the join builder
+
+## rel_many.title ?= 'a'
+ERR invalid left operand "rel_many.title" - rule: construct not supported by the SQL dialect: postgres: JOIN over the elements of a multi-value column (:each, multi relations); needs LATERAL jsonb_array_elements_text support in the join builder
+
+## select_many:each ~ 'a'
+ERR invalid left operand "select_many:each" - rule: construct not supported by the SQL dialect: postgres: JOIN over the elements of a multi-value column (:each, multi relations); needs LATERAL jsonb_array_elements_text support in the join builder
+
+## @request.auth.id != ''
+SELECT * FROM "demo1" WHERE {:p1} IS DISTINCT FROM ''
+p1="4q1xlclmfloku33"
+
+## @request.auth.id = id
+SELECT * FROM "demo1" WHERE {:p1} = [[demo1.id]]
+p1="4q1xlclmfloku33"
+
+## @request.auth.verified = true
+SELECT * FROM "demo1" WHERE {:p1} = TRUE
+p1=false
+
+## @request.auth.rel.title = 'x'
+SELECT DISTINCT * FROM "demo1" LEFT JOIN "users" "__auth_users" ON "__auth_users"."id"={:p1} LEFT JOIN "demo2" "__auth_users_rel" ON [[__auth_users_rel.id]] = [[__auth_users.rel]] WHERE [[__auth_users_rel.title]] = {:p2}
+p1="4q1xlclmfloku33" p2="x"
+
+## @request.method = 'GET'
+SELECT * FROM "demo1" WHERE {:p1} = {:p2}
+p1="POST" p2="GET"
+
+## @request.query.a = 'b'
+SELECT * FROM "demo1" WHERE {:p1} = {:p2}
+p1="b" p2="b"
+
+## @request.body.text = text
+SELECT * FROM "demo1" WHERE {:p1} = [[demo1.text]]
+p1="body text"
+
+## @request.body.text:isset = true
+SELECT * FROM "demo1" WHERE TRUE = TRUE
+
+
+## @request.body.text:lower = 'a'
+SELECT * FROM "demo1" WHERE LOWER({:p1}) = {:p2}
+p1="body text" p2="a"
+
+## @request.body.text:changed = true
+SELECT * FROM "demo1" WHERE ((TRUE = TRUE AND {:p1} IS DISTINCT FROM [[demo1.text]]) IS NOT DISTINCT FROM TRUE)
+p1="body text"
+
+## @request.body.select_many:each ~ 'a'
+ERR invalid left operand "@request.body.select_many:each" - rule: construct not supported by the SQL dialect: postgres: @request.body.*:each; needs LATERAL jsonb_array_elements_text support in the join builder
+
+## @collection.demo2.title = 'x'
+SELECT DISTINCT * FROM "demo1" LEFT JOIN "demo2" "__collection_demo2" ON TRUE WHERE ((([[__collection_demo2.title]] = {:p1}) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___collection_demo2.title]] as [[multiMatchValue]] FROM "demo1" "__mm_demo1" LEFT JOIN "demo2" "__mm___collection_demo2" ON TRUE WHERE "__mm_demo1"."id" = "demo1"."id") {{__smX}} WHERE NOT ([[__smX.multiMatchValue]] = {:p1})))))
+p1="x"
+
+## @collection.demo2:a.title = text
+SELECT DISTINCT * FROM "demo1" LEFT JOIN "demo2" "__collection_alias_a" ON TRUE WHERE (((COALESCE(CAST([[__collection_alias_a.title]] AS TEXT), '') = COALESCE(CAST([[demo1.text]] AS TEXT), '')) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___collection_alias_a.title]] as [[multiMatchValue]] FROM "demo1" "__mm_demo1" LEFT JOIN "demo2" "__mm___collection_alias_a" ON TRUE WHERE "__mm_demo1"."id" = "demo1"."id") {{__smX}} WHERE NOT (COALESCE(CAST([[__smX.multiMatchValue]] AS TEXT), '') = COALESCE(CAST([[demo1.text]] AS TEXT), ''))))))
+
+
+## @collection.demo2.title = @collection.demo2:b.title
+SELECT DISTINCT * FROM "demo1" LEFT JOIN "demo2" "__collection_demo2" ON TRUE LEFT JOIN "demo2" "__collection_alias_b" ON TRUE WHERE (((COALESCE(CAST([[__collection_demo2.title]] AS TEXT), '') = COALESCE(CAST([[__collection_alias_b.title]] AS TEXT), '')) AND (NOT EXISTS (SELECT 1 FROM (SELECT [[__mm___collection_demo2.title]] as [[multiMatchValue]] FROM "demo1" "__mm_demo1" LEFT JOIN "demo2" "__mm___collection_demo2" ON TRUE WHERE "__mm_demo1"."id" = "demo1"."id") {{__mlX}} LEFT JOIN (SELECT [[__mm___collection_alias_b.title]] as [[multiMatchValue]] FROM "demo1" "__mm_demo1" LEFT JOIN "demo2" "__mm___collection_alias_b" ON TRUE WHERE "__mm_demo1"."id" = "demo1"."id") {{__mrX}} ON TRUE WHERE NOT (COALESCE(CAST([[__mlX.multiMatchValue]] AS TEXT), '') = COALESCE(CAST([[__mrX.multiMatchValue]] AS TEXT), ''))))))
+
+
+## datetime > @now
+SELECT * FROM "demo1" WHERE [[demo1.datetime]] > {:p1}
+p1="2026-10-07 12:34:56.789Z"
+
+## datetime >= @todayStart && datetime <= @todayEnd
+SELECT * FROM "demo1" WHERE ([[demo1.datetime]] >= {:p1} AND [[demo1.datetime]] <= {:p2})
+p1="2026-10-07 00:00:00.000Z" p2="2026-10-07 23:59:59.999Z"
+
+## @year = 2026
+SELECT * FROM "demo1" WHERE {:p1} = {:p2}
+p1=2026 p2=2026
+
+## geoDistance(1, 2, 3, 4) < 10
+SELECT * FROM "demo1" WHERE (CASE WHEN (cos(radians(CAST({:p1} AS DOUBLE PRECISION))) * cos(radians(CAST({:p2} AS DOUBLE PRECISION))) * cos(radians(CAST({:p3} AS DOUBLE PRECISION)) - radians(CAST({:p4} AS DOUBLE PRECISION))) + sin(radians(CAST({:p1} AS DOUBLE PRECISION))) * sin(radians(CAST({:p2} AS DOUBLE PRECISION)))) IS NULL THEN NULL ELSE 6371 * acos(LEAST(1, GREATEST(-1, cos(radians(CAST({:p1} AS DOUBLE PRECISION))) * cos(radians(CAST({:p2} AS DOUBLE PRECISION))) * cos(radians(CAST({:p3} AS DOUBLE PRECISION)) - radians(CAST({:p4} AS DOUBLE PRECISION))) + sin(radians(CAST({:p1} AS DOUBLE PRECISION))) * sin(radians(CAST({:p2} AS DOUBLE PRECISION)))))) END) < {:p5}
+p1=2 p2=4 p3=3 p4=1 p5=10
+
+## geoDistance(point.lon, point.lat, 23.32, 42.69) < 200
+SELECT * FROM "demo1" WHERE (CASE WHEN (cos(radians(CAST((to_jsonb([[demo1.point]]) #>> '{lat}') AS DOUBLE PRECISION))) * cos(radians(CAST({:p1} AS DOUBLE PRECISION))) * cos(radians(CAST({:p2} AS DOUBLE PRECISION)) - radians(CAST((to_jsonb([[demo1.point]]) #>> '{lon}') AS DOUBLE PRECISION))) + sin(radians(CAST((to_jsonb([[demo1.point]]) #>> '{lat}') AS DOUBLE PRECISION))) * sin(radians(CAST({:p1} AS DOUBLE PRECISION)))) IS NULL THEN NULL ELSE 6371 * acos(LEAST(1, GREATEST(-1, cos(radians(CAST((to_jsonb([[demo1.point]]) #>> '{lat}') AS DOUBLE PRECISION))) * cos(radians(CAST({:p1} AS DOUBLE PRECISION))) * cos(radians(CAST({:p2} AS DOUBLE PRECISION)) - radians(CAST((to_jsonb([[demo1.point]]) #>> '{lon}') AS DOUBLE PRECISION))) + sin(radians(CAST((to_jsonb([[demo1.point]]) #>> '{lat}') AS DOUBLE PRECISION))) * sin(radians(CAST({:p1} AS DOUBLE PRECISION)))))) END) < {:p3}
+p1=42.69 p2=23.32 p3=200
+
+## strftime('%Y', created) = '2026'
+ERR invalid left operand "strftime" - [strftime] rule: construct not supported by the SQL dialect: postgres: strftime (SQLite format and modifier language has no PostgreSQL equivalent)
+
+## text = 'a' && missing = 1
+ERR invalid left operand "missing" - unknown field "missing"
+
