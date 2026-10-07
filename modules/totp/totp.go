@@ -1,3 +1,5 @@
+//go:build !no_totp
+
 // Package totp adds RFC 6238 time-based one-time passwords as an MFA method
 // that plugs into the upstream mfaId flow, plus single-use recovery codes and
 // per-role enforcement.
