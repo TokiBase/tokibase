@@ -163,9 +163,10 @@ func buildQuery(app kernel.App, child *core.Collection, d *Def, ids []string) (*
 	}
 	q := db.Select(rel+" AS pid", agg+" AS v").From(child.Name)
 	if d.Kind == KindLast {
-		// the newest child of the parent: ORDER BY created DESC, id DESC LIMIT 1
-		// (aggregate runs it once per parent, nothing is loaded into memory)
-		q.OrderBy(tbl+".`created` DESC", tbl+".`id` DESC")
+		// the newest child of the parent: ORDER BY created DESC, rowid DESC LIMIT 1
+		// (ids are random, so rows created in the same millisecond are ordered by insertion;
+		// aggregate runs it once per parent, nothing is loaded into memory)
+		q.OrderBy(tbl+".`created` DESC", tbl+".`_rowid_` DESC")
 		if len(ids) == 1 {
 			q.Limit(1)
 		}
