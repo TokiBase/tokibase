@@ -441,6 +441,9 @@ func NewWithConfig(config Config) *PocketBase {
 	// hide the default help command (allow only `--help` flag)
 	pb.RootCmd.SetHelpCommand(&cobra.Command{Hidden: true})
 
+	// refuse to start when a compiled-out (no_<module>) module still owns data or env config
+	kernel.BindStubbedModuleGuard(pb.App)
+
 	// https://github.com/tokibase/tokibase/issues/6136
 	pb.OnBootstrap().Bind(&hook.Handler[*core.BootstrapEvent]{
 		Id: ModerncDepsCheckHookId,
