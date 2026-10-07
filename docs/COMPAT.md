@@ -79,19 +79,16 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: replica lag is the signal operators need; an extra key in the superuser-only `data` map does not break the documented fields.
 - Migration: nothing needed; clients ignoring unknown `data` keys are unaffected.
 
-<<<<<<< HEAD
 ### Admin UI read-only or disabled by env (phase 1, adminlock)
 
 - What: `TOKI_ADMIN_UI=readonly` makes collection create/update/delete/import, settings update and `_superusers` record create/update/delete return 403 (JSON error in the usual shape) when the request is a superuser request carrying a `Referer`/`Origin` that points at `/_/` on the same host. `TOKI_ADMIN_UI=off` clears `ui.DistDirFS` so `/_/` is 404, like a `no_ui` build (installer and OAuth2 redirect fall back as in `no_ui`). Default `on` is byte for byte upstream.
 - Why: production schema changes should come from migration files in git, not from clicks in the UI.
 - Migration: nothing needed; SDK, CLI and migration calls (no UI referer) are never blocked. See `docs/modules/adminlock.md` for the detection rule and its limits.
-=======
 ### `Retry-After` header and per-identity lockout on auth endpoints (phase 1, `modules/lockout`)
 
 - What: after repeated failed `auth-with-password` / `auth-with-otp` for one identity (default 5 failures in 15 minutes), further attempts for that identity, even with the correct credentials, get the same 400 body as a wrong password (`Failed to authenticate.` / `Invalid or expired OTP`) plus a `Retry-After: <seconds>` header. The header is sent only while the identity is locked. New `_lockout` table in `auxiliary.db`, new `lockout` CLI command. No endpoint, status code or body shape changes.
 - Why: upstream rate limits are IP/path based and do not stop credential stuffing spread over many IPs.
 - Migration: nothing needed. `TOKI_LOCKOUT=off` disables it; `toki lockout unlock|clear` recovers locked accounts. See `docs/modules/lockout.md`.
->>>>>>> 11e88c00 (Add lockout module: progressive per-identity auth lockout)
 
 ## Not promised
 
