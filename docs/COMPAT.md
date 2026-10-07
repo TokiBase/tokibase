@@ -106,6 +106,11 @@ Every deviation must be listed here with: what changed, why, migration path.
 - What: new system collection `_field_rules` (superusers only) stores per-field `read_rule` / `write_rule`. A field whose read rule fails is simply absent from the JSON of list/view/create/update responses, realtime events and expanded records (same as a hidden field); a write rule that fails answers `400` with `data.<field>.code = validation_field_not_allowed`, in the upstream field error shape. New CLI `toki fieldperm`. Collection JSON, endpoints and SDK contracts are unchanged; with no rows nothing changes.
 - Why: guarding a single field (for example a clan `leader`) needed hand written hooks.
 - Migration: nothing needed; the collection is created at boot. Clients must not assume every schema field is present in a response. See `docs/modules/fieldperm.md`.
+### New `_webhooks` collection and `_webhook_deliveries` table, outbound HTTP (phase 2, `modules/webhooks`)
+
+- What: new superuser-only collection `_webhooks` in `data.db` (appears in `GET /api/collections` for superusers, field `secret` is hidden) and new `_webhook_deliveries` table in `auxiliary.db`; the process sends signed HTTP POSTs to configured URLs after record, collection and `auth.login` events; new `webhooks` CLI command. Existing endpoints, status codes and response shapes are unchanged; with no webhook configured nothing is sent.
+- Why: integrations without polling or custom `pb_hooks`.
+- Migration path: nothing needed. `TOKI_WEBHOOKS=off` skips registration (the collection and table are then not created; existing ones stay). Upstream PocketBase ignores the auxiliary table and treats `_webhooks` as a normal base collection; delete it to return to a pristine schema. See `docs/modules/webhooks.md`.
 
 ## Not promised
 
