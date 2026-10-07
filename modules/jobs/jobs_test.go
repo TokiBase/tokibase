@@ -33,7 +33,6 @@ func setup(t *testing.T) *env {
 	return e
 }
 
-
 // waitRow polls until the row reaches state or the deadline passes, then returns the last row seen.
 func (e *env) waitRow(t *testing.T, id, state string, d time.Duration) Row {
 	t.Helper()
