@@ -2,7 +2,7 @@
 
 Cross-record validation for atomic batches. `/api/batch` is already one transaction, but collection rules see one record at a time. Checkout style invariants (order + items + stock in one call, wallet transfers) need a check that sees the whole batch. Package `modules/batchguard`.
 
-- Always on: `tokibase.go` calls `batchguard.Register(app)` and adds the `batch` command. With no rows in `_batch_rules` and no `kernel.OnBatch` handler it adds no work to a batch. Build tag `no_batchguard` drops it.
+- Always on: `tokibase.go` calls `batchguard.Register(app)` and adds the `batch` command. With no rows in `_batch_rules` and no `kernel.OnBatchFor(app)` handler it adds no work to a batch. Build tag `no_batchguard` drops it, but the binary then REFUSES TO BOOT when a `_batch_rules` table already exists (guards would be silently off); set `TOKI_ALLOW_STUBBED_MODULES=1` to override (logged at ERROR, guards OFF). Superusers are NOT exempt from rules.
 
 ## Model
 
@@ -12,7 +12,7 @@ System collection `_batch_rules` (main db, all API rules `null` = superusers onl
 | --- | --- |
 | `name` | unique name, returned to the client |
 | `enabled` | bool; disabled rules never apply |
-| `match` | json list of `{"collection": "orders", "method": "POST"}`. ALL entries must be present in the batch for the rule to apply. `method` empty = any. A rule with an empty or missing `match` never applies. Collection names or ids are accepted. A `PUT` upsert counts as `POST` (new id) or `PATCH` (existing id) |
+| `match` | json list of `{"collection": "orders", "method": "POST"}`. ALL entries must be present in the batch for the rule to apply. `method` empty = any. A rule with an empty or missing `match` never applies. Collection names or ids are accepted. A `PUT` upsert counts as `POST` (new id) or `PATCH` (existing id); the batch is replayed in order, so `DELETE X` followed by `PUT {id: X}` is a `POST` |
 | `assert` | expression evaluated BEFORE the sub-requests |
 | `assert_post` | expression evaluated AFTER the last sub-request, on the stored records |
 | `message` | error message returned to the client |
@@ -27,7 +27,7 @@ All of this runs in the `OnBatchRequest` hook (priority -10000, outermost) and i
 1. The hook opens `RunInTransaction` and replaces `e.App` with the transaction app for the rest of the chain. Upstream's own `RunInTransaction` then joins this transaction (nested calls reuse it), so a failure anywhere rolls back everything.
 2. `assert` of every applicable rule runs against the submitted bodies. Database reads (`stock()`) go through the transaction app. Then `kernel.OnBatch` emits `batch.before`.
 3. `e.Next()` runs the upstream batch. The response it writes is buffered, so nothing reaches the client before the transaction commits.
-4. If a rule has `assert_post` (or `kernel.OnBatch` has handlers), the records written are re-read inside the transaction (ids come from the batch response) and `assert_post` runs against the STORED values, so server side hooks, defaults and `computed` rollups done by the sub-requests are visible. Then `batch.after` is emitted.
+4. If a rule has `assert_post` (or `kernel.OnBatch` has handlers), the records written are re-read inside the transaction (ids come from the batch response; a `fields=` query of a sub-request gets `,id` appended so it cannot hide the id, and a written record whose id cannot be determined rejects the batch) and `assert_post` runs against the STORED values, so server side hooks, defaults and `computed` rollups done by the sub-requests are visible. Then `batch.after` is emitted.
 5. On success the transaction commits and the buffered response is sent. On failure the transaction rolls back and the client gets the 400 below.
 
 Record hooks that upstream defers to "after commit" (`OnRecordAfter*Success`, realtime, webhooks) still fire after the outer commit and never for a rejected batch.
@@ -38,7 +38,11 @@ Record hooks that upstream defers to "after commit" (`OnRecordAfter*Success`, re
 {"status":400,"message":"Batch rejected.","data":{"batch":{"code":"validation_batch_rule","message":"<rule message>","rule":"<name>"}}}
 ```
 
-An expression that cannot be evaluated (type error, missing request index, division by zero, 100 ms timeout) FAILS CLOSED with the same code and a message that names the rule and the reason. A `_batch_rules` table that cannot be read rejects the batch with `rule: ""`.
+An expression that cannot be evaluated (type error, missing request index, division by zero, 100 ms timeout) FAILS CLOSED with the same code and a message that names the rule and the reason. A `_batch_rules` table that cannot be read (any error other than the collection not existing yet) refuses the batch with a 500 and logs it.
+
+### `assert` sees the submitted body, `assert_post` the stored values
+
+`assert` evaluates the bodies as sent. PocketBase applies body keys such as `qty+`, `qty-`, `+tags`, `slug:autogenerate`, so a stored value can differ from the raw one. A body that uses such a modifier key for a field that an `assert` expression names (as a string or in `req(i).body.<field>`) is therefore REJECTED with a clear message. Money, stock and quota rules should use `assert_post`, which reads the stored values. Hooks that run after `assert` (JS `OnBatchRequest` at priority above -10000, `batch.before` handlers) can still rewrite `e.Batch`; they are trusted code and are not re-checked.
 
 ## Expression language
 
@@ -56,6 +60,8 @@ primary = number | string | true | false | null | bareword | "(" expr ")"
         | "@request.auth." name
         | name "(" [ expr { "," expr } ] ")" [ "." name { "." name } ]   (the path only after req())
 ```
+
+Numbers compare numerically. A numeric string is parsed when the other side is a number. Two strings compare numerically only in `all()`/`exists()` on a number-typed field, and only when both parse; all other string pairs compare lexically (`'10' < '5'` is true). NaN and infinity never occur: an overflowing calculation is an error.
 
 Strings use `'...'` or `"..."`. A bareword that is not a keyword or a call is a string, so `sum(order_items, qty)` equals `sum('order_items', 'qty')`. `&&` and `||` short-circuit and need booleans. The whole expression must be boolean.
 
@@ -98,10 +104,10 @@ toki batch rules test --file batch.json
 
 ## Go and WASM API
 
-`kernel.OnBatch` (`kernel/batch.go`) is a process wide `hook.Hook[*kernel.BatchEvent]`. Subscribers do not import `batchguard`.
+`kernel.OnBatchFor(app)` (`kernel/batch.go`) returns the `hook.Hook[*kernel.BatchEvent]` of ONE app instance (pass the same app that was given to `batchguard.Register`); handlers never see batches of another embedded instance. Subscribers do not import `batchguard`.
 
 ```go
-kernel.OnBatch.BindFunc(func(e *kernel.BatchEvent) error {
+kernel.OnBatchFor(app).BindFunc(func(e *kernel.BatchEvent) error {
     // e.Name: kernel.BatchBefore ("batch.before") or kernel.BatchAfter ("batch.after")
     // e.Requests: []kernel.BatchRequest{Index, Collection, Method, ID, Body, Deleted}
     // e.Auth *kernel.Record (nil when anonymous), e.App = the transaction app
@@ -117,7 +123,8 @@ kernel.OnBatch.BindFunc(func(e *kernel.BatchEvent) error {
 
 ## Limits
 
+- Rules that match by collection NAME stop applying after a rename; use ids to survive renames.
 - Only requests that target `/api/collections/{c}/records[/{id}]` have a collection; other URLs never match a rule.
 - Rules are read from the database on every batch (one small query), so changes apply at once.
-- `assert_post` re-reads one record per sub-request; very large batches pay that cost only when a rule uses `assert_post` or a `kernel.OnBatch` handler exists.
+- `assert_post` re-reads one record per sub-request; very large batches pay that cost only when a rule uses `assert_post` or a `kernel.OnBatchFor` handler exists.
 - The batch timeout of upstream (`settings.batch.timeout`) still applies to the sub-requests; rule evaluation has its own 100 ms per expression.

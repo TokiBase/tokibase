@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tokibase/tokibase/embed"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 func start(t *testing.T, dir string, mut func(*embed.Options)) *embed.Instance {
@@ -94,7 +97,10 @@ func TestLifecycle(t *testing.T) {
 	}
 
 	events := make(chan []byte, 4)
-	cancel := inst.Subscribe("records/*", func(b []byte) { events <- b })
+	cancel, err := inst.Subscribe("records/*", func(b []byte) { events <- b })
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer cancel()
 
 	st, out = call(t, inst, "POST", "/api/collections/records/records", tok, map[string]any{"title": "hello"})
@@ -125,6 +131,9 @@ func TestLifecycle(t *testing.T) {
 	stop(t, inst)
 	if _, _, _, err := inst.Call("GET", "/api/health", nil, nil); err == nil {
 		t.Fatal("Call after Stop must fail")
+	}
+	if _, err := inst.Subscribe("records/*", func([]byte) {}); err == nil {
+		t.Fatal("Subscribe after Stop must fail")
 	}
 	if err := inst.Stop(context.Background()); err != nil {
 		t.Fatalf("second Stop: %v", err)
@@ -172,5 +181,118 @@ func TestBadOptions(t *testing.T) {
 	}
 	if _, err := embed.Start(embed.Options{DataDir: t.TempDir(), LogLevel: "loud"}); err == nil {
 		t.Fatal("unknown log level")
+	}
+}
+
+func TestRealtimeCallRefused(t *testing.T) {
+	inst := start(t, t.TempDir(), func(o *embed.Options) { o.Listen = "-" })
+	defer stop(t, inst)
+	for _, m := range []string{"GET", "get", "Post", "HEAD"} {
+		if _, _, _, err := inst.Call(m, "/api/realtime", nil, nil); err == nil {
+			t.Fatalf("%s /api/realtime must be refused", m)
+		}
+	}
+}
+
+func TestCallContextTimeout(t *testing.T) {
+	inst := start(t, t.TempDir(), func(o *embed.Options) { o.Listen = "-" })
+	defer stop(t, inst)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, _, err := inst.CallContext(ctx, "GET", "/api/health", nil, nil); err == nil {
+		t.Fatal("cancelled ctx must error")
+	}
+}
+
+func TestStopWithExpiredCtxKeepsLock(t *testing.T) {
+	dir := t.TempDir()
+	inst := start(t, dir, func(o *embed.Options) { o.Listen = "-" })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := inst.Stop(ctx)
+	if err == nil {
+		// shutdown happened to finish instantly: the dir may be reused
+		inst = start(t, dir, func(o *embed.Options) { o.Listen = "-" })
+		stop(t, inst)
+		return
+	}
+	if _, serr := embed.Start(embed.Options{DataDir: dir, Listen: "-"}); serr == nil {
+		t.Fatal("data dir must stay locked while the stop is incomplete")
+	}
+	stop(t, inst) // a later Stop finishes the job
+	again := start(t, dir, func(o *embed.Options) { o.Listen = "-" })
+	stop(t, again)
+}
+
+// nanoKey returns a nano profile switch whose module is compiled in (the
+// switches of modules compiled out by build tags are deliberately not set).
+func nanoKey(t *testing.T) string {
+	t.Helper()
+	stubbed := map[string]bool{}
+	for _, m := range kernel.ModuleMarkers() {
+		if m.Stubbed {
+			for _, e := range m.Envs {
+				stubbed[e] = true
+			}
+		}
+	}
+	for _, k := range []string{"TOKI_AUDIT", "TOKI_TLS_CHECK", "TOKI_WEBHOOKS", "TOKI_PUSH", "TOKI_BACKUP_VERIFY", "TOKI_ADMIN_UI", "TOKI_WASM"} {
+		if !stubbed[k] {
+			return k
+		}
+	}
+	t.Skip("every nano switch is compiled out in this build")
+	return ""
+}
+
+func TestProfileEnvDoesNotLeak(t *testing.T) {
+	key := nanoKey(t)
+	a := start(t, t.TempDir(), func(o *embed.Options) { o.Listen = "-"; o.Profile = "nano" })
+	if os.Getenv(key) != "off" {
+		t.Fatalf("nano must set %s=off while running", key)
+	}
+	stop(t, a)
+	if v, ok := os.LookupEnv(key); ok && v == "off" {
+		t.Fatalf("%s leaked after Stop", key)
+	}
+	b := start(t, t.TempDir(), func(o *embed.Options) { o.Listen = "-"; o.Profile = "team" })
+	defer stop(t, b)
+	if v, ok := os.LookupEnv(key); ok && v == "off" {
+		t.Fatal("team inherited the nano profile")
+	}
+}
+
+func TestHostGuard(t *testing.T) {
+	inst := start(t, t.TempDir(), nil)
+	defer stop(t, inst)
+	req, _ := http.NewRequest("GET", inst.URL()+"/api/health", nil)
+	req.Host = "evil.example.com"
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 403 {
+		t.Fatalf("foreign Host: want 403, got %d", resp.StatusCode)
+	}
+	req, _ = http.NewRequest("GET", inst.URL()+"/api/health", nil)
+	req.Header.Set("Origin", "http://evil.example.com")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 || resp.Header.Get("Access-Control-Allow-Origin") == "*" {
+		t.Fatalf("health %d, CORS %q", resp.StatusCode, resp.Header.Get("Access-Control-Allow-Origin"))
+	}
+}
+
+func TestTwoInstances(t *testing.T) {
+	a := start(t, t.TempDir(), func(o *embed.Options) { o.Listen = "-" })
+	b := start(t, t.TempDir(), func(o *embed.Options) { o.Listen = "-" })
+	defer stop(t, a)
+	defer stop(t, b)
+	if a.App() == b.App() {
+		t.Fatal("instances share an app")
 	}
 }

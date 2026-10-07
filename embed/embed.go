@@ -60,9 +60,12 @@ type Options struct {
 	Profile string
 
 	// Env sets TOKI_* (and other) environment variables before the app is
-	// built. Environment is process wide: values persist after Stop and
-	// apply to every instance in the process. Entries here win over the
-	// profile defaults.
+	// built. Environment is process wide: the values (and the profile
+	// defaults) are applied at Start and the previous values are restored
+	// when the last running instance of the process stops. Starts are
+	// serialised; running instances with different profiles share the
+	// process environment, so use one profile per process. Entries here win
+	// over the profile defaults.
 	Env map[string]string
 
 	// HooksDir is an optional pb_hooks directory (JS hooks). Ignored when
@@ -71,6 +74,21 @@ type Options struct {
 
 	// LogLevel is debug, info (default), warn or error.
 	LogLevel string
+
+	// AllowedOrigins lists the CORS origins of the TCP listener. Default:
+	// none (browsers get no CORS grant, so web pages cannot read responses).
+	AllowedOrigins []string
+
+	// AllowedHosts lists extra Host header values (without port) accepted on
+	// the TCP listener besides localhost, 127.0.0.1 and [::1]. Other Host
+	// values are refused with 403 (DNS rebinding defence). Call is not
+	// affected.
+	AllowedHosts []string
+
+	// EncryptionEnv is the name of the environment variable that holds the
+	// settings encryption key (the --encryptionEnv flag is not parsed in an
+	// embedded app).
+	EncryptionEnv string
 
 	// MaxBodyBytes caps the request body for TCP requests and Call.
 	// 0 means DefaultMaxBodyBytes, negative means unlimited.
@@ -98,6 +116,71 @@ var profileEnv = map[string]map[string]string{
 }
 
 var (
+	startMu sync.Mutex // serialises Start (process environment is shared)
+
+	envMu    sync.Mutex
+	envOrig  = map[string]*string{} // original value per touched key (nil = unset)
+	envUsers int
+)
+
+// applyEnv sets the profile switches and user env for one Start. Keys of any
+// profile that this Start does not set go back to their original value, so
+// a previous instance's profile cannot leak into this one.
+func applyEnv(set map[string]string) error {
+	envMu.Lock()
+	defer envMu.Unlock()
+	keys := map[string]bool{}
+	for _, pe := range profileEnv {
+		for k := range pe {
+			keys[k] = true
+		}
+	}
+	for k := range set {
+		keys[k] = true
+	}
+	for k := range keys {
+		if _, seen := envOrig[k]; !seen {
+			if v, ok := os.LookupEnv(k); ok {
+				envOrig[k] = &v
+			} else {
+				envOrig[k] = nil
+			}
+		}
+		var err error
+		if v, ok := set[k]; ok {
+			err = os.Setenv(k, v)
+		} else if o := envOrig[k]; o != nil {
+			err = os.Setenv(k, *o)
+		} else {
+			err = os.Unsetenv(k)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	envUsers++
+	return nil
+}
+
+// releaseEnv undoes applyEnv; the originals return with the last user.
+func releaseEnv() {
+	envMu.Lock()
+	defer envMu.Unlock()
+	envUsers--
+	if envUsers > 0 {
+		return
+	}
+	for k, o := range envOrig {
+		if o != nil {
+			_ = os.Setenv(k, *o)
+		} else {
+			_ = os.Unsetenv(k)
+		}
+	}
+	envOrig = map[string]*string{}
+}
+
+var (
 	activeMu sync.Mutex
 	active   = map[string]*Instance{}
 )
@@ -105,18 +188,21 @@ var (
 // Instance is a running embedded server.
 type Instance struct {
 	app     *tokibase.PocketBase
+	envHeld bool
 	dir     string
 	url     string
 	handler http.Handler
 	ln      net.Listener
 
-	serveDone chan struct{}
-	serveErr  error
-	stopOnce  sync.Once
-	stopErr   error
-	stopped   atomic.Bool
-	calls     sync.WaitGroup
-	mu        sync.Mutex // guards calls.Add against Stop
+	serveDone  chan struct{}
+	serveErr   error
+	stopMu     sync.Mutex // serialises Stop
+	stopDone   bool
+	stopErr    error
+	terminated bool
+	stopped    atomic.Bool
+	calls      sync.WaitGroup
+	mu         sync.Mutex // guards calls.Add against Stop
 
 	subsMu sync.Mutex
 	subs   map[string]subscriptions.Client
@@ -161,6 +247,9 @@ func Start(opts Options) (*Instance, error) {
 		maxBody = DefaultMaxBodyBytes
 	}
 
+	startMu.Lock()
+	defer startMu.Unlock()
+
 	activeMu.Lock()
 	if _, busy := active[dir]; busy {
 		activeMu.Unlock()
@@ -184,42 +273,44 @@ func Start(opts Options) (*Instance, error) {
 			}
 		}
 	}
+	set := map[string]string{}
 	for k, v := range penv {
-		if _, user := opts.Env[k]; !user && !stubbedEnv[k] {
-			if err := os.Setenv(k, v); err != nil {
-				release()
-				return nil, err
-			}
+		if !stubbedEnv[k] {
+			set[k] = v
 		}
 	}
 	for k, v := range opts.Env {
-		if err := os.Setenv(k, v); err != nil {
-			release()
-			return nil, err
-		}
+		set[k] = v
+	}
+	if err := applyEnv(set); err != nil {
+		release()
+		return nil, err
 	}
 
 	var ln net.Listener
 	if listen != "-" {
 		ln, err = net.Listen("tcp", listen)
 		if err != nil {
+			releaseEnv()
 			release()
 			return nil, err
 		}
 	}
 
 	app := tokibase.NewWithConfig(tokibase.Config{
-		DefaultDataDir:  dir,
-		HideStartBanner: true,
-		SkipFlagParse:   true,
+		DefaultDataDir:       dir,
+		DefaultEncryptionEnv: opts.EncryptionEnv,
+		HideStartBanner:      true,
+		SkipFlagParse:        true,
 	})
-	inst := &Instance{app: app, dir: dir, ln: ln, serveDone: make(chan struct{}), subs: map[string]subscriptions.Client{}}
+	inst := &Instance{envHeld: true, app: app, dir: dir, ln: ln, serveDone: make(chan struct{}), subs: map[string]subscriptions.Client{}}
 
 	fail := func(err error) (*Instance, error) {
 		if ln != nil {
 			_ = ln.Close()
 		}
 		_ = app.ResetBootstrapState()
+		releaseEnv()
 		release()
 		return nil, err
 	}
@@ -256,14 +347,19 @@ func Start(opts Options) (*Instance, error) {
 				return err
 			}
 			inst.handler = limitBody(e.Server.Handler, maxBody)
-			e.Server.Handler = inst.handler
+			e.Server.Handler = hostGuard(inst.handler, opts.AllowedHosts)
 			close(ready)
 			return nil
 		},
 	})
 
+	origins := opts.AllowedOrigins
+	if len(origins) == 0 {
+		// Serve treats an empty list as "*": use an origin no page can have
+		origins = []string{"http://embed.invalid"}
+	}
 	go func() {
-		err := apis.Serve(app, apis.ServeConfig{HttpAddr: listen, AllowedOrigins: []string{"*"}})
+		err := apis.Serve(app, apis.ServeConfig{HttpAddr: listen, AllowedOrigins: origins})
 		if errors.Is(err, http.ErrServerClosed) {
 			err = nil
 		}
@@ -326,6 +422,29 @@ func limitBody(next http.Handler, max int64) http.Handler {
 	})
 }
 
+// hostGuard refuses TCP requests whose Host is not a loopback name or one of
+// extra (DNS rebinding defence).
+func hostGuard(next http.Handler, extra []string) http.Handler {
+	ok := map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
+	for _, h := range extra {
+		ok[strings.ToLower(h)] = true
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := r.Host
+		if hh, _, err := net.SplitHostPort(h); err == nil {
+			h = hh
+		}
+		h = strings.Trim(strings.ToLower(h), "[]")
+		if !ok[h] {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"status":403,"message":"Host not allowed","data":{}}`)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // URL is the base URL of the loopback listener ("" when Listen was "-").
 func (i *Instance) URL() string { return i.url }
 
@@ -344,15 +463,24 @@ func (i *Instance) enter() error {
 	return nil
 }
 
+// DefaultCallTimeout bounds Call.
+const DefaultCallTimeout = 60 * time.Second
+
 // Call dispatches an HTTP request through the router in process, without a
 // TCP round trip. path may include a query string. Streaming endpoints
-// (/api/realtime) are not supported: use Subscribe.
+// (/api/realtime, any method) are refused: realtime goes through Subscribe.
+// Call gives up after DefaultCallTimeout; use CallContext for another limit.
 func (i *Instance) Call(method, path string, headers map[string]string, body []byte) (int, map[string]string, []byte, error) {
-	if err := i.enter(); err != nil {
-		return 0, nil, nil, err
-	}
-	defer i.calls.Done()
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultCallTimeout)
+	defer cancel()
+	return i.CallContext(ctx, method, path, headers, body)
+}
 
+// CallContext is Call with a caller supplied context. When ctx ends first the
+// call returns ctx.Err(); the handler may still be finishing in the
+// background (Stop waits for it).
+func (i *Instance) CallContext(ctx context.Context, method, path string, headers map[string]string, body []byte) (int, map[string]string, []byte, error) {
+	method = strings.ToUpper(strings.TrimSpace(method))
 	if method == "" {
 		method = http.MethodGet
 	}
@@ -363,15 +491,19 @@ func (i *Instance) Call(method, path string, headers map[string]string, body []b
 	if err != nil {
 		return 0, nil, nil, err
 	}
-	if strings.HasPrefix(u.Path, "/api/realtime") && method == http.MethodGet {
+	if p := strings.TrimRight(u.Path, "/"); p == "/api/realtime" || strings.HasPrefix(p, "/api/realtime/") {
 		return 0, nil, nil, errors.New("embed: /api/realtime is a stream; use Subscribe")
+	}
+	if err := i.enter(); err != nil {
+		return 0, nil, nil, err
 	}
 	var rdr io.Reader = http.NoBody
 	if len(body) > 0 {
 		rdr = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(context.Background(), strings.ToUpper(method), path, rdr)
+	req, err := http.NewRequestWithContext(ctx, method, path, rdr)
 	if err != nil {
+		i.calls.Done()
 		return 0, nil, nil, err
 	}
 	req.Host = "localhost"
@@ -388,7 +520,22 @@ func (i *Instance) Call(method, path string, headers map[string]string, body []b
 	}
 
 	rec := &recorder{header: http.Header{}, status: http.StatusOK}
-	i.handler.ServeHTTP(rec, req)
+	done := make(chan struct{})
+	go func() {
+		defer i.calls.Done()
+		defer close(done)
+		defer func() {
+			if p := recover(); p != nil {
+				rec.status = http.StatusInternalServerError
+			}
+		}()
+		i.handler.ServeHTTP(rec, req)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return 0, nil, nil, ctx.Err()
+	}
 
 	rh := make(map[string]string, len(rec.header))
 	for k, v := range rec.header {
@@ -417,35 +564,52 @@ func (r *recorder) Flush()                      {}
 // "posts/RECORD_ID") as the JSON payload PocketBase sends over SSE
 // ({"action":"create","record":{...}}). The subscriber is anonymous: only
 // records the public rules allow are delivered. Use SubscribeAs for an
-// authenticated view. cancel is idempotent. fn runs on its own goroutine.
-func (i *Instance) Subscribe(topic string, fn func(event []byte)) (cancel func()) {
+// authenticated view. cancel is idempotent. fn runs on its own goroutine, a
+// panic in fn is recovered, and fn must not block (the client channel is
+// unbuffered). It fails after Stop.
+func (i *Instance) Subscribe(topic string, fn func(event []byte)) (cancel func(), err error) {
 	return i.subscribe(nil, topic, fn)
 }
 
 // SubscribeAs is Subscribe with the access of the auth token's record.
 func (i *Instance) SubscribeAs(token, topic string, fn func(event []byte)) (cancel func(), err error) {
+	if i.stopped.Load() {
+		return nil, errors.New("embed: instance is stopped")
+	}
 	rec, err := i.app.FindAuthRecordByToken(token, core.TokenTypeAuth)
 	if err != nil {
 		return nil, fmt.Errorf("embed: invalid auth token: %w", err)
 	}
-	return i.subscribe(rec, topic, fn), nil
+	return i.subscribe(rec, topic, fn)
 }
 
-func (i *Instance) subscribe(auth *core.Record, topic string, fn func([]byte)) func() {
+func (i *Instance) subscribe(auth *core.Record, topic string, fn func([]byte)) (func(), error) {
+	if fn == nil {
+		return nil, errors.New("embed: nil subscriber")
+	}
 	client := subscriptions.NewDefaultClient()
 	if auth != nil {
 		client.Set(apis.RealtimeClientAuthKey, auth)
 	}
 	client.Subscribe(topic)
-	i.app.SubscriptionsBroker().Register(client)
 
+	i.mu.Lock()
+	if i.stopped.Load() {
+		i.mu.Unlock()
+		return nil, errors.New("embed: instance is stopped")
+	}
+	i.app.SubscriptionsBroker().Register(client)
 	i.subsMu.Lock()
 	i.subs[client.Id()] = client
 	i.subsMu.Unlock()
+	i.mu.Unlock()
 
 	go func() {
 		for msg := range client.Channel() {
-			fn(msg.Data)
+			func() {
+				defer func() { _ = recover() }()
+				fn(msg.Data)
+			}()
 		}
 	}()
 
@@ -457,7 +621,7 @@ func (i *Instance) subscribe(auth *core.Record, topic string, fn func([]byte)) f
 			i.subsMu.Unlock()
 			i.app.SubscriptionsBroker().Unregister(client.Id())
 		})
-	}
+	}, nil
 }
 
 // Superuser creates the superuser or updates its password when the email
@@ -509,48 +673,68 @@ func (i *Instance) Export(ctx context.Context, w io.Writer) error {
 }
 
 // Stop shuts the server down gracefully (OnTerminate hooks, replica flush,
-// database close) and frees the DataDir for a new Instance. Safe to call
-// more than once.
+// database close) and frees the DataDir for a new Instance. The DataDir is
+// released only after the server has really finished: when ctx expires first
+// (a stuck request, a slow shutdown) Stop returns an error, the DataDir stays
+// reserved, and calling Stop again continues the shutdown. After a successful
+// Stop it is safe to call again.
 func (i *Instance) Stop(ctx context.Context) error {
-	i.stopOnce.Do(func() {
-		i.mu.Lock()
-		i.stopped.Store(true)
-		i.mu.Unlock()
+	i.stopMu.Lock()
+	defer i.stopMu.Unlock()
+	if i.stopDone {
+		return i.stopErr
+	}
 
-		done := make(chan struct{})
-		go func() { i.calls.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-ctx.Done():
-		}
+	i.mu.Lock()
+	i.stopped.Store(true)
+	i.mu.Unlock()
 
-		i.subsMu.Lock()
-		for id := range i.subs {
-			i.app.SubscriptionsBroker().Unregister(id)
-		}
-		i.subs = map[string]subscriptions.Client{}
-		i.subsMu.Unlock()
+	done := make(chan struct{})
+	go func() { i.calls.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return fmt.Errorf("embed: stop incomplete, in-flight calls still running (data dir stays locked): %w", ctx.Err())
+	}
 
+	i.subsMu.Lock()
+	for id := range i.subs {
+		i.app.SubscriptionsBroker().Unregister(id)
+	}
+	i.subs = map[string]subscriptions.Client{}
+	i.subsMu.Unlock()
+
+	var err error
+	if !i.terminated {
+		i.terminated = true
 		ev := new(core.TerminateEvent)
 		ev.App = i.app
-		err := i.app.OnTerminate().Trigger(ev, func(e *core.TerminateEvent) error {
+		err = i.app.OnTerminate().Trigger(ev, func(e *core.TerminateEvent) error {
 			return e.App.ClearBootstrap()
 		})
-		var serveErr error
-		select {
-		case <-i.serveDone:
-			serveErr = i.serveErr
-		case <-ctx.Done():
-			serveErr = ctx.Err()
-		case <-time.After(30 * time.Second):
-			serveErr = errors.New("embed: timed out waiting for the server to stop")
-		}
-		i.stopErr = errors.Join(err, serveErr)
+		i.stopErr = err
+	} else {
+		err = i.stopErr
+	}
+	var serveErr error
+	select {
+	case <-i.serveDone:
+		serveErr = i.serveErr
+	case <-ctx.Done():
+		return fmt.Errorf("embed: stop incomplete, server still shutting down (data dir stays locked): %w", ctx.Err())
+	case <-time.After(30 * time.Second):
+		return errors.New("embed: timed out waiting for the server to stop (data dir stays locked)")
+	}
+	i.stopErr = errors.Join(err, serveErr)
+	i.stopDone = true
 
-		activeMu.Lock()
-		delete(active, i.dir)
-		activeMu.Unlock()
-	})
+	if i.envHeld {
+		i.envHeld = false
+		releaseEnv()
+	}
+	activeMu.Lock()
+	delete(active, i.dir)
+	activeMu.Unlock()
 	return i.stopErr
 }
 

@@ -9,10 +9,13 @@ package batchguard
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/spf13/cast"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -55,11 +58,13 @@ type Rule struct {
 type Module struct {
 	app     core.App
 	timeout time.Duration
+	// listRules loads the rules (replaceable in tests).
+	listRules func(core.App) ([]Rule, error)
 }
 
 // Register creates the collection (if needed) and binds the batch hook.
 func Register(app core.App) *Module {
-	m := &Module{app: app, timeout: EvalTimeout}
+	m := &Module{app: app, timeout: EvalTimeout, listRules: List}
 
 	ensure := func() {
 		if err := EnsureCollection(app); err != nil {
@@ -69,6 +74,13 @@ func Register(app core.App) *Module {
 	if app.IsBootstrapped() {
 		ensure()
 	}
+	app.OnTerminate().Bind(&hook.Handler[*core.TerminateEvent]{
+		Id: hookId + "release",
+		Func: func(e *core.TerminateEvent) error {
+			kernel.ReleaseBatchHooks(app)
+			return e.Next()
+		},
+	})
 	app.OnBootstrap().Bind(&hook.Handler[*core.BootstrapEvent]{
 		Id: hookId, Priority: -1,
 		Func: func(e *core.BootstrapEvent) error {
@@ -219,8 +231,14 @@ func Remove(app core.App, name string) (bool, error) {
 var recordsURL = regexp.MustCompile(`^/api/collections/([^/?]+)/records(?:/([^/?]+))?(?:\?.*)?$`)
 
 // parseRequests reduces the upstream requests to the views rules evaluate.
+// It replays the batch the way upstream executes it (in order), so a PUT
+// upsert is classified by the state it will meet at execution time: records
+// deleted or created by EARLIER sub-requests of the same batch are taken into
+// account. Call it inside the transaction for an authoritative result.
 func parseRequests(app core.App, batch []*core.InternalRequest) []reqView {
 	out := make([]reqView, len(batch))
+	gone := map[string]bool{}  // collection/id deleted earlier in this batch
+	added := map[string]bool{} // collection/id created earlier in this batch
 	for i, ir := range batch {
 		v := reqView{Index: i, Method: strings.ToUpper(ir.Method), Data: ir.Body}
 		v.Deleted = v.Method == http.MethodDelete
@@ -229,14 +247,31 @@ func parseRequests(app core.App, batch []*core.InternalRequest) []reqView {
 			if col, err := app.FindCachedCollectionByNameOrId(mm[1]); err == nil {
 				v.Collection = col.Name
 			}
-			if v.Method == http.MethodPut { // upsert: upstream decides on the id in the body
-				id, _ := ir.Body["id"].(string)
+			key := func(id string) string { return v.Collection + "/" + id }
+			switch v.Method {
+			case http.MethodPut: // upsert: upstream decides on the id in the body, at execution time
+				id := cast.ToString(ir.Body["id"])
 				v.Method = http.MethodPost
+				v.Upsert = true
 				if id != "" {
 					v.ID = id
-					if _, err := app.FindRecordById(v.Collection, id); err == nil {
+					exists := added[key(id)]
+					if !exists && !gone[key(id)] {
+						_, err := app.FindRecordById(v.Collection, id)
+						exists = err == nil
+					}
+					if exists {
 						v.Method = http.MethodPatch
 					}
+					added[key(id)], gone[key(id)] = true, false
+				}
+			case http.MethodPost:
+				if id := cast.ToString(ir.Body["id"]); id != "" {
+					added[key(id)], gone[key(id)] = true, false
+				}
+			case http.MethodDelete:
+				if v.ID != "" {
+					gone[key(v.ID)], added[key(v.ID)] = true, false
 				}
 			}
 		}
@@ -245,10 +280,14 @@ func parseRequests(app core.App, batch []*core.InternalRequest) []reqView {
 	return out
 }
 
-func applies(app core.App, r Rule, reqs []reqView) bool {
+// applies reports whether the rule's match holds. With loose, an upsert
+// (PUT) request matches any method (used before the transaction, where its
+// final classification is not known yet).
+func applies(app core.App, r Rule, reqs []reqView, loose ...bool) bool {
 	if !r.Enabled || len(r.Match) == 0 {
 		return false
 	}
+	lo := len(loose) > 0 && loose[0]
 	c := &evalCtx{app: app}
 	for _, m := range r.Match {
 		coll := c.canon(m.Collection)
@@ -258,7 +297,7 @@ func applies(app core.App, r Rule, reqs []reqView) bool {
 		}
 		found := false
 		for _, q := range reqs {
-			if q.Collection == coll && (method == "" || q.Method == method) {
+			if q.Collection == coll && (method == "" || q.Method == method || (lo && q.Upsert)) {
 				found = true
 				break
 			}
@@ -268,6 +307,49 @@ func applies(app core.App, r Rule, reqs []reqView) bool {
 		}
 	}
 	return true
+}
+
+// modifierBase returns the field name a PocketBase body key modifies
+// (`qty+`, `qty-`, `+tags`, `slug:autogenerate`), or key when it is plain.
+func modifierBase(key string) string {
+	b := strings.TrimPrefix(key, "+")
+	if i := strings.Index(b, ":"); i > 0 {
+		b = b[:i]
+	}
+	b = strings.TrimRight(b, "+-")
+	if b == "" {
+		return key
+	}
+	return b
+}
+
+// modifierConflict returns an error when a body uses a modifier key for a
+// field the pre-check (`assert`) reads: the guard would evaluate the raw
+// value while PocketBase stores a different one.
+func modifierConflict(rules []Rule, reqs []reqView) error {
+	names := map[string]bool{}
+	for _, r := range rules {
+		if r.Assert == "" {
+			continue
+		}
+		if n, err := Parse(r.Assert); err == nil {
+			referencedNames(n, names)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	for _, q := range reqs {
+		if q.Deleted {
+			continue
+		}
+		for k := range q.Data {
+			if base := modifierBase(k); base != k && names[base] {
+				return reject("", fmt.Sprintf("Request %d uses the modifier key %q on field %q, which a batch rule reads in `assert`. Send a plain value, or use `assert_post` for this rule.", q.Index, k, base))
+			}
+		}
+	}
+	return nil
 }
 
 // ----- errors -----
@@ -297,7 +379,12 @@ func (m *Module) failure(r Rule, phase string, err error) error {
 	return reject(r.Name, "Batch rule "+r.Name+" could not be evaluated ("+phase+"): "+err.Error())
 }
 
-func (m *Module) check(app core.App, r Rule, src, phase string, reqs []reqView, auth *core.Record) error {
+func (m *Module) check(app core.App, r Rule, src, phase string, reqs []reqView, auth *core.Record) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = m.failure(r, phase, fmt.Errorf("internal error: %v", p))
+		}
+	}()
 	if src == "" {
 		return nil
 	}
@@ -344,36 +431,64 @@ func (b *bufWriter) flush() {
 	_, _ = b.h.Write(b.buf.Bytes())
 }
 
-func (m *Module) onBatch(e *core.BatchRequestEvent) error {
-	var rules []Rule
-	var err error
-	if c, _ := e.App.FindCachedCollectionByNameOrId(CollectionName); c != nil {
-		rules, err = List(e.App)
+func (m *Module) loadRules(app core.App) ([]Rule, error) {
+	if _, err := app.FindCachedCollectionByNameOrId(CollectionName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil // collection not created yet (first boot)
+		}
+		return nil, err
 	}
+	return m.listRules(app)
+}
+
+// fieldsWithID appends `id` to the `fields` query param of a records URL so
+// the batch response always carries the id of a written record.
+func fieldsWithID(raw string) string {
+	i := strings.Index(raw, "?")
+	if i < 0 {
+		return raw
+	}
+	q, err := url.ParseQuery(raw[i+1:])
+	if err != nil || q.Get("fields") == "" {
+		return raw
+	}
+	q.Set("fields", q.Get("fields")+",id")
+	return raw[:i] + "?" + q.Encode()
+}
+
+func (m *Module) onBatch(e *core.BatchRequestEvent) error {
+	hooks := kernel.OnBatchFor(m.app)
+	rules, err := m.loadRules(e.App)
 	if err != nil {
 		// a broken rules table must not silently disable the guard
-		return reject("", "Batch rules could not be loaded.")
+		m.app.Logger().Error("batchguard: rules could not be loaded, batch refused", "error", err)
+		return router.NewInternalServerError("Batch rules could not be loaded.", nil)
 	}
-	reqs := parseRequests(e.App, e.Batch)
-	var active []Rule
+	if len(rules) == 0 && hooks.Length() == 0 {
+		return e.Next()
+	}
+	// cheap pre-filter outside the transaction (upserts match loosely)
+	pre := parseRequests(e.App, e.Batch)
+	possible := false
 	for _, r := range rules {
-		if applies(e.App, r, reqs) {
-			active = append(active, r)
+		if applies(e.App, r, pre, true) {
+			possible = true
+			break
 		}
 	}
-	hasPost := false
-	for _, r := range active {
-		if r.AssertPost != "" {
-			hasPost = true
-		}
-	}
-	if len(active) == 0 && kernel.OnBatch.Length() == 0 {
+	if !possible && hooks.Length() == 0 {
 		return e.Next()
 	}
 
 	origApp, origResp := e.App, e.Response
 	var bw *bufWriter
-	if hasPost || kernel.OnBatch.Length() > 0 {
+	needPost := hooks.Length() > 0
+	for _, r := range rules {
+		if r.Enabled && r.AssertPost != "" {
+			needPost = true
+		}
+	}
+	if needPost {
 		bw = &bufWriter{h: e.Response}
 		e.Response = bw
 	}
@@ -382,6 +497,32 @@ func (m *Module) onBatch(e *core.BatchRequestEvent) error {
 	err = origApp.RunInTransaction(func(txKernel kernel.App) error {
 		txApp := core.AsApp(txKernel)
 		e.App = txApp
+
+		// authoritative classification, inside the transaction
+		reqs := parseRequests(txApp, e.Batch)
+		var active []Rule
+		for _, r := range rules {
+			if applies(txApp, r, reqs) {
+				active = append(active, r)
+			}
+		}
+		hasPost := hooks.Length() > 0
+		for _, r := range active {
+			if r.AssertPost != "" {
+				hasPost = true
+			}
+		}
+		if err := modifierConflict(active, reqs); err != nil {
+			return err
+		}
+		if hasPost {
+			// the response must carry record ids even when a sub-request picks `fields`
+			for _, ir := range e.Batch {
+				if recordsURL.MatchString(ir.URL) {
+					ir.URL = fieldsWithID(ir.URL)
+				}
+			}
+		}
 
 		// phase 1: before any sub-request, inside the transaction
 		for _, r := range active {
@@ -397,11 +538,15 @@ func (m *Module) onBatch(e *core.BatchRequestEvent) error {
 			return err
 		}
 
-		if bw == nil {
+		if !hasPost || bw == nil {
 			return nil
 		}
 		// phase 2: after the last sub-request, still inside the transaction
-		post := m.readBack(txApp, reqs, bw.buf.Bytes())
+		post, err := m.readBack(txApp, reqs, bw.buf.Bytes())
+		if err != nil {
+			m.app.Logger().Warn("batchguard: written records could not be identified", "error", err)
+			return reject("", "Batch rejected: the written records could not be identified for validation.")
+		}
 		for _, r := range active {
 			if err := m.check(txApp, r, r.AssertPost, "assert_post", post, e.Auth); err != nil {
 				return err
@@ -420,14 +565,15 @@ func (m *Module) onBatch(e *core.BatchRequestEvent) error {
 }
 
 func (m *Module) emit(name string, app core.App, reqs []reqView, auth *core.Record) error {
-	if kernel.OnBatch.Length() == 0 {
+	hooks := kernel.OnBatchFor(m.app)
+	if hooks.Length() == 0 {
 		return nil
 	}
 	ev := &kernel.BatchEvent{Name: name, App: app, Auth: auth, Requests: make([]kernel.BatchRequest, len(reqs))}
 	for i, r := range reqs {
 		ev.Requests[i] = kernel.BatchRequest{Index: r.Index, Collection: r.Collection, Method: r.Method, ID: r.ID, Body: r.Data, Deleted: r.Deleted}
 	}
-	err := kernel.OnBatch.Trigger(ev)
+	err := hooks.Trigger(ev)
 	if err == nil {
 		return nil
 	}
@@ -439,23 +585,34 @@ func (m *Module) emit(name string, app core.App, reqs []reqView, auth *core.Reco
 }
 
 // readBack re-reads, inside the transaction, every record the batch wrote.
-// Record ids come from the batch response (an array of {status, body}).
-func (m *Module) readBack(app core.App, reqs []reqView, resp []byte) []reqView {
+// Record ids come from the batch response (an array of {status, body}); the
+// sub-request URLs were rewritten so `fields=` cannot hide the id. When the id
+// of a written record cannot be determined it returns an error (fail closed).
+func (m *Module) readBack(app core.App, reqs []reqView, resp []byte) ([]reqView, error) {
 	var results []struct {
 		Body map[string]any `json:"body"`
 	}
-	_ = json.Unmarshal(resp, &results)
+	if err := json.Unmarshal(resp, &results); err != nil {
+		return nil, fmt.Errorf("unreadable batch response: %w", err)
+	}
+	if len(results) != len(reqs) {
+		return nil, fmt.Errorf("batch response has %d results for %d requests", len(results), len(reqs))
+	}
 	out := make([]reqView, len(reqs))
 	for i, r := range reqs {
 		r.Data = nil
-		if i < len(results) && results[i].Body != nil {
+		if results[i].Body != nil {
 			if id, _ := results[i].Body["id"].(string); id != "" {
 				r.ID = id
 			}
 		}
 		switch {
-		case r.Method == http.MethodDelete || r.Collection == "" || r.ID == "":
-			r.Deleted = r.Method == http.MethodDelete
+		case r.Method == http.MethodDelete:
+			r.Deleted = true
+		case r.Collection == "":
+			// not a records URL: nothing to read back
+		case r.ID == "":
+			return nil, fmt.Errorf("request %d (%s %s): no record id", i, r.Method, r.Collection)
 		default:
 			if rec, err := app.FindRecordById(r.Collection, r.ID); err == nil {
 				r.Data = rec.FieldsData()
@@ -465,5 +622,5 @@ func (m *Module) readBack(app core.App, reqs []reqView, resp []byte) []reqView {
 		}
 		out[i] = r
 	}
-	return out
+	return out, nil
 }

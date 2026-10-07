@@ -327,7 +327,7 @@ func TestKernelHooks(t *testing.T) {
 	e := setup(t)
 	var seen []string
 	var after kernel.BatchEvent
-	id := kernel.OnBatch.Bind(&hook.Handler[*kernel.BatchEvent]{Func: func(ev *kernel.BatchEvent) error {
+	id := kernel.OnBatchFor(e.app).Bind(&hook.Handler[*kernel.BatchEvent]{Func: func(ev *kernel.BatchEvent) error {
 		seen = append(seen, ev.Name)
 		if ev.Name == kernel.BatchAfter && after.Name == "" {
 			after = *ev
@@ -340,7 +340,7 @@ func TestKernelHooks(t *testing.T) {
 		}
 		return ev.Next()
 	}})
-	defer kernel.OnBatch.Unbind(id)
+	defer kernel.OnBatchFor(e.app).Unbind(id)
 
 	if code, out := e.batch(t, post("orders", map[string]any{"total_qty": 7})); code != 200 {
 		t.Fatalf("%d %v", code, out)
@@ -350,13 +350,13 @@ func TestKernelHooks(t *testing.T) {
 	}
 
 	// an error from batch.after rolls the whole batch back
-	kernel.OnBatch.Bind(&hook.Handler[*kernel.BatchEvent]{Id: "boom", Priority: 10, Func: func(ev *kernel.BatchEvent) error {
+	kernel.OnBatchFor(e.app).Bind(&hook.Handler[*kernel.BatchEvent]{Id: "boom", Priority: 10, Func: func(ev *kernel.BatchEvent) error {
 		if ev.Name == kernel.BatchAfter {
 			return errors.New("nope")
 		}
 		return ev.Next()
 	}})
-	defer kernel.OnBatch.Unbind("boom")
+	defer kernel.OnBatchFor(e.app).Unbind("boom")
 	before := e.count(t, "orders")
 	if code, _ := e.batch(t, post("orders", map[string]any{"total_qty": 1})); code != 400 {
 		t.Fatalf("want 400, got %d", code)
@@ -413,5 +413,147 @@ func TestExpressionLanguage(t *testing.T) {
 		if _, err := evalBool(n, &evalCtx{reqs: reqs}); err == nil {
 			t.Errorf("%s must fail at eval", src)
 		}
+	}
+}
+
+func postURL(url string, body map[string]any) map[string]any {
+	return map[string]any{"method": "POST", "url": url, "body": body}
+}
+
+// B1: `?fields=` must not hide the record id from assert_post.
+func TestAssertPostNotEvadedByFields(t *testing.T) {
+	e := setup(t)
+	e.rule(t, Rule{
+		Name:       "cap",
+		Match:      []Match{{"order_items", "POST"}},
+		AssertPost: "sum(order_items, qty) <= 10",
+	})
+	url := "/api/collections/order_items/records?fields=product"
+	code, out := e.batch(t,
+		postURL(url, map[string]any{"qty": 1000}),
+		postURL(url, map[string]any{"qty": 1000}))
+	if code != 400 || batchErr(t, out)["rule"] != "cap" {
+		t.Fatalf("want rejection, got %d %v", code, out)
+	}
+	if e.count(t, "order_items") != 0 {
+		t.Fatal("must roll back")
+	}
+	if code, out := e.batch(t, postURL(url, map[string]any{"qty": 3})); code != 200 {
+		t.Fatalf("valid batch: %d %v", code, out)
+	}
+}
+
+// B2: modifier keys for fields read by `assert` are refused.
+func TestModifierKeysRefused(t *testing.T) {
+	e := setup(t)
+	e.rule(t, Rule{
+		Name:   "cap",
+		Match:  []Match{{"order_items", "POST"}},
+		Assert: "sum(order_items, qty) <= 10",
+	})
+	code, out := e.batch(t, post("order_items", map[string]any{"qty+": 9999}))
+	if code != 400 || !strings.Contains(batchErr(t, out)["message"].(string), "modifier key") {
+		t.Fatalf("want modifier refusal, got %d %v", code, out)
+	}
+	if e.count(t, "order_items") != 0 {
+		t.Fatal("must not write")
+	}
+	// unreferenced fields may use modifiers
+	if code, out := e.batch(t, post("order_items", map[string]any{"qty": 1, "product+": "x"})); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	for k, want := range map[string]string{"qty+": "qty", "+tags": "tags", "qty-": "qty", "slug:autogenerate": "slug", "qty": "qty"} {
+		if got := modifierBase(k); got != want {
+			t.Errorf("modifierBase(%q)=%q want %q", k, got, want)
+		}
+	}
+}
+
+// B3: a failing rule load refuses the batch.
+func TestRuleLoadFailsClosed(t *testing.T) {
+	e := setup(t)
+	e.m.listRules = func(core.App) ([]Rule, error) { return nil, errors.New("database is locked") }
+	code, out := e.batch(t, post("orders", map[string]any{"total_qty": 1}))
+	if code != 500 {
+		t.Fatalf("want 500, got %d %v", code, out)
+	}
+	if e.count(t, "orders") != 0 {
+		t.Fatal("must not write")
+	}
+}
+
+// B4: DELETE then PUT of the same id is a create at execution time.
+func TestPutClassifiedByReplay(t *testing.T) {
+	e := setup(t)
+	id := e.seed(t, "orders", "total_qty", 1)
+	reqs := parseRequests(e.app, []*core.InternalRequest{
+		{Method: "PUT", URL: "/api/collections/orders/records", Body: map[string]any{"id": id}},
+		{Method: "DELETE", URL: "/api/collections/orders/records/" + id},
+		{Method: "PUT", URL: "/api/collections/orders/records", Body: map[string]any{"id": id}},
+		{Method: "PUT", URL: "/api/collections/orders/records", Body: map[string]any{"id": id}},
+		{Method: "PUT", URL: "/api/collections/orders/records", Body: map[string]any{"id": 12345}},
+	})
+	want := []string{"PATCH", "DELETE", "POST", "PATCH", "POST"}
+	for i, w := range want {
+		if reqs[i].Method != w {
+			t.Errorf("req %d: got %s want %s", i, reqs[i].Method, w)
+		}
+	}
+}
+
+// B5: numeric strings compare numerically only for number-typed fields.
+func TestStringCompare(t *testing.T) {
+	cases := []struct {
+		l, r    any
+		numeric bool
+		want    bool
+	}{
+		{"10", "5", true, false},  // number field: 10 <= 5 false
+		{"10", "5", false, true},  // plain strings: lexical
+		{"10", 5.0, false, false}, // number on one side: numeric
+	}
+	for _, c := range cases {
+		got, err := compare(c.l, "<=", c.r, c.numeric)
+		if err != nil || got != c.want {
+			t.Errorf("%v <= %v (numeric=%v) = %v, %v; want %v", c.l, c.r, c.numeric, got, err, c.want)
+		}
+	}
+}
+
+// B7, B8: NaN/Inf and huge req() indexes fail instead of passing or panicking.
+func TestExprEdgeCases(t *testing.T) {
+	reqs := []reqView{
+		{Index: 0, Collection: "a", Method: "POST", Data: map[string]any{"x": 1e308, "i": 1e30}},
+		{Index: 1, Collection: "a", Method: "POST", Data: map[string]any{"x": 1e308}},
+	}
+	for _, src := range []string{
+		"sum(a, x) - sum(a, x) >= 0",
+		"req(0).body.x * 10 >= 0",
+		"req(req(0).body.i).body.x == 1",
+	} {
+		n, err := Parse(src)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		if _, err := evalBool(n, &evalCtx{reqs: reqs}); err == nil {
+			t.Errorf("%s must error", src)
+		}
+	}
+}
+
+// B6: handlers bound for one app do not see another app's batches.
+func TestBatchHooksPerApp(t *testing.T) {
+	e := setup(t)
+	other := setup(t)
+	called := 0
+	kernel.OnBatchFor(other.app).Bind(&hook.Handler[*kernel.BatchEvent]{Func: func(ev *kernel.BatchEvent) error {
+		called++
+		return ev.Next()
+	}})
+	if code, out := e.batch(t, post("orders", map[string]any{"total_qty": 1})); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if called != 0 {
+		t.Fatalf("foreign handler called %d times", called)
 	}
 }
