@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +20,8 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
+	"github.com/tokibase/tokibase/tools/dbutils"
 	"github.com/tokibase/tokibase/tools/hook"
 )
 
@@ -65,10 +68,12 @@ var kinds = []string{KindCount, KindSum, KindAvg, KindMin, KindMax, KindLast}
 // Def is one row of `_computed_fields`.
 type Def struct {
 	Id               string `json:"id,omitempty"`
-	Collection       string `json:"collection"`
+	Collection       string `json:"collection"` // name (resolved from the stored id)
+	CollectionId     string `json:"collection_id,omitempty"`
 	Field            string `json:"field"`
 	Kind             string `json:"kind"`
-	SourceCollection string `json:"source_collection"`
+	SourceCollection string `json:"source_collection"` // name (resolved from the stored id)
+	SourceCollId     string `json:"source_collection_id,omitempty"`
 	SourceRelation   string `json:"source_relation"`
 	SourceField      string `json:"source_field,omitempty"`
 	Filter           string `json:"filter,omitempty"`
@@ -116,7 +121,15 @@ type Module struct {
 	gen      uint64
 	loadMu   sync.Mutex
 
-	prev sync.Map // *core.Record -> map[relation field]previous parent id
+	// prev holds, per record object, the FIFO queue of relation values captured
+	// before each update (one entry per update call, consumed by its after
+	// hook), so several updates of one record in a transaction and updates of
+	// self-relations never lose or leak an entry.
+	prev sync.Map // *core.Record -> *prevQueue
+
+	// clientSaves marks the record objects that are being saved by a client
+	// request (set by the request hooks, read by the execute hook).
+	clientSaves sync.Map // *core.Record -> struct{}
 
 	locksMu sync.Mutex
 	locks   map[string]*entry
@@ -149,6 +162,7 @@ func Register(app core.App) *Module {
 		if err := EnsureCollection(app); err != nil {
 			app.Logger().Error("computed: failed to initialize "+CollectionName, "error", err)
 		}
+		m.bootWarn()
 		m.Invalidate()
 	}
 	if app.IsBootstrapped() {
@@ -199,10 +213,23 @@ func (m *Module) Invalidate() {
 	m.mu.Unlock()
 }
 
-func toDef(r *core.Record) Def {
+// collRef resolves a stored collection reference (id; a name is accepted for
+// rows written by hand or by older versions) to its id and current name.
+func collRef(app kernel.App, ref string) (id, name string) {
+	if c, err := app.FindCachedCollectionByNameOrId(ref); err == nil && c != nil {
+		return c.Id, c.Name
+	}
+	return "", ref
+}
+
+// toDef reads a definition row. Definitions are stored by collection id, so a
+// collection rename keeps them working; the names are resolved here.
+func toDef(app kernel.App, r *core.Record) Def {
+	cid, cname := collRef(app, r.GetString("collection"))
+	sid, sname := collRef(app, r.GetString("source_collection"))
 	return Def{
-		Id: r.Id, Collection: r.GetString("collection"), Field: r.GetString("field"),
-		Kind: r.GetString("kind"), SourceCollection: r.GetString("source_collection"),
+		Id: r.Id, Collection: cname, CollectionId: cid, Field: r.GetString("field"),
+		Kind: r.GetString("kind"), SourceCollection: sname, SourceCollId: sid,
 		SourceRelation: r.GetString("source_relation"), SourceField: r.GetString("source_field"),
 		Filter: r.GetString("filter"),
 	}
@@ -216,7 +243,7 @@ func List(app core.App, collection string) ([]Def, error) {
 	}
 	out := make([]Def, 0, len(recs))
 	for _, r := range recs {
-		d := toDef(r)
+		d := toDef(app, r)
 		if collection == "" || d.Collection == collection {
 			out = append(out, d)
 		}
@@ -285,7 +312,7 @@ func Validate(app core.App, d *Def) error {
 	if err != nil {
 		return fmt.Errorf("collection %q not found", d.Collection)
 	}
-	d.Collection = parent.Name
+	d.Collection, d.CollectionId = parent.Name, parent.Id
 	pf, ok := parent.Fields.GetByName(d.Field).(*core.NumberField)
 	if !ok {
 		return fmt.Errorf("field %q of %q must be an existing number field", d.Field, parent.Name)
@@ -295,7 +322,7 @@ func Validate(app core.App, d *Def) error {
 	if err != nil {
 		return fmt.Errorf("source collection %q not found", d.SourceCollection)
 	}
-	d.SourceCollection = child.Name
+	d.SourceCollection, d.SourceCollId = child.Name, child.Id
 	if child.IsView() {
 		return errors.New("source collection must not be a view")
 	}
@@ -321,10 +348,98 @@ func Validate(app core.App, d *Def) error {
 	if d.Kind == KindLast && child.Fields.GetByName("created") == nil {
 		return fmt.Errorf("kind last needs a `created` field on %q", child.Name)
 	}
+	for _, f := range kernel.SensitiveFieldsOf(child.Id) {
+		if d.Filter != "" && wordRe(f).MatchString(d.Filter) {
+			return fmt.Errorf("filter references the encrypted field %q of %q: it would compare ciphertext", f, child.Name)
+		}
+	}
 	if _, err := buildQuery(app, child, d, nil); err != nil {
 		return fmt.Errorf("invalid filter: %w", err)
 	}
+	// run it once against no parent: catches what compiling alone does not
+	// (deleted columns, joins that no longer resolve)
+	if _, err := aggregate(app, d, []string{"__validate__"}); err != nil {
+		return fmt.Errorf("invalid definition: %w", err)
+	}
 	return nil
+}
+
+func wordRe(w string) *regexp.Regexp {
+	return regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(w) + `($|[^A-Za-z0-9_])`)
+}
+
+// MissingIndex returns a warning when the child has no index that starts with
+// the relation column: every child write aggregates the children of one parent
+// and without that index it scans the whole child table.
+func MissingIndex(app kernel.App, d Def) string {
+	child, err := app.FindCollectionByNameOrId(d.SourceCollection)
+	if err != nil {
+		return ""
+	}
+	for _, ix := range child.Indexes {
+		cols := dbutils.ParseIndex(ix).Columns
+		if len(cols) > 0 && strings.EqualFold(cols[0].Name, d.SourceRelation) {
+			return ""
+		}
+	}
+	return fmt.Sprintf("%s.%s has no index starting with the relation column: every write to %s scans the whole table. Run `toki computed index %s %s`.",
+		child.Name, d.SourceRelation, child.Name, child.Name, d.SourceRelation)
+}
+
+// EnsureIndex creates a plain index on the child collection (relation column
+// first, then the optional extra columns) through the collection indexes API.
+// It returns the index name and whether it was created.
+func EnsureIndex(app core.App, collection, field string, extra ...string) (string, bool, error) {
+	col, err := app.FindCollectionByNameOrId(collection)
+	if err != nil {
+		return "", false, fmt.Errorf("collection %q not found", collection)
+	}
+	if col.Fields.GetByName(field) == nil {
+		return "", false, fmt.Errorf("collection %q has no field %q", col.Name, field)
+	}
+	cols := append([]string{field}, extra...)
+	for _, c := range extra {
+		if col.Fields.GetByName(c) == nil {
+			return "", false, fmt.Errorf("collection %q has no field %q", col.Name, c)
+		}
+	}
+	for _, ix := range col.Indexes {
+		parsed := dbutils.ParseIndex(ix)
+		if len(parsed.Columns) >= len(cols) {
+			same := true
+			for i, c := range cols {
+				if !strings.EqualFold(parsed.Columns[i].Name, c) {
+					same = false
+				}
+			}
+			if same {
+				return parsed.IndexName, false, nil
+			}
+		}
+	}
+	name := "idx_computed_" + col.Name + "_" + strings.Join(cols, "_")
+	quoted := make([]string, len(cols))
+	for i, c := range cols {
+		quoted[i] = "[[" + c + "]]"
+	}
+	col.AddIndex(name, false, strings.Join(quoted, ", "), "")
+	if err := app.Save(col); err != nil {
+		return "", false, err
+	}
+	return name, true, nil
+}
+
+func (m *Module) bootWarn() {
+	c, err := m.app.FindCollectionByNameOrId(CollectionName)
+	if err != nil || c == nil {
+		return
+	}
+	for name, r := range map[string]*string{"listRule": c.ListRule, "viewRule": c.ViewRule, "createRule": c.CreateRule, "updateRule": c.UpdateRule, "deleteRule": c.DeleteRule} {
+		if r != nil {
+			m.app.Logger().Warn("computed: "+CollectionName+" has an API rule set; it must stay null (superusers only), "+
+				"a definition can point at any number field", "rule", name)
+		}
+	}
 }
 
 func contains(s []string, v string) bool {
@@ -341,7 +456,8 @@ func Add(app core.App, d Def) (*Def, error) {
 	if err := Validate(app, &d); err != nil {
 		return nil, err
 	}
-	rec, err := app.FindFirstRecordByFilter(CollectionName, "collection={:c} && field={:f}", dbx.Params{"c": d.Collection, "f": d.Field})
+	rec, err := app.FindFirstRecordByFilter(CollectionName, "(collection={:c} || collection={:n}) && field={:f}",
+		dbx.Params{"c": d.CollectionId, "n": d.Collection, "f": d.Field})
 	if err != nil || rec == nil {
 		coll, cerr := app.FindCollectionByNameOrId(CollectionName)
 		if cerr != nil {
@@ -349,26 +465,28 @@ func Add(app core.App, d Def) (*Def, error) {
 		}
 		rec = core.NewRecord(coll)
 	}
-	rec.Set("collection", d.Collection)
+	rec.Set("collection", d.CollectionId) // ids: a collection rename must not orphan the definition
 	rec.Set("field", d.Field)
 	rec.Set("kind", d.Kind)
-	rec.Set("source_collection", d.SourceCollection)
+	rec.Set("source_collection", d.SourceCollId)
 	rec.Set("source_relation", d.SourceRelation)
 	rec.Set("source_field", d.SourceField)
 	rec.Set("filter", d.Filter)
 	if err := app.Save(rec); err != nil {
 		return nil, err
 	}
-	out := toDef(rec)
+	out := toDef(app, rec)
 	return &out, nil
 }
 
 // Remove deletes a definition; false when none existed. The stored values stay as they are.
 func Remove(app core.App, collection, field string) (bool, error) {
+	id := collection
 	if col, err := app.FindCollectionByNameOrId(collection); err == nil {
-		collection = col.Name
+		collection, id = col.Name, col.Id
 	}
-	rec, err := app.FindFirstRecordByFilter(CollectionName, "collection={:c} && field={:f}", dbx.Params{"c": collection, "f": field})
+	rec, err := app.FindFirstRecordByFilter(CollectionName, "(collection={:c} || collection={:n}) && field={:f}",
+		dbx.Params{"c": id, "n": collection, "f": field})
 	if err != nil || rec == nil {
 		return false, nil
 	}

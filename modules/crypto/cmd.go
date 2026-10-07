@@ -20,7 +20,7 @@ func NewCommand(app core.App) *cobra.Command {
 			"Needs a 32 byte master key (base64) in " + EnvMasterKey + " or the file named by " + EnvMasterKeyFile + ".\n" +
 			"Keep the master key OUTSIDE pb_data and back it up separately: without it the data is unrecoverable.\n" +
 			"Modes: random (non-deterministic, no filtering or sorting) and blind-index (random + exact-match lookup via\n" +
-			"/api/crypto/lookup/{collection}/{field}?value=). Filters and sorts on encrypted fields are rejected with 400 " + ErrCode + ".",
+			"POST /api/crypto/lookup/{collection}/{field} with {\"value\": ...}). Filters and sorts on encrypted fields are rejected with 400 " + ErrCode + ".",
 	}
 	out := func(c *cobra.Command) func(string) {
 		return func(s string) { fmt.Fprintln(c.OutOrStdout(), s) }
@@ -82,6 +82,9 @@ func NewCommand(app core.App) *cobra.Command {
 					p(fmt.Sprintf("  key %s v%d\t%s", cs.Collection, k.Version, st))
 				}
 			}
+			for _, pd := range r.Pending {
+				p(fmt.Sprintf("PENDING %s.%s: %s (run `toki crypto resume`)", pd.Collection, pd.Field, pd.State))
+			}
 			for _, w := range r.Warnings {
 				p(fmt.Sprintf("WARNING %s.%s (%s): %s", w.Collection, w.Field, w.Where, w.Message))
 			}
@@ -125,7 +128,7 @@ func NewCommand(app core.App) *cobra.Command {
 
 	var understand bool
 	disable := &cobra.Command{
-		Use: "disable <collection> <field>", Short: "Decrypt a field and stop encrypting it (needs --i-understand)",
+		Use: "disable <collection> <field>", Short: "Decrypt a field and stop encrypting it (needs --i-understand; crash-safe, finish with resume)",
 		Args: cobra.ExactArgs(2), SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
 			if err := ensure(); err != nil {
@@ -173,7 +176,7 @@ func NewCommand(app core.App) *cobra.Command {
 	rotate.Flags().BoolVar(&background, "background", false, "enqueue as a kernel job instead of running now")
 
 	retire := &cobra.Command{
-		Use: "retire <collection>", Short: "Destroy old key versions that no row uses any more",
+		Use: "retire <collection>", Short: "Retire old key versions that no row uses any more (blanks the wrapped key; copies in backups/WAL survive)",
 		Args: cobra.ExactArgs(1), SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
 			if err := ensure(); err != nil {
@@ -225,6 +228,24 @@ func NewCommand(app core.App) *cobra.Command {
 	verify.Flags().IntVar(&sample, "sample", 100, "rows to sample")
 	verify.Flags().BoolVar(&asJSON, "json", false, "output JSON")
 
-	root.AddCommand(status, enable, disable, rotate, retire, verify)
+	resume := &cobra.Command{
+		Use: "resume", Short: "Finish interrupted enable, disable or rotate runs (see status: PENDING)",
+		Args: cobra.NoArgs, SilenceUsage: true,
+		RunE: func(c *cobra.Command, args []string) error {
+			if err := ensure(); err != nil {
+				return err
+			}
+			done, err := Resume(app, progress(c))
+			for _, l := range done {
+				fmt.Fprintln(c.OutOrStdout(), l)
+			}
+			if err == nil && len(done) == 0 {
+				fmt.Fprintln(c.OutOrStdout(), "nothing to resume")
+			}
+			return err
+		},
+	}
+
+	root.AddCommand(status, enable, disable, rotate, retire, verify, resume)
 	return root
 }

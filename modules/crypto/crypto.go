@@ -46,6 +46,15 @@ const (
 	ActionRetire        = "crypto.retire"
 	ActionDecryptFailed = "crypto.decrypt_failed"
 
+	// States of a `_crypto_fields` row. Empty = steady state.
+	StateEnabling  = "enabling"  // rows are still being encrypted (new writes already are)
+	StateDisabling = "disabling" // rows are being decrypted (new writes are stored as plaintext)
+
+	// Undecryptable is what an API read returns for a value that exists but
+	// cannot be decrypted. A write that submits it back keeps the stored
+	// ciphertext untouched (it never erases data).
+	Undecryptable = "[undecryptable]"
+
 	hookId   = "__tokiCrypto__"
 	storeKey = "__tokiCryptoModule__"
 
@@ -126,6 +135,10 @@ type Module struct {
 	loadMu     sync.Mutex
 	load       func() (map[string]map[string]string, error)
 
+	stMu       sync.RWMutex
+	states     map[string]map[string]string // collection id -> field -> state
+	registered map[string]map[string]bool   // what this module put in the kernel registry
+
 	keyMu sync.Mutex
 	keys  map[string]*collKeys
 
@@ -144,7 +157,8 @@ func (m *Module) Active() bool { return len(m.master) == 32 }
 
 // Register creates the collections and table, binds the hooks and returns the module.
 func Register(app core.App) *Module {
-	m := &Module{app: app, invalid: true, keys: map[string]*collKeys{}, auditLast: map[string]time.Time{}}
+	m := &Module{app: app, invalid: true, keys: map[string]*collKeys{}, auditLast: map[string]time.Time{},
+		states: map[string]map[string]string{}, registered: map[string]map[string]bool{}}
 	m.master, m.masterErr = LoadMasterKey()
 	m.load = m.loadConfig
 	app.Store().Set(storeKey, m)
@@ -154,6 +168,7 @@ func Register(app core.App) *Module {
 			app.Logger().Error("crypto: failed to initialize schema", "error", err)
 		}
 		m.Invalidate()
+		_, _ = m.fieldsFor("") // loads the configuration and fills the kernel sensitive-field registry
 	}
 	if app.IsBootstrapped() {
 		ensure()
@@ -197,7 +212,13 @@ func EnsureSchema(app core.App) error {
 			&core.SelectField{Name: "mode", Required: true, MaxSelect: 1, Values: []string{ModeRandom, ModeBlindIndex}},
 			&core.AutodateField{Name: "created", OnCreate: true},
 		)
+		c.Fields.Add(&core.TextField{Name: "state"})
 		c.AddIndex("idx_crypto_fields_unique", true, "[[collection]], [[field]]", "")
+		if err := app.Save(c); err != nil {
+			return err
+		}
+	} else if c.Fields.GetByName("state") == nil {
+		c.Fields.Add(&core.TextField{Name: "state"}) // upgrade from the first release
 		if err := app.Save(c); err != nil {
 			return err
 		}
@@ -249,6 +270,7 @@ type Config struct {
 	CollId     string `json:"collection_id"`
 	Field      string `json:"field"`
 	Mode       string `json:"mode"`
+	State      string `json:"state,omitempty"`
 }
 
 func (m *Module) loadConfig() (map[string]map[string]string, error) {
@@ -257,14 +279,58 @@ func (m *Module) loadConfig() (map[string]map[string]string, error) {
 		return nil, err
 	}
 	out := map[string]map[string]string{}
+	states := map[string]map[string]string{}
 	for _, r := range recs {
 		id := m.resolveId(r.GetString("collection"))
 		if out[id] == nil {
 			out[id] = map[string]string{}
+			states[id] = map[string]string{}
 		}
 		out[id][r.GetString("field")] = r.GetString("mode")
+		states[id][r.GetString("field")] = r.GetString("state")
 	}
+	m.stMu.Lock()
+	m.states = states
+	m.stMu.Unlock()
+	m.syncSensitive(out)
 	return out, nil
+}
+
+// syncSensitive mirrors the configured fields into the kernel registry that
+// audit, webhooks and mcp consult to keep encrypted values out of their output.
+func (m *Module) syncSensitive(cfg map[string]map[string]string) {
+	m.stMu.Lock()
+	defer m.stMu.Unlock()
+	for id, fields := range cfg {
+		for f := range fields {
+			kernel.RegisterSensitiveField(id, f)
+			if m.registered[id] == nil {
+				m.registered[id] = map[string]bool{}
+			}
+			m.registered[id][f] = true
+		}
+	}
+	for id, fields := range m.registered {
+		for f := range fields {
+			if _, ok := cfg[id][f]; !ok {
+				kernel.UnregisterSensitiveField(id, f)
+				delete(fields, f)
+			}
+		}
+		if len(fields) == 0 {
+			delete(m.registered, id)
+		}
+	}
+}
+
+// unregisterAll removes everything this module put in the kernel registry.
+func (m *Module) unregisterAll() { m.syncSensitive(map[string]map[string]string{}) }
+
+// stateOf returns the state of a configured field ("" = steady).
+func (m *Module) stateOf(collId, field string) string {
+	m.stMu.RLock()
+	defer m.stMu.RUnlock()
+	return m.states[collId][field]
 }
 
 // resolveId maps a stored collection reference (id or name) to the id.
@@ -331,7 +397,7 @@ func List(app core.App) ([]Config, error) {
 	}
 	out := []Config{}
 	for _, r := range recs {
-		c := Config{Id: r.Id, Collection: r.GetString("collection"), Field: r.GetString("field"), Mode: r.GetString("mode")}
+		c := Config{Id: r.Id, Collection: r.GetString("collection"), Field: r.GetString("field"), Mode: r.GetString("mode"), State: r.GetString("state")}
 		if col, err := app.FindCachedCollectionByNameOrId(c.Collection); err == nil && col != nil {
 			c.Collection, c.CollId = col.Name, col.Id
 		}

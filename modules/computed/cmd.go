@@ -67,6 +67,9 @@ func NewCommand(app core.App) *cobra.Command {
 			}
 			fmt.Fprintf(c.OutOrStdout(), "ok %s.%s (%s). Run `computed backfill %s %s` to compute existing values.\n",
 				out.Collection, out.Field, out.Kind, out.Collection, out.Field)
+			if w := MissingIndex(app, *out); w != "" {
+				fmt.Fprintln(c.OutOrStdout(), "WARNING: "+w)
+			}
 			return nil
 		},
 	}
@@ -172,7 +175,28 @@ func NewCommand(app core.App) *cobra.Command {
 		},
 	}
 
-	root.AddCommand(list, add, rm, backfill, verify, drift)
+	var with []string
+	index := &cobra.Command{
+		Use:     "index <collection> <field>",
+		Short:   "Create an index on the child's relation column (what every recompute filters on)",
+		Example: "computed index kids parent\ncomputed index comments post --with created   # for kind last",
+		Args:    cobra.ExactArgs(2), SilenceUsage: true,
+		RunE: func(c *cobra.Command, args []string) error {
+			name, created, err := EnsureIndex(app, args[0], args[1], with...)
+			if err != nil {
+				return err
+			}
+			if created {
+				fmt.Fprintf(c.OutOrStdout(), "created index %s\n", name)
+			} else {
+				fmt.Fprintf(c.OutOrStdout(), "index %s already covers it\n", name)
+			}
+			return nil
+		},
+	}
+	index.Flags().StringSliceVar(&with, "with", nil, "extra columns after the relation column (e.g. created for kind last)")
+
+	root.AddCommand(list, add, rm, backfill, verify, drift, index)
 	return root
 }
 

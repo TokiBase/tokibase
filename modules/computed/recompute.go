@@ -161,7 +161,12 @@ func buildQuery(app kernel.App, child *core.Collection, d *Def, ids []string) (*
 	}
 	q := db.Select(rel+" AS pid", agg+" AS v").From(child.Name)
 	if d.Kind == KindLast {
-		q.OrderBy(tbl+".`created` ASC", tbl+".`id` ASC")
+		// the newest child of the parent: ORDER BY created DESC, id DESC LIMIT 1
+		// (aggregate runs it once per parent, nothing is loaded into memory)
+		q.OrderBy(tbl+".`created` DESC", tbl+".`id` DESC")
+		if len(ids) == 1 {
+			q.Limit(1)
+		}
 	} else {
 		q.GroupBy(rel)
 	}
@@ -186,6 +191,11 @@ func buildQuery(app kernel.App, child *core.Collection, d *Def, ids []string) (*
 	if err := resolver.UpdateQuery(q); err != nil {
 		return nil, err
 	}
+	if d.Kind == KindCount && !strings.Contains(strings.ToUpper(q.Build().SQL()), " JOIN ") {
+		// no join in the filter, so a child row is never counted twice: COUNT(*)
+		// is answered from the relation index alone, DISTINCT would need a temp b-tree
+		q.Select(rel+" AS pid", "COUNT(*) AS v")
+	}
 	return q, nil
 }
 
@@ -201,6 +211,23 @@ func aggregate(app kernel.App, d *Def, ids []string) (map[string]float64, error)
 	if err != nil {
 		return nil, err
 	}
+	out := make(map[string]float64, len(ids))
+	if d.Kind == KindLast {
+		for _, id := range ids {
+			q, err := buildQuery(app, child, d, []string{id})
+			if err != nil {
+				return nil, err
+			}
+			var rows []aggRow
+			if err := q.All(&rows); err != nil {
+				return nil, err
+			}
+			if len(rows) > 0 {
+				out[id] = rows[0].V
+			}
+		}
+		return out, nil
+	}
 	q, err := buildQuery(app, child, d, ids)
 	if err != nil {
 		return nil, err
@@ -209,9 +236,8 @@ func aggregate(app kernel.App, d *Def, ids []string) (map[string]float64, error)
 	if err := q.All(&rows); err != nil {
 		return nil, err
 	}
-	out := make(map[string]float64, len(rows))
 	for _, r := range rows {
-		out[r.Pid] = r.V // for kind last the rows are ordered, the last one wins
+		out[r.Pid] = r.V
 	}
 	return out, nil
 }

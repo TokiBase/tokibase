@@ -104,7 +104,7 @@ func (s *Server) registerSchemaTools() {
 				}
 				samples := make([]any, 0, len(recs))
 				for _, r := range recs {
-					samples = append(samples, sanitize(jsonValue(r.PublicExport()), 40))
+					samples = append(samples, sanitize(exportRedacted(r), 40))
 				}
 				out["samples"] = samples
 			} else {

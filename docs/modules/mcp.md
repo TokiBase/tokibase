@@ -149,3 +149,7 @@ toki gen agents-md [--out AGENTS.md] [--force]   # AGENTS.md + llms.txt next to 
 - Streamable HTTP transport (behind `TOKI_MCP=off|on`), agent keys as bearer tokens.
 - `@request.auth.kind = "agent"` available in collection rules, so agents get real per-collection rules instead of guest evaluation.
 - Sandbox mode (writes into a throw-away copy of `pb_data`, diff before apply).
+
+## Encrypted fields
+
+Record exports, delete previews and operator samples replace encrypted fields (`kernel.IsSensitive`) by `"[encrypted]"`, also inside expanded relations: an agent never receives their ciphertext or plaintext, whatever its role.

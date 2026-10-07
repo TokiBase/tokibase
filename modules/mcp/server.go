@@ -368,7 +368,7 @@ func jsonValue(v any) any {
 }
 
 func exportRecord(r *kernel.Record, fields string) map[string]any {
-	m := jsonValue(r.PublicExport()).(map[string]any)
+	m := exportRedacted(r)
 	if fields = strings.TrimSpace(fields); fields != "" {
 		keep := map[string]bool{}
 		for _, f := range strings.Split(fields, ",") {
@@ -381,4 +381,11 @@ func exportRecord(r *kernel.Record, fields string) map[string]any {
 		}
 	}
 	return m
+}
+
+// exportRedacted is the JSON form of the record's public export with the
+// fields registered as sensitive (encrypted at rest) replaced by a marker, so
+// an agent never receives ciphertext or plaintext of them.
+func exportRedacted(r *kernel.Record) map[string]any {
+	return jsonValue(kernel.RedactExport(r, r.PublicExport(), "")).(map[string]any)
 }

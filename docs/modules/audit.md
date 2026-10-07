@@ -74,3 +74,7 @@ Phase 1 targets low-volume privileged traffic: one aux-DB insert per captured re
 - Actor for backups and impersonation issuer (`impersonated_by` real id) by threading request context.
 - Chain checkpoints + chain-aware prune, external head anchoring.
 - Capture of Go/JS-hook writes and batch requests.
+
+## Encrypted fields
+
+Fields registered through `kernel.RegisterSensitiveField` (the `crypto` module does this for every encrypted field) are stored as `"[encrypted]"` in `before`, `after` and `diff` (empty stays empty). Neither plaintext nor ciphertext reaches the chain; consequently a change of such a field is not visible in the diff, only that the record was written.

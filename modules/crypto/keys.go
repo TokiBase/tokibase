@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/pocketbase/dbx"
@@ -46,7 +47,7 @@ func (m *Module) unwrap(collId string, ver int, wrapped string) ([]byte, error) 
 }
 
 func (m *Module) keyRecords(collId string) ([]*core.Record, error) {
-	recs, err := m.app.FindRecordsByFilter(KeysCollection, "collection={:c}", "version", 0, 0, dbx.Params{"c": collId})
+	recs, err := m.app.FindRecordsByFilter(KeysCollection, "collection={:c} && version>0", "version", 0, 0, dbx.Params{"c": collId})
 	if err != nil {
 		return nil, err
 	}
@@ -210,4 +211,83 @@ func (m *Module) retireKeys(collId string, versions []int) error {
 	}
 	m.Invalidate()
 	return nil
+}
+
+// ----- advisory operation lock -----
+//
+// An operation (enable, disable, rotate, retire) on a collection holds a row
+// in `_crypto_keys` with version lockVersion; the unique (collection, version)
+// index makes taking it atomic across processes. Normal key reads ignore it.
+
+const lockVersion = -1
+
+// lockTTL is how long a lock blocks other operations before it counts as
+// abandoned (the longest background job runs 6 hours).
+var lockTTL = 6 * time.Hour
+
+type lockInfo struct {
+	Collection string
+	Op         string
+	Since      time.Time
+}
+
+func parseLock(r *core.Record) lockInfo {
+	l := lockInfo{Collection: r.GetString("collection")}
+	parts := strings.SplitN(r.GetString("wrapped_dek"), "|", 2)
+	l.Op = parts[0]
+	if len(parts) == 2 {
+		l.Since, _ = time.Parse(time.RFC3339, parts[1])
+	}
+	return l
+}
+
+func (m *Module) lockRecord(collId string) *core.Record {
+	r, _ := m.app.FindFirstRecordByFilter(KeysCollection, "collection={:c} && version<=0", dbx.Params{"c": collId})
+	return r
+}
+
+// locks lists every lock row.
+func (m *Module) locks() ([]lockInfo, error) {
+	recs, err := m.app.FindRecordsByFilter(KeysCollection, "version<=0", "", 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]lockInfo, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, parseLock(r))
+	}
+	return out, nil
+}
+
+func (m *Module) dropLock(collId string) {
+	if r := m.lockRecord(collId); r != nil {
+		_ = m.app.Delete(r)
+	}
+}
+
+// acquireLock takes the operation lock of a collection. takeover replaces an
+// existing lock (used by resume). The returned func releases the lock.
+func (m *Module) acquireLock(collId, op string, takeover bool) (func(), error) {
+	if r := m.lockRecord(collId); r != nil {
+		l := parseLock(r)
+		if !takeover && time.Since(l.Since) < lockTTL {
+			return nil, fmt.Errorf("a crypto %s on this collection is running or was interrupted (since %s); wait for it or run `toki crypto resume`",
+				l.Op, l.Since.Format(time.RFC3339))
+		}
+		if err := m.app.Delete(r); err != nil {
+			return nil, err
+		}
+	}
+	coll, err := m.app.FindCollectionByNameOrId(KeysCollection)
+	if err != nil {
+		return nil, err
+	}
+	rec := core.NewRecord(coll)
+	rec.Set("collection", collId)
+	rec.Set("version", lockVersion)
+	rec.Set("wrapped_dek", op+"|"+time.Now().UTC().Format(time.RFC3339))
+	if err := m.app.Save(rec); err != nil {
+		return nil, fmt.Errorf("crypto: another operation holds the lock of this collection: %w", err)
+	}
+	return func() { m.dropLock(collId) }, nil
 }

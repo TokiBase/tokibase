@@ -139,3 +139,7 @@ The delivery queue is a private table and worker pool because the kernel `JobQue
 ## Not covered (phase 1)
 
 Secrets are stored in clear (hidden from the API only), no per-webhook rate limit or concurrency cap, no ordering guarantee between events (use `seq`), no batching, events from `pb_data` restores or direct SQL are not seen, cluster-wide claim coordination (one writing process per `pb_data`).
+
+## Encrypted fields
+
+Payloads never carry encrypted fields (`kernel.IsSensitive`): `data.<field>` and `old.<field>` are `"[encrypted]"` (empty values stay empty); `changed` still names a field whose value changed.

@@ -261,7 +261,7 @@ func (s *Server) registerRecordTools() {
 				preview := any(map[string]any{"id": rec.Id, "collection": col.Name})
 				if ok, err := s.canRead(c.agent, rec, col.ViewRule); err == nil && ok {
 					s.enrich(c.agent, []*kernel.Record{rec})
-					preview = sanitize(jsonValue(rec.PublicExport()), 40)
+					preview = sanitize(exportRedacted(rec), 40)
 				}
 				return map[string]any{
 					"confirm_required": true,
@@ -278,7 +278,7 @@ func (s *Server) registerRecordTools() {
 			if err := s.consumePlan(c.agent, "records.delete", in.ConfirmToken, args); err != nil {
 				return nil, err
 			}
-			c.set("before", sanitize(jsonValue(rec.PublicExport()), 200))
+			c.set("before", sanitize(exportRedacted(rec), 200))
 			if err := s.app.Delete(rec); err != nil {
 				return nil, s.internal(c, "delete failed", err)
 			}

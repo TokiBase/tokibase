@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/filesystem"
 )
 
@@ -109,6 +110,14 @@ func recordSnapshot(r *core.Record) snapshot {
 				v = pv.Hash
 			} else {
 				v = nil
+			}
+		}
+		if kernel.IsSensitive(r.Collection().Id, name) {
+			// encrypted fields: neither plaintext nor ciphertext reaches the log
+			if s, ok := v.(string); ok && s == "" || v == nil {
+				v = nil
+			} else {
+				v = kernel.SensitiveMarker
 			}
 		}
 		out[name] = normalize(v)

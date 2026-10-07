@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -38,9 +39,20 @@ func (m *Module) scan(d *Def, fix bool, progress Progress) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := Validate(m.app, &Def{Collection: d.Collection, Field: d.Field, Kind: d.Kind,
+		SourceCollection: d.SourceCollection, SourceRelation: d.SourceRelation, SourceField: d.SourceField, Filter: d.Filter}); err != nil {
+		return rep, fmt.Errorf("definition %s is invalid (schema changed since it was created?): %w", d.key(), err)
+	}
+	type parentRow struct {
+		Id  string  `db:"id"`
+		Val float64 `db:"val"`
+	}
 	last := ""
 	for {
-		recs, err := m.app.FindRecordsByFilter(parent, "id > {:last}", "id", batchSize, 0, dbx.Params{"last": last})
+		// only the id and the computed column, not the whole parent rows
+		var recs []parentRow
+		err := m.app.DB().Select("id", "COALESCE([["+d.Field+"]], 0) AS val").From(parent.Name).
+			Where(dbx.NewExp("id > {:last}", dbx.Params{"last": last})).OrderBy("id").Limit(batchSize).All(&recs)
 		if err != nil {
 			return rep, err
 		}
@@ -58,8 +70,24 @@ func (m *Module) scan(d *Def, fix bool, progress Progress) (*Report, error) {
 		for _, r := range recs {
 			rep.Parents++
 			want := normalize(parent, d, vals[r.Id])
-			if !differs(r.GetFloat(d.Field), want) {
+			if !differs(r.Val, want) {
 				continue
+			}
+			// the two reads were not atomic: a write that landed in between is
+			// not drift. Confirm the candidate with a fresh read of both sides.
+			if !fix {
+				var cur float64
+				if err := m.app.DB().Select("COALESCE([[" + d.Field + "]], 0)").From(parent.Name).
+					Where(dbx.HashExp{"id": r.Id}).Row(&cur); err != nil {
+					continue
+				}
+				again, err := aggregate(m.app, d, []string{r.Id})
+				if err != nil {
+					return rep, err
+				}
+				if !differs(cur, normalize(parent, d, again[r.Id])) {
+					continue
+				}
 			}
 			rep.Drift++
 			if len(rep.Sample) < sampleMax {

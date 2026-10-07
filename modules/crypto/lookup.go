@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/pocketbase/dbx"
@@ -144,6 +145,9 @@ func (m *Module) bindHTTP() {
 					return e.Next()
 				},
 			})
+			se.Router.POST("/api/crypto/lookup/{collection}/{field}", m.lookupHandler)
+			// GET is kept for compatibility, but the value then travels in the URL
+			// and is stored in the request log: prefer POST.
 			se.Router.GET("/api/crypto/lookup/{collection}/{field}", m.lookupHandler)
 			return se.Next()
 		},
@@ -160,13 +164,23 @@ func (m *Module) lookupHandler(e *core.RequestEvent) error {
 	if cfg[field] != ModeBlindIndex {
 		return e.NotFoundError("The field is not a blind-index field.", nil)
 	}
-	value := e.Request.URL.Query().Get("value")
-	if value == "" {
-		return e.BadRequestError("Missing value.", nil)
-	}
 	info, err := e.RequestInfo()
 	if err != nil {
-		return e.BadRequestError("", err)
+		return e.BadRequestError("Invalid request body, expected {\"value\": \"...\"}.", nil)
+	}
+	var value string
+	if e.Request.Method == http.MethodPost {
+		switch v := info.Body["value"].(type) {
+		case string:
+			value = v
+		case float64:
+			value = strconv.FormatFloat(v, 'f', -1, 64)
+		}
+	} else {
+		value = e.Request.URL.Query().Get("value")
+	}
+	if value == "" {
+		return e.BadRequestError("Missing value.", nil)
 	}
 	recs, err := FindByBlindIndex(e.App, col.Name, field, value)
 	if err != nil {
@@ -185,6 +199,16 @@ func (m *Module) lookupHandler(e *core.RequestEvent) error {
 	if err := apis.EnrichRecords(e, items); err != nil {
 		return err
 	}
+	// Enrichment applies hidden fields and field-level read permissions
+	// (fieldperm). A caller who cannot read the looked-up field must not learn
+	// that a record has a given value in it: drop what does not export it.
+	visible := items[:0]
+	for _, r := range items {
+		if _, ok := r.PublicExport()[field]; ok {
+			visible = append(visible, r)
+		}
+	}
+	items = visible
 	return e.JSON(http.StatusOK, map[string]any{"items": items, "totalItems": len(items)})
 }
 

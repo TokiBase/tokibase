@@ -15,6 +15,7 @@ import (
 
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
@@ -906,5 +907,43 @@ func TestClaimNextDatabaseError(t *testing.T) {
 	claimLogMu.Unlock()
 	if id, ok := claimNext(app, nowFn()); ok || id != "" {
 		t.Fatal("claim on a broken table must fail")
+	}
+}
+
+func TestSensitiveFieldsRedactedInPayload(t *testing.T) {
+	app, m := setup(t)
+	rcv := newReceiver(t, 200)
+	addHook(t, app, rcv.srv.URL, "record.create,record.update", "")
+	c := makeCollection(t, app, "vaultx")
+	c.Fields.Add(&core.TextField{Name: "enc"})
+	if err := app.Save(c); err != nil {
+		t.Fatal(err)
+	}
+	kernel.RegisterSensitiveField(c.Id, "enc")
+	t.Cleanup(func() { kernel.UnregisterSensitiveField(c.Id, "enc") })
+	m.Start()
+
+	r := core.NewRecord(c)
+	r.Set("title", "t")
+	r.Set("enc", "tkc1:1:CIPHERTEXT-LOOKING")
+	if err := app.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "create", func() bool { return rcv.count() >= 1 })
+	r, _ = app.FindRecordById("vaultx", r.Id)
+	r.Set("enc", "tkc1:1:OTHER-CIPHERTEXT")
+	if err := app.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "update", func() bool { return rcv.count() >= 2 })
+	for _, h := range rcv.hits {
+		if strings.Contains(string(h.body), "CIPHERTEXT") {
+			t.Fatalf("sensitive value in payload: %s", h.body)
+		}
+	}
+	var p Payload
+	_ = json.Unmarshal(rcv.last().body, &p)
+	if p.Data.(map[string]any)["enc"] != "[encrypted]" || p.Old["enc"] != "[encrypted]" {
+		t.Fatalf("bad payload: %s", rcv.last().body)
 	}
 }
