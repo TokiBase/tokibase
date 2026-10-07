@@ -25,7 +25,8 @@ check() { # name, ok(0/1), detail
 }
 
 # 1. boot + serve (migrations from older PocketBase versions run here)
-( cd "$WORK" && TOKI_TLS_CHECK=off "$TOKI" serve --dir "$DATA" $HOOKS --http "127.0.0.1:$PORT" >"$LOG" 2>&1 & echo $! >"$WORK/pid" )
+( cd "$WORK" && exec env TOKI_TLS_CHECK=off "$TOKI" serve --dir "$DATA" $HOOKS --http "127.0.0.1:$PORT" >"$LOG" 2>&1 ) &
+echo $! >"$WORK/pid"
 for i in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORT/api/health" >/dev/null && break; sleep 1; done
 H=$(curl -s -m 10 "http://127.0.0.1:$PORT/api/health"); echo "$H" | grep -q '"code":200'; check boot $? "$H"
 
@@ -46,7 +47,7 @@ A=$("$TOKI" audit verify --dir "$DATA" 2>&1 | tail -1); echo "$A" | grep -q '^OK
 
 # 6. module CLIs answer (jobs, webhooks, fieldperm, sessions, deny, lockout)
 for c in "jobs stats --json" "webhooks list --json" "fieldperm lint --json" "deny tail --limit 1 --json" "lockout list --json"; do
-  O=$("$TOKI" $c --dir "$DATA" 2>&1 | tail -c 300); rc=$?; [ $rc = 0 ] || [ "$c" = "fieldperm lint --json" ]; check "cli_${c%% *}" $? "$O"
+  O=$("$TOKI" $c --dir "$DATA" 2>&1); rc=$?; O=$(printf '%s' "$O" | tail -c 300); [ $rc = 0 ] || [ "$c" = "fieldperm lint --json" ]; check "cli_${c%% *}" $? "$O"
 done
 
 # 7. serve log must not contain panics
