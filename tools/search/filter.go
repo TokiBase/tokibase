@@ -93,6 +93,11 @@ func (f FilterData) BuildExprWithLimit(
 
 	cacheKey := raw + "/" + strconv.Itoa(maxExpressions)
 
+	// experimental rule AST path (see docs/RULE_ENGINE.md)
+	if RuleASTEnabled() {
+		return buildExprViaAST(raw, cacheKey, fieldResolver, maxExpressions)
+	}
+
 	if data, ok := parsedFilterData.GetOk(cacheKey); ok {
 		return buildParsedFilterExpr(data, fieldResolver, &maxExpressions)
 	}

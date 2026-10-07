@@ -4,7 +4,39 @@ import (
 	cryptoRand "crypto/rand"
 	"math/big"
 	mathRand "math/rand/v2"
+	"sync"
+	"sync/atomic"
 )
+
+// pseudorandomIntN is the source used by [PseudorandomStringWithAlphabet]
+// (a seam to allow deterministic output in tests of dependent packages).
+var pseudorandomIntN atomic.Pointer[func(int) int]
+
+func init() {
+	f := mathRand.IntN
+	pseudorandomIntN.Store(&f)
+}
+
+// SeedPseudorandomForTest makes [PseudorandomString] deterministic
+// (a seeded PCG source) until the returned restore func is called.
+//
+// It is intended ONLY for tests that need to compare two code paths
+// byte-for-byte; the caller must not run other goroutines that consume
+// pseudorandom strings meanwhile.
+func SeedPseudorandomForTest(seed uint64) (restore func()) {
+	var mu sync.Mutex
+	r := mathRand.New(mathRand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
+	f := func(n int) int {
+		mu.Lock()
+		defer mu.Unlock()
+		return r.IntN(n)
+	}
+
+	prev := pseudorandomIntN.Load()
+	pseudorandomIntN.Store(&f)
+
+	return func() { pseudorandomIntN.Store(prev) }
+}
 
 const defaultRandomAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
@@ -51,8 +83,10 @@ func PseudorandomStringWithAlphabet(length int, alphabet string) string {
 	b := make([]byte, length)
 	max := len(alphabet)
 
+	intN := pseudorandomIntN.Load()
+
 	for i := range b {
-		b[i] = alphabet[mathRand.IntN(max)]
+		b[i] = alphabet[(*intN)(max)]
 	}
 
 	return string(b)
