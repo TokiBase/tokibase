@@ -240,7 +240,7 @@ func TestRTreeSameResultsAndMaintained(t *testing.T) {
 	}
 
 	// tamper with the index, rebuild repairs it
-	if _, err := app.DB().NewQuery("DELETE FROM [[" + TableName("places", "loc") + "]]").Execute(); err != nil {
+	if _, err := app.DB().NewQuery("DELETE FROM [[" + TableName(app, "places", "loc") + "]]").Execute(); err != nil {
 		t.Fatal(err)
 	}
 	if r := decode(t, get(h, nearURL(45, 0, 500, ""))); len(r.Items) != 0 {

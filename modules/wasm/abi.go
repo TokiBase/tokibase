@@ -2,7 +2,12 @@
 
 package wasm
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+
+	"github.com/tokibase/tokibase/core"
+)
 
 // ABI is the guest ABI version carried in every event.
 const ABI = "toki/1"
@@ -66,4 +71,65 @@ type Result struct {
 	Data    map[string]any    `json:"data,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    json.RawMessage   `json:"body,omitempty"`
+}
+
+// Headers never handed to guests in request_info (credentials of the actor).
+func sensitiveHeader(k string) bool {
+	k = strings.ReplaceAll(strings.ToLower(k), "_", "-")
+	switch k {
+	case "authorization", "proxy-authorization", "cookie", "set-cookie":
+		return true
+	}
+	return strings.HasPrefix(k, "x-toki-")
+}
+
+func sensitiveKey(k string) bool {
+	switch strings.ToLower(k) {
+	case "password", "passwordconfirm", "oldpassword", "token", "secret":
+		return true
+	}
+	return false
+}
+
+func scrub(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			if !sensitiveKey(k) {
+				out[k] = scrub(e)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = scrub(e)
+		}
+		return out
+	}
+	return v
+}
+
+// sanitizeRequestInfo copies the request context for a guest without
+// credentials: the authorization/cookie/x-toki-* headers and the
+// password/passwordConfirm/oldPassword/token/secret keys of the body (at any
+// depth) and of the query are dropped. The original is never modified.
+func sanitizeRequestInfo(info *core.RequestInfo) *RequestInfoIn {
+	out := &RequestInfoIn{Method: info.Method, Context: info.Context,
+		Query: map[string]string{}, Headers: map[string]string{}}
+	for k, v := range info.Query {
+		if !sensitiveKey(k) {
+			out.Query[k] = v
+		}
+	}
+	for k, v := range info.Headers {
+		if !sensitiveHeader(k) {
+			out.Headers[k] = v
+		}
+	}
+	if info.Body != nil {
+		out.Body = scrub(info.Body).(map[string]any)
+	}
+	return out
 }

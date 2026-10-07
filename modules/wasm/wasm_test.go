@@ -487,7 +487,11 @@ func TestCronViaFallbackAndStats(t *testing.T) {
 	if !found {
 		t.Fatal("cron job not scheduled")
 	}
-	e.h.cronTick("misc", "*/5 * * * *") // no job queue in this app: runs inline
+	e.h.cronTick("misc", "*/5 * * * *") // no job queue in this app: runs inline on its own goroutine
+	deadline := time.Now().Add(5 * time.Second)
+	for c, _ := e.calls("misc"); c < 1 && time.Now().Before(deadline); c, _ = e.calls("misc") {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if c, errs := e.calls("misc"); c != 1 || errs != 0 {
 		t.Fatalf("calls=%d errors=%d", c, errs)
 	}

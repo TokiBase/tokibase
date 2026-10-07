@@ -39,21 +39,25 @@ Distance (haversine, `2R = 12742`), `c` = `{{coll}}.[[field]]`:
   sin(radians(json_extract(c,'$.lon') - :lon)/2) * sin(radians(json_extract(c,'$.lon') - :lon)/2)))))
 ```
 
-Query: `WHERE <listRule> AND <bounding-box prefilter> AND distance <= :km ORDER BY distance ASC, id ASC LIMIT/OFFSET`. Without an index the prefilter is `json_extract(c,'$.lat') >= :minLat AND ... <= :maxLat AND ((json_extract(c,'$.lon') >= :lo AND ... <= :hi) [OR second range])`. With an index it is `id IN (SELECT rec_id FROM "_geo_<coll>_<field>" WHERE maxLat >= :minLat AND minLat <= :maxLat AND ((maxLon >= :lo AND minLon <= :hi) [OR ...]))`. The distance condition is always applied, so the prefilter only has to be conservative. The page distances are read with the same expression restricted to the page ids.
+Query: `WHERE <listRule> AND <bounding-box prefilter> AND distance <= :km ORDER BY distance ASC, id ASC LIMIT/OFFSET`. Without an index the prefilter is `json_extract(c,'$.lat') >= :minLat AND ... <= :maxLat AND ((json_extract(c,'$.lon') >= :lo AND ... <= :hi) [OR second range])`. With an index it is `id IN (SELECT rec_id FROM "_geo_<24 hex>" WHERE maxLat >= :minLat AND minLat <= :maxLat AND ((maxLon >= :lo AND minLon <= :hi) [OR ...]))`. The distance condition is always applied, so the prefilter only has to be conservative. The page distances are read with the same expression restricted to the page ids.
 
 The radius box handles the antimeridian (two longitude ranges) and the poles (full longitude range). A `bbox` parameter does not: `minLon > maxLon` is rejected, query two boxes instead.
 
 ## R*Tree index
 
 ```
-toki geo index <collection> <field>     # create _geo_<collection>_<field> and fill it
+toki geo index <collection> <field>     # create the R*Tree table and fill it
 toki geo rebuild <collection> <field>   # empty and refill (after bulk SQL imports, or if it drifted)
 toki geo drop <collection> <field>      # remove; queries fall back to the JSON prefilter
 ```
 
 The virtual table is `rtree(rid, minLat, maxLat, minLon, maxLon, +rec_id TEXT)` in `data.db`. `rid` is a stable 63-bit FNV-1a hash of the record id (the real id lives in `rec_id` and is what queries join on, so rowid renumbering by `VACUUM` is harmless; a hash collision, odds about n^2/2^64, could only omit a record until `rebuild`). SQLite stores R*Tree coordinates as 32-bit floats rounded outward, which is why the exact check is always done on the real values.
 
-The index is maintained by the running server through record create/update/delete hooks (also for Go/JS saves) and dropped when the collection is deleted. Writes done directly in SQL or by a process that does not run the module do not update it: run `rebuild`. The server notices a new or dropped index within about 2 seconds. Renaming the collection or the field leaves a stale index under the old name: `drop` it (by old name) and `index` again.
+The index table is named `_geo_` + the first 24 hex digits of `sha256(collectionId + "\x00" + field)`, so two collection/field pairs can never share a table, a user table cannot collide with it, and a collection rename does not change it. Collection names starting with `_geo_` are refused. Tables of older versions (`_geo_<collection>_<field>`) are renamed at boot; a legacy name that two pairs map to is dropped with a WARN log (run `index` again). Only R*Tree virtual tables are ever dropped or emptied.
+
+The index is maintained by the running server through record create/update/delete hooks (also for Go/JS saves). Writes done directly in SQL or by a process that does not run the module do not update it: run `rebuild`. `index`, `rebuild`-created tables and `drop` bump the `_params` row `toki_geo_index_version`; every server (also in another process than the CLI) compares it on each write and query, so a new or dropped index is noticed immediately (no time window). `index` creates the table, bumps the version and only then fills it, so no write is lost; a query that hits a table dropped by another process is retried on the JSON bounding box.
+
+Schema changes are followed by an `OnCollectionUpdateExecute` hook in the same transaction: a renamed field renames its index table, a removed (or retyped) field drops it. Deleting the collection drops its tables. `rebuild` skips records whose value is NULL, `{}` or not a coordinate pair (they are not indexed); a record saved with a non-geo value is removed from the index. Queries with `bbox` only are ordered by `id` unless `sort` is given.
 
 ## Go API
 

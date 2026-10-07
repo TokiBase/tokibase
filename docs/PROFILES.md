@@ -49,7 +49,16 @@ Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.
 
 `jobs` has no tag: push, webhooks and computed enqueue work through it, it is small, and `TOKI_JOBS=off` disables it at runtime. Under `no_adminlock` the Admin UI mode switch (`TOKI_ADMIN_UI`) does not exist; edge and nano also drop the UI, so there is nothing to lock.
 
-Any other combination works: tags are independent (CI and `profiles_test.go` build every single tag and all tags together). Removing a module also removes its CLI commands (`toki passkey`, `toki audit`, ...); `toki backup` keeps `create` but loses `list`/`verify`/`verify-all` under `no_backupcheck`.
+**Tags are for fresh data dirs.** Tags are independent at build time (CI and `profiles_test.go` build every single tag and all tags together), but a binary built with `no_<module>` is NOT safe on a `pb_data` that was used by a build containing that module: the guards of the module (field encryption, field permissions, computed-field write protection, session revocation, lockout, ...) silently disappear while their data stays. Removing a module also removes its CLI commands (`toki passkey`, `toki audit`, ...); `toki backup` keeps `create` but loses `list`/`verify`/`verify-all` under `no_backupcheck`.
+
+## Stubbed module boot guard
+
+Every module registers a marker at init with `kernel.RegisterModuleMarker(name, collections, envs, stubbed)` (some also list data-dir files, for example `ruleguard.json`). The real implementation registers `stubbed=false`, its `no_<module>` stub registers the same names with `stubbed=true`. After a successful bootstrap, for every stubbed marker the binary checks:
+
+- whether one of the owned system collections/tables exists in the database (for example `_crypto_fields`, `_crypto_keys`, `_field_rules`, `_computed_fields`, `_sessions`, `_lockout`, `_passkeys`, `_webhooks`, `_wasm_kv`),
+- whether one of the owned env vars is set (for example `TOKI_CRYPTO_MASTER_KEY`, `TOKI_LOCKOUT`, `TOKI_REPLICA_URL`, `TOKI_ADMIN_UI`; the values `off`, `0`, `false`, `no` count as unset, except for `TOKI_ADMIN_UI` where `off` is a restrictive mode).
+
+If anything is found the process refuses to start with an error listing the module and each collection or env var. Fix it by rebuilding without the tag, or by removing the data and env. `TOKI_ALLOW_STUBBED_MODULES=1` lets the process start anyway; it then logs one ERROR line per finding at every boot and the guards of those modules are OFF. Edge and nano are meant for new data dirs; on an existing database they start only with that override.
 
 ## What a stub changes at runtime
 

@@ -293,7 +293,19 @@ func jsonCol(col *core.Collection, field, key string) string {
 	return "json_extract({{" + col.Name + "}}.[[" + field + "]], '$." + key + "')"
 }
 
+// run executes the query; when an index table vanished (dropped by another
+// process) it refreshes the table set and retries with the JSON bounding box.
 func (s *spec) run(app kernel.App) (*Result, error) {
+	res, err := s.runOnce(app)
+	if isNoTable(err) && !s.noIndex {
+		invalidate(app)
+		s.noIndex = true
+		return s.runOnce(app)
+	}
+	return res, err
+}
+
+func (s *spec) runOnce(app kernel.App) (*Result, error) {
 	query := app.RecordQuery(s.col)
 	resolver := core.NewRecordFieldResolver(app, s.col, s.info, true)
 
@@ -332,6 +344,9 @@ func (s *spec) run(app kernel.App) (*Result, error) {
 		query.AndWhere(dbx.NewExp(dist + " <= {:geokm}"))
 		query.OrderBy(dist + " ASC")
 		query.AndOrderBy(idCol + " ASC")
+	}
+	if s.near == nil && s.sort == "" {
+		query.OrderBy(idCol + " ASC") // stable pagination for bbox-only queries
 	}
 	query.Bind(params)
 

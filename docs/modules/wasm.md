@@ -16,16 +16,16 @@ pb_hooks_wasm/
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--wasmHooksDir` | `<dataDir>/../pb_hooks_wasm` | directory scanned for `*.wasm` |
-| `--wasmHooksWatch` | off | reload modules when a `.wasm`/`.toml` in the directory changes (debounced 250 ms, in process, no restart) |
+| `--wasmHooksWatch` | off | reload modules when a `.wasm`/`.toml` in the directory changes (debounced 1 s and only once the file sizes are stable across two reads, in process, no restart) |
 
 | Env | Meaning |
 | --- | --- |
 | `TOKI_WASM` | `off` disables the module |
 | `TOKI_WASM_HTTP_ALLOW` | comma separated host patterns `http_fetch` may reach (`api.example.com`, `*.example.com`); empty = no outbound HTTP at all |
 | `TOKI_WASM_ALLOW_PRIVATE` | `1` lets `http_fetch` reach loopback/private addresses (off by default, SSRF guard) |
-| `TOKI_WASM_CACHE_DIR` | persist wazero's compilation cache across restarts (otherwise it lives in memory) |
+| `TOKI_WASM_CACHE_DIR` | persist wazero's compilation cache across restarts (otherwise it lives in memory). The cache holds native code that is executed without being verified, so the directory is created `0700` and refused (WARN log, in-memory cache instead) when it is a symlink, group/world writable or owned by another user |
 
-The module name is the file name without `.wasm`. Modules are compiled once (wazero compilation cache, keyed by content) at start and on reload, and instantiated per call: every call gets a fresh linear memory and a fresh WASI environment, so guests cannot share state (use `kv_*` or records). Concurrent instances per module are bounded by a pool of `clamp(2*GOMAXPROCS, 4, 16)`. A module that fails to compile, imports unknown functions or has a bad sidecar is skipped with an error in the log (and in `toki wasm list`); the others keep running. After a reload in-flight calls finish on the old instance.
+The module name is the file name without `.wasm`. Modules are compiled once (wazero compilation cache, keyed by content) at start and on reload, and instantiated per call: every call gets a fresh linear memory and a fresh WASI environment, so guests cannot share state (use `kv_*` or records). Concurrent instances per module are bounded by a pool of `clamp(2*GOMAXPROCS, 4, 16)`. A module that fails to compile or has a bad sidecar **at start** is skipped with an error in the log (and in `toki wasm list`); the others keep running. **Reload fails closed**: when a changed module no longer compiles or its sidecar no longer parses (half copied file, TOML typo), the previous good version stays loaded, an ERROR is logged and the problem shows in `toki wasm list`/`LoadErrors`; the same when the hooks directory becomes unreadable. Only deleting the `.wasm` file unloads a module. After a reload in-flight calls finish on the old instance.
 
 Routes are registered when the server starts: adding a new `route:` event needs a restart (a warning is logged); changing the code behind an existing route, or any record/cron/job event, is picked up live.
 
@@ -48,11 +48,11 @@ Only strings, integers, arrays, inline tables and a `[env]` table are supported 
 | --- | --- |
 | `record.<create\|update\|delete\|*>.<collection\|*>` | before the write (inside `OnRecordCreate/Update/Delete`, before validation): the guest may change fields or reject |
 | `record.after.<action>.<collection>` | after the write succeeded, read-only, failures only logged |
-| `cron:<5-field expr>` | on schedule, as a durable job when `kernel.Jobs(app)` has a queue (deduplicated per minute slot across processes, 3 attempts), otherwise inline from `app.Cron()` |
+| `cron:<5-field expr>` | on schedule, as a durable job when `kernel.Jobs(app)` has a queue (the slot is claimed through the jobs `cron_key` unique index, kept after the job finished, so several processes run a slot once; **1 attempt**, no retry), otherwise inline on its own goroutine (overlapping runs of the same schedule are skipped). Cron guests must be idempotent: a worker crash re-delivers the job, and side effects (mail, HTTP POST) are never rolled back |
 | `route:<METHOD> <path>` | custom route, registered on `OnServe` (`{name}` path params allowed) |
 | `job:<name>` | job enqueued by the module itself via `jobs_enqueue` |
 
-A wildcard collection (`*`) never matches system collections whose name starts with `_`; name them explicitly if you need them. Record hooks fire for writes through the REST API and for writes made by Go/JS code (`app.Save`), because they sit on the model hooks. Writes made by a guest through `records_save`/`records_delete` do not re-trigger WASM hooks (loop guard); other hooks still fire.
+A wildcard collection (`*`) never matches system collections whose name starts with `_`; name them explicitly if you need them. Record hooks fire for writes through the REST API and for writes made by Go/JS code (`app.Save`), because they sit on the model hooks. Writes made by a guest through `records_save`/`records_delete` do not re-trigger WASM hooks for that record (loop guard); other hooks still fire, and the call depth travels in the context of the write: a guest call nested more than 2 levels deep (a hook of another record that a guest write triggered, cascades) fails with "hook call depth exceeded".
 
 ## ABI `toki/1`
 
@@ -78,6 +78,7 @@ A non-zero exit, a trap, an out-of-memory, a timeout, empty or invalid stdout al
 }
 ```
 
+- `request_info` is scrubbed: the headers `authorization`, `proxy-authorization`, `cookie`, `set-cookie` and `x-toki-*`, and the keys `password`, `passwordConfirm`, `oldPassword`, `token`, `secret` (any depth, any case; also in `query`) are removed. Hook guests never see the actor's JWT or plaintext passwords. Route events are different: a route guest gets the raw request headers on purpose (to check signatures), so give routes only to code you trust with them.
 - `kind`: `record | cron | route | job`. Record events carry `record` (public export: hidden fields are omitted), `original` (except create) and `request_info` (only when the write came from an HTTP request).
 - `actor.kind`: `superuser`, `auth` (with `id` and `collection`), `guest`, or `system` (cron, jobs, writes from code).
 - Route events carry `route: {method, path, path_params, query, headers (lowercased), body (raw string, max 4 MiB)}`.
@@ -123,11 +124,13 @@ Guests must export:
 
 Notes:
 
-- `records_*` run with application privileges (no API rules), like Go hooks. Grant `records` only to code you trust with the data.
+- `records_*` run with application privileges (no API list/view/update rules), but **never on system collections**: a collection whose name starts with `_` or that is `System` (`_superusers`, `_webhooks`, `_agents`, ...) is refused for find, save and delete. Writes run the record create/update **request hook chain as a guest** first (the guards of fieldperm, computed, crypto and other modules apply, so a guest write cannot set a field those modules protect), and `id`, `collectionId`, `collectionName`, `expand`, `tokenKey`, `passwordHash` cannot be set. Reads return the stored public export without field permission redaction: grant `records` only to code you trust with the data of the non-system collections.
+- The host functions run on the app of the triggering event, so a hook running inside a transaction (`/api/batch`, cascades, `RunInTransaction`) reads and writes inside that transaction and does not deadlock. A write made by a guest therefore commits or rolls back with it.
+- Every host function honors the call deadline: record queries and saves use the call context, `mail_send` returns when the deadline passes, `kv_*` queries are canceled.
 - `http_fetch` needs the `http` capability **and** the host in `TOKI_WASM_HTTP_ALLOW`. Connections are checked after DNS resolution and redirects are not followed, so private, loopback, link-local, CGNAT and NAT64 ranges are blocked (same list as webhooks) unless `TOKI_WASM_ALLOW_PRIVATE=1`.
 - `kv_*` is a per-module namespace in `auxiliary.db` (`_wasm_kv`); expired keys are purged every 15 s.
 - A call without the capability gets `{"ok":false,"error":"capability \"http\" not granted: add it to needs in <module>.toml"}`.
-- Calls nested through the host are limited to a depth of 3.
+- Calls nested through the host are limited to a depth of 2 (the top level call is depth 0).
 
 Imports other than `wasi_snapshot_preview1` and `toki.*` make the module fail to load.
 
@@ -174,6 +177,8 @@ The SDK exports `toki_alloc`/`toki_free` itself and wraps the host calls: `toki.
 | Memory (`memory_pages`) | wazero `WithMemoryLimitPages`: `memory.grow` beyond the limit fails, the guest runtime aborts | failed call (`exit`/`memory`) |
 | stdout | 1 MiB | failed call (`output`) |
 | Host request | 4 MiB | host call error |
+| Route request body / headers | 1 MiB / 32 KiB | `413` / `431` |
+| `jobs_enqueue` payload / delay | 64 KiB / 30 days | host call error |
 | Concurrency | per-module instance pool | callers wait, bounded by the timeout |
 
 **There is no fuel/instruction-count limit**: wazero has none. CPU use is bounded only by `timeout_ms` (wall clock), so a guest can burn one core for up to that long per call and a flood of requests can occupy all pool slots. Keep timeouts small for request-path hooks, and rate limit routes at the proxy. A module whose declared minimum memory exceeds `memory_pages` is not loaded (`compile ...: section memory: min 48 pages over limit of N pages` in the log and in `toki wasm list`). A standard-Go guest declares 48 pages and, with `encoding/json` (the SDK uses it), runs out of memory at 64 pages during start; use at least 100 pages for Go guests, keep the default 256 unless you know your toolchain.

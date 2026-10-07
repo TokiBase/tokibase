@@ -19,6 +19,8 @@ import (
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	wsys "github.com/tetratelabs/wazero/sys"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 // Module is a compiled guest with its limits, runtime and metrics. It is
@@ -74,6 +76,13 @@ func (s *Stats) drain(name string) Snapshot {
 	return sn
 }
 
+// restore adds back counters whose flush failed.
+func (s *Stats) restore(sn Snapshot) {
+	s.calls.Add(sn.Calls)
+	s.errors.Add(sn.Errors)
+	s.nanos.Add(int64(sn.TotalMS * 1e6))
+}
+
 func trunc(s string, n int) string {
 	if len(s) > n {
 		return s[:n]
@@ -96,15 +105,34 @@ func (e *CallError) PublicMessage() string { return "Hook failed." }
 
 type callKey struct{}
 
+// MaxCallDepth caps nested guest calls (a guest write triggers a hook of a
+// guest that writes ...): the top level call has depth 0.
+const MaxCallDepth = 2
+
 // call is the per-invocation state the host functions consult.
 type call struct {
-	h      *Host
-	mod    *Module
-	actor  Actor
-	dry    bool
+	h     *Host
+	mod   *Module
+	actor Actor
+	dry   bool
+	// app is the app of the event that triggered the call: inside a
+	// transaction (batch, cascades, RunInTransaction) it is the tx app, so
+	// host functions must use it (never h.app) or they would wait forever for
+	// the single write connection the transaction holds.
+	app    kernel.App
 	mu     sync.Mutex
 	effect []map[string]any
 	depth  int
+}
+
+// db returns the app host functions must use.
+func (c *call) db() core.App {
+	if c.app != nil {
+		if a := core.AsApp(c.app); a != nil {
+			return a
+		}
+	}
+	return c.h.app
 }
 
 func (c *call) addEffect(kind string, v map[string]any) {
@@ -121,6 +149,8 @@ func (c *call) Effects() []map[string]any { return c.effect }
 type CallOpts struct {
 	DryRun bool
 	Actor  Actor
+	// App is the app of the triggering event (transaction aware); nil = the host app.
+	App kernel.App
 	// Effects receives the suppressed side effects of a dry run.
 	Effects *[]map[string]any
 }
@@ -227,11 +257,11 @@ func (h *Host) Invoke(ctx context.Context, m *Module, ev *EventIn, opts CallOpts
 		return nil, &CallError{Kind: "timeout", Detail: "no free instance slot within the timeout"}
 	}
 
-	cs := &call{h: h, mod: m, actor: ev.Actor, dry: opts.DryRun}
+	cs := &call{h: h, mod: m, actor: ev.Actor, dry: opts.DryRun, app: opts.App}
 	if parent, ok := ctx.Value(callKey{}).(*call); ok {
 		cs.depth = parent.depth + 1
 	}
-	if cs.depth > 3 {
+	if cs.depth > MaxCallDepth {
 		return nil, &CallError{Kind: "exit", Detail: "hook call depth exceeded"}
 	}
 	ctx = context.WithValue(ctx, callKey{}, cs)

@@ -15,8 +15,8 @@ func NewCommand(app core.App) *cobra.Command {
 		Long: "Radius and bounding-box queries on geoPoint fields are served by\n" +
 			"GET /api/collections/{collection}/records/near (see docs/modules/geo.md).\n" +
 			"Without an index the endpoint scans the collection; `geo index` creates an SQLite R*Tree table\n" +
-			"_geo_<collection>_<field> that is kept up to date by record hooks of the running server.\n" +
-			"Rename of the collection or field makes the index stale: drop it and index again.",
+			"_geo_<hash of collection id and field> that is kept up to date by record hooks of the running server.\n" +
+			"Renames of the collection or field are followed automatically.",
 	}
 	mk := func(use, short string, run func(c *cobra.Command, col, field string) error) *cobra.Command {
 		return &cobra.Command{
@@ -30,7 +30,7 @@ func NewCommand(app core.App) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "indexed %d record(s) in %s\n", n, TableName(col, f))
+			fmt.Fprintf(c.OutOrStdout(), "indexed %d record(s) in %s\n", n, TableName(app, col, f))
 			return nil
 		}),
 		mk("rebuild", "Empty and refill an existing index (after bulk imports or if it drifted)", func(c *cobra.Command, col, f string) error {
@@ -38,14 +38,14 @@ func NewCommand(app core.App) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "rebuilt %s: %d record(s)\n", TableName(col, f), n)
+			fmt.Fprintf(c.OutOrStdout(), "rebuilt %s: %d record(s)\n", TableName(app, col, f), n)
 			return nil
 		}),
 		mk("drop", "Drop the R*Tree index (queries fall back to the JSON bounding box)", func(c *cobra.Command, col, f string) error {
 			if err := Drop(app, col, f); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "dropped %s\n", TableName(col, f))
+			fmt.Fprintf(c.OutOrStdout(), "dropped %s\n", TableName(app, col, f))
 			return nil
 		}),
 	)

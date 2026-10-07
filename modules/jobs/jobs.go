@@ -460,8 +460,12 @@ func (m *Module) Enqueue(ctx context.Context, kind string, payload any, opts ...
 		uniq = o.UniqueKey
 	}
 	var cronKey any
+	slotKey := o.UniqueKey
 	if strings.HasPrefix(o.UniqueKey, cronPrefix) {
 		cronKey = o.UniqueKey
+	}
+	if o.CronKey != "" {
+		cronKey, slotKey = o.CronKey, o.CronKey
 	}
 	_, err := m.app.AuxDB().NewQuery(`INSERT INTO {{_jobs}}
 		([[id]],[[kind]],[[payload]],[[state]],[[attempt]],[[max_attempts]],[[run_at]],[[created]],[[updated]],[[unique_key]],[[max_runtime_ms]],[[cron_key]])
@@ -471,11 +475,11 @@ func (m *Module) Enqueue(ctx context.Context, kind string, payload any, opts ...
 			"run": fmtTime(now.Add(o.Delay)), "now": fmtTime(now), "uniq": uniq,
 			"rt": o.MaxRuntime.Milliseconds(), "ck": cronKey}).Execute()
 	if err != nil {
-		if o.UniqueKey != "" {
+		if slotKey != "" {
 			// the conflicting row may be pending, or (cron keys) already finished
 			var existing string
 			qerr := m.app.AuxDB().NewQuery(`SELECT [[id]] FROM {{_jobs}} WHERE ([[unique_key]]={:k} AND [[state]] IN ('queued','running','failed')) OR [[cron_key]]={:k} LIMIT 1`).
-				WithContext(ctx).Bind(dbx.Params{"k": o.UniqueKey}).Row(&existing)
+				WithContext(ctx).Bind(dbx.Params{"k": slotKey}).Row(&existing)
 			if qerr == nil && existing != "" {
 				return existing, nil
 			}
