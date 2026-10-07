@@ -30,13 +30,16 @@ var knownNeeds = map[string]bool{"http": true, "records": true, "mail": true, "k
 
 // Manifest is the parsed sidecar `<name>.toml` (all fields optional).
 type Manifest struct {
-	Name        string            `json:"name"`
-	File        string            `json:"file"`
-	Events      []string          `json:"events"`
-	TimeoutMS   int               `json:"timeout_ms"`
-	MemoryPages int               `json:"memory_pages"`
-	Needs       []string          `json:"needs"`
-	Env         map[string]string `json:"env"`
+	Name        string   `json:"name"`
+	File        string   `json:"file"`
+	Events      []string `json:"events"`
+	TimeoutMS   int      `json:"timeout_ms"`
+	MemoryPages int      `json:"memory_pages"`
+	Needs       []string `json:"needs"`
+	// HTTPAllow narrows TOKI_WASM_HTTP_ALLOW for this module (host patterns);
+	// empty = only the global list applies. It never widens it.
+	HTTPAllow []string          `json:"http_allow,omitempty"`
+	Env       map[string]string `json:"env"`
 }
 
 // Has reports whether the capability was granted.
@@ -57,6 +60,7 @@ const (
 	KindCron
 	KindRoute
 	KindJob
+	KindBatch
 )
 
 // ParsedEvent is a validated entry of `events`.
@@ -70,6 +74,7 @@ type ParsedEvent struct {
 	Method     string
 	Path       string
 	Job        string
+	Phase      string // batch: before | after | *
 }
 
 var recordActions = map[string]bool{"create": true, "update": true, "delete": true, "*": true}
@@ -99,6 +104,12 @@ func ParseEvent(s string) (ParsedEvent, error) {
 			return ev, fmt.Errorf("event %q: want \"job:<name>\"", s)
 		}
 		ev.Kind, ev.Job = KindJob, name
+	case strings.HasPrefix(s, "batch."):
+		phase := strings.TrimPrefix(s, "batch.")
+		if phase != "before" && phase != "after" && phase != "*" {
+			return ev, fmt.Errorf("event %q: want batch.before, batch.after or batch.*", s)
+		}
+		ev.Kind, ev.Phase = KindBatch, phase
 	case strings.HasPrefix(s, "record."):
 		parts := strings.Split(s, ".")
 		if len(parts) > 1 && parts[1] == "after" {
@@ -128,6 +139,10 @@ func (e ParsedEvent) matchRecord(after bool, action, collection string) bool {
 		return !strings.HasPrefix(collection, "_")
 	}
 	return e.Collection == collection
+}
+
+func (e ParsedEvent) matchBatch(phase string) bool {
+	return e.Kind == KindBatch && (e.Phase == "*" || e.Phase == phase)
 }
 
 // ParseManifest builds a Manifest from sidecar TOML ("" = defaults).
@@ -161,7 +176,7 @@ func ParseManifest(name, file, src string) (*Manifest, error) {
 	}
 	for k := range doc {
 		switch k {
-		case "events", "timeout_ms", "memory_pages", "needs", "env":
+		case "events", "timeout_ms", "memory_pages", "needs", "env", "http_allow":
 		default:
 			return nil, fmt.Errorf("unknown key %q", k)
 		}
@@ -171,6 +186,14 @@ func ParseManifest(name, file, src string) (*Manifest, error) {
 	}
 	if m.Needs, err = strs("needs"); err != nil {
 		return nil, err
+	}
+	if m.HTTPAllow, err = strs("http_allow"); err != nil {
+		return nil, err
+	}
+	for _, p := range m.HTTPAllow {
+		if strings.TrimSpace(p) == "" || strings.ContainsAny(p, " /:") || (strings.Contains(p, "*") && !strings.HasPrefix(p, "*.")) {
+			return nil, fmt.Errorf("http_allow entry %q: want a host (api.example.com) or *.example.com", p)
+		}
 	}
 	for _, e := range m.Events {
 		if _, err := ParseEvent(e); err != nil {

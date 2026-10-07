@@ -38,12 +38,39 @@ type RouteIn struct {
 	Body       string            `json:"body"`
 }
 
+// BatchRequestIn is one sub-request of an /api/batch call as a guest sees it.
+// Body is the submitted body in batch.before and the stored values (read back
+// inside the transaction, nil for deleted records) in batch.after. Credential
+// keys and sensitive fields are redacted.
+type BatchRequestIn struct {
+	Index      int            `json:"index"`
+	Method     string         `json:"method"` // POST | PATCH | DELETE
+	Path       string         `json:"path,omitempty"`
+	Collection string         `json:"collection,omitempty"`
+	ID         string         `json:"id,omitempty"`
+	Body       map[string]any `json:"body,omitempty"`
+	Deleted    bool           `json:"deleted,omitempty"`
+}
+
+// BatchAuthIn summarizes who sent the batch (never the token).
+type BatchAuthIn struct {
+	ID         string `json:"id"`
+	Collection string `json:"collection"`
+	Superuser  bool   `json:"superuser"`
+}
+
+// BatchIn is delivered for batch events.
+type BatchIn struct {
+	Requests []BatchRequestIn `json:"requests"`
+	Auth     *BatchAuthIn     `json:"auth,omitempty"` // nil = anonymous
+}
+
 // EventIn is the JSON document written to the guest's stdin.
 type EventIn struct {
 	ABI         string         `json:"abi"`
 	Module      string         `json:"module"`
 	Event       string         `json:"event"`
-	Kind        string         `json:"kind"` // record | cron | route | job
+	Kind        string         `json:"kind"` // record | cron | route | job | batch
 	Phase       string         `json:"phase,omitempty"`
 	Action      string         `json:"action,omitempty"`
 	Collection  string         `json:"collection,omitempty"`
@@ -52,6 +79,7 @@ type EventIn struct {
 	Actor       Actor          `json:"actor"`
 	RequestInfo *RequestInfoIn `json:"request_info,omitempty"`
 	Route       *RouteIn       `json:"route,omitempty"`
+	Batch       *BatchIn       `json:"batch,omitempty"`
 	Cron        *struct {
 		Expr string `json:"expr"`
 	} `json:"cron,omitempty"`

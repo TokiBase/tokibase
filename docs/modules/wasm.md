@@ -3,7 +3,7 @@
 Sandboxed hook runtime: business logic written in any language that compiles to WASI (Go, Rust, C, Zig, AssemblyScript, TinyGo...) runs inside [wazero](https://wazero.io) (pure Go, no cgo) with wall-clock and memory limits and an explicit host API. JS `pb_hooks` (jsvm) are unchanged and keep working; WASM hooks are an additional, stricter option. Package `modules/wasm`, Go guest SDK in `modules/wasm/sdk/go`.
 
 - Always on: `tokibase.go` calls `wasm.Register`, which adds the flags and loads `pb_hooks_wasm/`. With an empty or missing directory nothing happens. `TOKI_WASM=off` skips registration; building with `-tags no_wasm` replaces the module by a stub (no wazero in the binary, about 2.8 MB smaller).
-- PR 1 scope. Not included: fuel-based CPU metering (see Limits), events for auth requests (`OnRecordAuthRequest`), collection events, a per-module egress policy beyond the global allowlist.
+- Scope after PR 2. Not included (later): fuel-based CPU metering (wazero has none, see Limits), events for auth requests (`OnRecordAuthRequest`), collection events. PR 2 added the batch events and the per-module `http_allow`.
 
 ## Loading
 
@@ -40,6 +40,7 @@ timeout_ms   = 2000      # default 2000, max 120000
 memory_pages = 256       # 64 KiB each; default 256 (16 MiB), max 16384 (64 suits small Rust/TinyGo guests)
 needs = ["http", "records", "mail", "kv", "jobs"]   # host capabilities, default none
 env = { REGION = "eu" }  # WASI environment (also accepted as an [env] table)
+http_allow = ["api.example.com", "*.cdn.example.com"]  # narrows TOKI_WASM_HTTP_ALLOW for this module
 ```
 
 Only strings, integers, arrays, inline tables and a `[env]` table are supported (a small built-in parser, no dependency).
@@ -51,6 +52,7 @@ Only strings, integers, arrays, inline tables and a `[env]` table are supported 
 | `cron:<5-field expr>` | on schedule, as a durable job when `kernel.Jobs(app)` has a queue (the slot is claimed through the jobs `cron_key` unique index, kept after the job finished, so several processes run a slot once; **1 attempt**, no retry), otherwise inline on its own goroutine (overlapping runs of the same schedule are skipped). Cron guests must be idempotent: a worker crash re-delivers the job, and side effects (mail, HTTP POST) are never rolled back |
 | `route:<METHOD> <path>` | custom route, registered on `OnServe` (`{name}` path params allowed) |
 | `job:<name>` | job enqueued by the module itself via `jobs_enqueue` |
+| `batch.before`, `batch.after`, `batch.*` | atomic `/api/batch` calls, see [Batch events](#batch-events) |
 
 A wildcard collection (`*`) never matches system collections whose name starts with `_`; name them explicitly if you need them. Record hooks fire for writes through the REST API and for writes made by Go/JS code (`app.Save`), because they sit on the model hooks. Writes made by a guest through `records_save`/`records_delete` do not re-trigger WASM hooks for that record (loop guard); other hooks still fire, and the call depth travels in the context of the write: a guest call nested more than 2 levels deep (a hook of another record that a guest write triggered, cascades) fails with "hook call depth exceeded".
 
@@ -79,10 +81,44 @@ A non-zero exit, a trap, an out-of-memory, a timeout, empty or invalid stdout al
 ```
 
 - `request_info` is scrubbed: the headers `authorization`, `proxy-authorization`, `cookie`, `set-cookie` and `x-toki-*`, and the keys `password`, `passwordConfirm`, `oldPassword`, `token`, `secret` (any depth, any case; also in `query`) are removed. Hook guests never see the actor's JWT or plaintext passwords. Route events are different: a route guest gets the raw request headers on purpose (to check signatures), so give routes only to code you trust with them.
-- `kind`: `record | cron | route | job`. Record events carry `record` (public export: hidden fields are omitted), `original` (except create) and `request_info` (only when the write came from an HTTP request).
+- `kind`: `record | cron | route | job | batch`. Record events carry `record` (public export: hidden fields are omitted), `original` (except create) and `request_info` (only when the write came from an HTTP request).
 - `actor.kind`: `superuser`, `auth` (with `id` and `collection`), `guest`, or `system` (cron, jobs, writes from code).
 - Route events carry `route: {method, path, path_params, query, headers (lowercased), body (raw string, max 4 MiB)}`.
-- Cron events carry `cron: {expr}`; job events `job: {name, payload}`.
+- Cron events carry `cron: {expr}`; job events `job: {name, payload}`; batch events `batch: {requests, auth}` (see below).
+
+### Batch events
+
+A module that lists `batch.before`, `batch.after` or `batch.*` in `events` is called by the same emitter as `kernel.OnBatchFor(app)` ([batchguard](batchguard.md), which must be registered; it is in every default build). Additive to `toki/1`: the ABI string is unchanged, old guests never see the new `kind`.
+
+- `batch.before` runs inside the batch transaction before any sub-request, with the submitted bodies. `batch.after` runs inside the same transaction after the last sub-request, with the STORED values read back (defaults, hooks and `computed` rollups applied; `body` is absent for deleted records). Same structure as the batchguard `assert` / `assert_post` phases.
+- Event: `kind: "batch"`, `phase: "before"|"after"`, `actor` as usual, and
+
+```json
+"batch": {
+  "requests": [{"index": 0, "method": "POST", "path": "/api/collections/order_items/records",
+                "collection": "order_items", "id": "", "body": {"qty": 2}, "deleted": false}],
+  "auth": {"id": "RECORD_ID", "collection": "users", "superuser": false}
+}
+```
+
+  `method` is `POST`, `PATCH` or `DELETE` (a `PUT` upsert is resolved). `id` is empty for a create in `batch.before`. `auth` is absent for an anonymous batch and never carries the token.
+- Reply `{"ok": false, "status": 422, "message": "..."}` to reject the WHOLE batch: the transaction rolls back and the client gets that status (default 400) and message, with `data` shaped like other rejections. `ok: true` lets it continue; `record` is ignored for batches.
+- **Fails closed**: a trap, non-zero exit, timeout (`timeout_ms`), invalid output, or a batch whose payload exceeds 4 MiB answers `500 {"message":"Hook failed."}` (`413` for the size) and rolls back. Several modules run in name order; the first rejection wins.
+- **Redaction**: bodies are copied before the guest sees them. The keys `password`, `passwordConfirm`, `oldPassword`, `token`, `secret` are removed at any depth (as in `request_info`), and fields registered with `kernel.RegisterSensitiveField` (crypto) are replaced by `[encrypted]` when non-empty, including the modifier forms `field+`, `+field`, `field-`, `field:x`.
+- Host calls inside the event use the transaction app, so `records_*` reads and writes commit or roll back with the batch. Time and memory limits are those of the module. The handler is bound only while some loaded module declares a batch event, so a server without one adds no work to `/api/batch`.
+
+Example (Go guest, sidecar `events = ["batch.before"]`):
+
+```go
+toki.Run(func(ev *toki.Event) (*toki.Result, error) {
+	if total := ev.Batch.Sum("order_items", "qty"); total > 50 {
+		return toki.Reject(422, "an order may have at most 50 items", nil), nil
+	}
+	return toki.Ok(), nil
+})
+```
+
+Use `batch.after` for money, stock and quota checks (the body in `batch.before` is the raw submission, so modifier keys such as `qty+` are not resolved).
 
 ### Result (stdout)
 
@@ -127,7 +163,7 @@ Notes:
 - `records_*` run with application privileges (no API list/view/update rules), but **never on system collections**: a collection whose name starts with `_` or that is `System` (`_superusers`, `_webhooks`, `_agents`, ...) is refused for find, save and delete. Writes run the record create/update **request hook chain as a guest** first (the guards of fieldperm, computed, crypto and other modules apply, so a guest write cannot set a field those modules protect), and `id`, `collectionId`, `collectionName`, `expand`, `tokenKey`, `passwordHash` cannot be set. Reads return the stored public export without field permission redaction: grant `records` only to code you trust with the data of the non-system collections.
 - The host functions run on the app of the triggering event, so a hook running inside a transaction (`/api/batch`, cascades, `RunInTransaction`) reads and writes inside that transaction and does not deadlock. A write made by a guest therefore commits or rolls back with it.
 - Every host function honors the call deadline: record queries and saves use the call context, `mail_send` returns when the deadline passes, `kv_*` queries are canceled.
-- `http_fetch` needs the `http` capability **and** the host in `TOKI_WASM_HTTP_ALLOW`. Connections are checked after DNS resolution and redirects are not followed, so private, loopback, link-local, CGNAT and NAT64 ranges are blocked (same list as webhooks) unless `TOKI_WASM_ALLOW_PRIVATE=1`.
+- `http_fetch` needs the `http` capability **and** the host in `TOKI_WASM_HTTP_ALLOW`. Connections are checked after DNS resolution and redirects are not followed, so private, loopback, link-local, CGNAT and NAT64 ranges are blocked (same list as webhooks) unless `TOKI_WASM_ALLOW_PRIVATE=1`. A sidecar `http_allow` list narrows the global list for that module (a host must match both; it can never widen it).
 - `kv_*` is a per-module namespace in `auxiliary.db` (`_wasm_kv`); expired keys are purged every 15 s.
 - A call without the capability gets `{"ok":false,"error":"capability \"http\" not granted: add it to needs in <module>.toml"}`.
 - Calls nested through the host are limited to a depth of 2 (the top level call is depth 0).
@@ -167,7 +203,7 @@ GOOS=wasip1 GOARCH=wasm go build -o pb_hooks_wasm/validate.wasm .
 echo 'events = ["record.create.posts"]' > pb_hooks_wasm/validate.toml
 ```
 
-The SDK exports `toki_alloc`/`toki_free` itself and wraps the host calls: `toki.RecordsFind/RecordsSave/RecordsDelete`, `toki.HTTPFetch`, `toki.MailSend`, `toki.KVGet/KVSet`, `toki.JobsEnqueue`, `toki.Log/Logf`, and for routes `toki.JSON(status, body)`. On non-WASI targets the package compiles with stubs so the pure logic can be unit tested natively. A Go guest costs roughly 4.5 MB of `.wasm` and about 5 ms per call on a laptop (runtime start dominates; TinyGo or Rust guests start in well under 1 ms).
+The SDK exports `toki_alloc`/`toki_free` itself and wraps the host calls: `toki.RecordsFind/RecordsSave/RecordsDelete`, `toki.HTTPFetch`, `toki.MailSend`, `toki.KVGet/KVSet`, `toki.JobsEnqueue`, `toki.Log/Logf`, for routes `toki.JSON(status, body)`, and for batch events `ev.Batch` with `Batch.For(collection)` and `Batch.Sum(collection, field)`. On non-WASI targets the package compiles with stubs so the pure logic can be unit tested natively. A Go guest costs roughly 4.5 MB of `.wasm` and about 5 ms per call on a laptop (runtime start dominates; TinyGo or Rust guests start in well under 1 ms).
 
 ## Limits and failure handling
 

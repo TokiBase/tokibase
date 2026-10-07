@@ -505,6 +505,9 @@ func (h *Host) httpFetch(ctx context.Context, c *call, req []byte) (map[string]a
 	if !hostAllowed(u.Hostname()) {
 		return nil, fmt.Errorf("host %q is not in TOKI_WASM_HTTP_ALLOW", u.Hostname())
 	}
+	if len(c.mod.HTTPAllow) > 0 && !hostMatches(c.mod.HTTPAllow, u.Hostname()) {
+		return nil, fmt.Errorf("host %q is not in http_allow of module %s", u.Hostname(), c.mod.Name)
+	}
 	if r.Method == "" {
 		r.Method = "GET"
 	}
@@ -546,8 +549,14 @@ func (h *Host) httpFetch(ctx context.Context, c *call, req []byte) (map[string]a
 // hostAllowed matches host against TOKI_WASM_HTTP_ALLOW (comma separated
 // patterns: "api.example.com", "*.example.com"). Empty denies everything.
 func hostAllowed(host string) bool {
+	return hostMatches(strings.Split(os.Getenv("TOKI_WASM_HTTP_ALLOW"), ","), host)
+}
+
+// hostMatches reports whether host equals or is covered by one of patterns
+// ("api.example.com", "*.example.com"). Blank patterns are ignored.
+func hostMatches(patterns []string, host string) bool {
 	host = strings.ToLower(host)
-	for _, p := range strings.Split(os.Getenv("TOKI_WASM_HTTP_ALLOW"), ",") {
+	for _, p := range patterns {
 		p = strings.ToLower(strings.TrimSpace(p))
 		switch {
 		case p == "":
