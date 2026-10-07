@@ -49,6 +49,12 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: tamper-evident trail of superuser, impersonated, schema and settings changes.
 - Migration path: none needed; an upstream `pb_data` gains the table on first start, and removing it (or running upstream) simply ignores it. See `docs/modules/audit.md`.
 
+### Boot warning for plain HTTP without trusted proxy (phase 1, tlscheck)
+
+- What: `modules/tlscheck` logs a warning (and prints it to stderr) at `OnServe` when the server listens on plain HTTP on a non-loopback address and `Settings.TrustedProxy.Headers` is empty; `TOKI_TLS_CHECK=strict` makes `serve` refuse to start in that case. REST, settings and `pb_data` are unchanged.
+- Why: such a server is probably reached by clients without encryption.
+- Migration: nothing needed (default `warn`). Set the trusted proxy headers behind nginx/Caddy/Cloudflare, or `TOKI_TLS_CHECK=off`.
+
 ### Backup verification after create, `toki backup` CLI (phase 1, backupcheck)
 
 - What: `modules/backupcheck` verifies every created backup asynchronously (restore to a temp dir, `PRAGMA integrity_check`, counts, sampled files) and logs the result. New `toki backup create|list|verify|verify-all` commands (no `backup` CLI existed). Nothing changes in REST endpoints, backup file format or settings.
