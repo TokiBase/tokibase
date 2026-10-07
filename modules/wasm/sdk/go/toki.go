@@ -53,12 +53,75 @@ type Route struct {
 	Body       string            `json:"body"`
 }
 
+// BatchRequest is one sub-request of an /api/batch call (batch events). Body is
+// the submitted body in batch.before and the stored values in batch.after (nil
+// for deleted records); credential keys and sensitive fields are redacted.
+type BatchRequest struct {
+	Index      int            `json:"index"`
+	Method     string         `json:"method"` // POST | PATCH | DELETE
+	Path       string         `json:"path,omitempty"`
+	Collection string         `json:"collection,omitempty"`
+	ID         string         `json:"id,omitempty"`
+	Body       map[string]any `json:"body,omitempty"`
+	Deleted    bool           `json:"deleted,omitempty"`
+}
+
+// BatchAuth summarizes who sent the batch (never the token).
+type BatchAuth struct {
+	ID         string `json:"id"`
+	Collection string `json:"collection"`
+	Superuser  bool   `json:"superuser"`
+}
+
+// Batch is delivered for `batch.before`, `batch.after` and `batch.*` events.
+// Return Reject(...) from the handler to refuse the whole batch; the batch
+// transaction rolls back.
+type Batch struct {
+	Requests []BatchRequest `json:"requests"`
+	Auth     *BatchAuth     `json:"auth,omitempty"` // nil = anonymous
+}
+
+// For returns the requests addressed to collection (DELETEs included).
+func (b *Batch) For(collection string) []BatchRequest {
+	var out []BatchRequest
+	if b == nil {
+		return nil
+	}
+	for _, r := range b.Requests {
+		if r.Collection == collection {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// Sum adds the numeric (or numeric string) field over the non-DELETE requests
+// of collection; missing or non numeric values count as 0.
+func (b *Batch) Sum(collection, field string) float64 {
+	var total float64
+	for _, r := range b.For(collection) {
+		if r.Deleted || r.Method == "DELETE" {
+			continue
+		}
+		switch v := r.Body[field].(type) {
+		case float64:
+			total += v
+		case string:
+			var f float64
+			if _, err := fmt.Sscanf(v, "%g", &f); err == nil {
+				total += f
+			}
+		}
+	}
+	return total
+}
+
 // Event is the JSON document the host writes to stdin.
 type Event struct {
 	ABI         string         `json:"abi"`
 	Module      string         `json:"module"`
 	Event       string         `json:"event"`
-	Kind        string         `json:"kind"` // record | cron | route | job
+	Kind        string         `json:"kind"` // record | cron | route | job | batch
 	Phase       string         `json:"phase,omitempty"`
 	Action      string         `json:"action,omitempty"`
 	Collection  string         `json:"collection,omitempty"`
@@ -67,6 +130,7 @@ type Event struct {
 	Actor       Actor          `json:"actor"`
 	RequestInfo *RequestInfo   `json:"request_info,omitempty"`
 	Route       *Route         `json:"route,omitempty"`
+	Batch       *Batch         `json:"batch,omitempty"`
 	Cron        *struct {
 		Expr string `json:"expr"`
 	} `json:"cron,omitempty"`
