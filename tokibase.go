@@ -19,6 +19,7 @@ import (
 	"github.com/tokibase/tokibase/modules/adminlock"
 	"github.com/tokibase/tokibase/modules/audit"
 	"github.com/tokibase/tokibase/modules/backupcheck"
+	"github.com/tokibase/tokibase/modules/batchguard"
 	"github.com/tokibase/tokibase/modules/computed"
 	"github.com/tokibase/tokibase/modules/crypto"
 	"github.com/tokibase/tokibase/modules/denylog"
@@ -289,6 +290,9 @@ func NewWithConfig(config Config) *PocketBase {
 		})
 	}
 
+	// cross-record validation of /api/batch in _batch_rules (see docs/modules/batchguard.md)
+	batchguard.Register(pb.App.(core.App))
+
 	// server-maintained counters and rollups in _computed_fields (see docs/modules/computed.md)
 	computed.Register(pb.App.(core.App))
 	if auditLog != nil {
@@ -494,6 +498,7 @@ func (pb *PocketBase) Start() error {
 	pb.RootCmd.AddCommand(cmd.NewDenyCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewFieldPermCommand(pb))
 	pb.RootCmd.AddCommand(computed.NewCommand(pb))
+	pb.RootCmd.AddCommand(batchguard.NewCommand(pb))
 	pb.RootCmd.AddCommand(crypto.NewCommand(pb))
 	pb.RootCmd.AddCommand(geo.NewCommand(pb))
 	if c := wasm.NewCommand(pb); c != nil {

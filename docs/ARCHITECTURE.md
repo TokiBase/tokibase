@@ -64,6 +64,7 @@ Exit gate: all modules on by default in profile `solo`, failover drill RTO under
 - [x] passkey: WebAuthn/FIDO2 passkeys on any auth collection, discoverable login returning the standard auth response, `_passkeys` + clone detection, lockout/audit sinks, `toki passkey` (`docs/modules/passkey.md`).
 - [x] geo: radius/bbox queries and distance ordering on `geoPoint` via `GET /api/collections/{c}/records/near`, optional SQLite R*Tree index, `toki geo index|rebuild|drop` (`docs/modules/geo.md`).
 - [x] wasm (PR 1): sandboxed hooks in `pb_hooks_wasm/` on wazero (record before/after, cron, route, job events; limits, host API `toki/1`, Go guest SDK), `toki wasm list|stats|run|validate` (`docs/modules/wasm.md`). JS `pb_hooks` stay as js-compat. `no_wasm` build tag drops it (about 2.8 MB).
+- [x] batchguard: cross-record validation of atomic `/api/batch` calls, rules in `_batch_rules` with a small safe expression language (`assert` before, `assert_post` after the sub-requests, one transaction), `kernel.OnBatch` events for WASM, `toki batch rules ...` (`docs/modules/batchguard.md`).
 - [x] totp: RFC 6238 TOTP as an MFA method on the upstream `mfaId` flow, recovery codes, per-role enforcement with grace window, `toki totp` (`docs/modules/totp.md`).
 - [ ] mcp (PR 2): streamable HTTP transport, `@request.auth.kind = "agent"` in rules, sandbox mode.
 
