@@ -24,7 +24,9 @@ const stubGuardHookID = "__tokiStubbedModuleGuard__"
 // when a stubbed module still owns data or configuration (see
 // [BindStubbedModuleGuard]).
 type ModuleMarker struct {
-	Name        string
+	Name string
+	// Tag is the build tag of the stub when it is not "no_"+Name (walreplica: no_replica).
+	Tag         string
 	Collections []string
 	Envs        []string
 	// Files are paths relative to the data dir that belong to the module
@@ -67,6 +69,13 @@ func ModuleMarkers() []ModuleMarker {
 	return out
 }
 
+func (m ModuleMarker) tag() string {
+	if m.Tag != "" {
+		return m.Tag
+	}
+	return "no_" + m.Name
+}
+
 func envActive(m ModuleMarker, getenv func(string) string, name string) bool {
 	v := strings.ToLower(strings.TrimSpace(getenv(name)))
 	switch v {
@@ -106,7 +115,7 @@ func StubbedModuleFindings(app App, ms []ModuleMarker, getenv func(string) strin
 			}
 		}
 		if len(found) > 0 {
-			out = append(out, fmt.Sprintf("module %q (built with no_%s): %s", m.Name, m.Name, strings.Join(found, ", ")))
+			out = append(out, fmt.Sprintf("module %q (built with %s): %s", m.Name, m.tag(), strings.Join(found, ", ")))
 		}
 	}
 	return out

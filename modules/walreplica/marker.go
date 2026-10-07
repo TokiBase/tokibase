@@ -1,9 +1,9 @@
-//go:build !no_walreplica
+//go:build !no_replica
 
 package walreplica
 
 import "github.com/tokibase/tokibase/kernel"
 
 func init() {
-	kernel.RegisterModuleMarker("walreplica", nil, []string{"TOKI_REPLICA_URL"}, false)
+	kernel.RegisterModule(kernel.ModuleMarker{Name: "walreplica", Tag: "no_replica", Envs: []string{"TOKI_REPLICA_URL"}, Stubbed: false})
 }
