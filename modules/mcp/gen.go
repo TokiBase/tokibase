@@ -18,8 +18,8 @@ func ruleCell(r *string) string {
 		return "PUBLIC"
 	}
 	e := strings.ReplaceAll(*r, "|", `\|`)
-	if len(e) > 80 {
-		e = e[:80] + "…"
+	if r := []rune(e); len(r) > 80 {
+		e = string(r[:80]) + "…"
 	}
 	return "`" + e + "`"
 }

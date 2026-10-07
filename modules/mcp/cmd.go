@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
@@ -45,6 +46,13 @@ func mcpCommand(app core.App) *cobra.Command {
 				return fmt.Errorf("%s: %w (set %s to a key from `agent create`)", "mcp", err, EnvAgentKey)
 			}
 			srv := NewServer(app, agent, "")
+			if !auditEnabled() {
+				if unauditedAllowed() {
+					fmt.Fprintf(os.Stderr, "toki mcp: WARNING audit is disabled and %s=1: agent writes are NOT recorded\n", EnvUnaudited)
+				} else {
+					fmt.Fprintf(os.Stderr, "toki mcp: audit is disabled: write tools are refused (set %s=1 to accept unaudited writes)\n", EnvUnaudited)
+				}
+			}
 			fmt.Fprintf(os.Stderr, "toki mcp: serving agent %q (role %s) session %s\n", agent.Name, agent.Role, srv.Session())
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
@@ -135,7 +143,24 @@ func agentCommand(app core.App) *cobra.Command {
 			return nil
 		},
 	}
-	root.AddCommand(create, list, revoke)
+	confirm := &cobra.Command{
+		Use:   "confirm <token>",
+		Short: "Approve a pending destructive plan (needs " + EnvRequireHumanConfirm + "=1 on the MCP server)",
+		Long: "With " + EnvRequireHumanConfirm + "=1 the confirm_token of records.delete / records.batch is only valid after a human approved it here.\n" +
+			"Review the printed agent, tool and summary before approving. An agent that can run shell commands can run this too: do not give it shell access to the instance.",
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			p, err := ApproveConfirm(app.DataDir(), args[0], time.Now())
+			if err != nil {
+				return err
+			}
+			emit("agent.confirmed", "", p.AgentID, map[string]any{"cli": true, "agent": p.Agent, "agent_id": p.AgentID, "tool": p.Tool})
+			fmt.Fprintf(c.OutOrStdout(), "Approved %s for agent %q (valid until %s).\nSummary: %s\n", p.Tool, p.Agent, p.Expires.Format(time.RFC3339), p.Summary)
+			return nil
+		},
+	}
+	root.AddCommand(create, list, revoke, confirm)
 	return root
 }
 

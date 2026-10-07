@@ -36,8 +36,22 @@ func rulesOf(c *kernel.Collection) map[string]*string {
 	return m
 }
 
-func collectionSummary(c *kernel.Collection) map[string]any {
+// collectionSummary describes a collection; relation targets the agent may not
+// touch are masked so their ids do not leak.
+func (s *Server) collectionSummary(a *Agent, c *kernel.Collection) map[string]any {
 	fields := jsonValue(c.Fields).([]any)
+	if a != nil {
+		for _, f := range fields {
+			m, _ := f.(map[string]any)
+			id, _ := m["collectionId"].(string)
+			if id == "" {
+				continue
+			}
+			if t, err := s.app.FindCollectionByNameOrId(id); err != nil || !canTouch(a, t, false) {
+				m["collectionId"] = "[hidden]"
+			}
+		}
+	}
 	return map[string]any{
 		"id": c.Id, "name": c.Name, "type": c.Type, "system": c.System,
 		"fields": fields, "rules": rulesOf(c), "indexes": c.Indexes,
@@ -45,7 +59,7 @@ func collectionSummary(c *kernel.Collection) map[string]any {
 }
 
 func (s *Server) registerSchemaTools() {
-	addTool(s, "schema.list", "List the collections visible to this agent with type, field count, rule state per operation (locked = superusers only, public, expression) and record count.",
+	addTool(s, "schema.list", "List the collections visible to this agent with type, field count, rule state per operation (locked = superusers only, public, expression) and (operators only) record count.",
 		RoleReader, false, func(c *call, _ emptyIn) (map[string]any, error) {
 			cols, err := s.visibleCollections(c.agent)
 			if err != nil {
@@ -61,8 +75,11 @@ func (s *Server) registerSchemaTools() {
 					"name": col.Name, "type": col.Type, "system": col.System,
 					"fields": len(col.Fields), "rules": states,
 				}
-				if n, err := s.app.CountRecords(col); err == nil {
-					item["records"] = n
+				// counts ignore list rules: operators only
+				if c.agent.Role == RoleOperator {
+					if n, err := s.app.CountRecords(col); err == nil {
+						item["records"] = n
+					}
 				}
 				items = append(items, item)
 			}
@@ -76,14 +93,14 @@ func (s *Server) registerSchemaTools() {
 				return nil, err
 			}
 			c.collection = col.Name
-			out := collectionSummary(col)
-			if col.IsView() {
+			out := s.collectionSummary(c.agent, col)
+			if col.IsView() && c.agent.Role == RoleOperator {
 				out["viewQuery"] = col.ViewQuery
 			}
 			if c.agent.Role == RoleOperator {
 				var recs []*kernel.Record
 				if err := s.app.RecordQuery(col).Limit(2).All(&recs); err != nil {
-					return nil, err
+					return nil, s.internal(c, "samples", err)
 				}
 				samples := make([]any, 0, len(recs))
 				for _, r := range recs {
@@ -104,7 +121,7 @@ func (s *Server) registerSchemaTools() {
 			}
 			res, err := p(s.app)
 			if err != nil {
-				return nil, err
+				return nil, s.internal(c, "rule.lint", err)
 			}
 			v := jsonValue(res)
 			if list, ok := v.([]any); ok {
@@ -112,7 +129,7 @@ func (s *Server) registerSchemaTools() {
 				for _, f := range list {
 					m, _ := f.(map[string]any)
 					name, _ := m["collection"].(string)
-					if name == CollectionName || !c.agent.allows(name) {
+					if col, err := s.app.FindCollectionByNameOrId(name); err != nil || !canTouch(c.agent, col, false) {
 						continue
 					}
 					kept = append(kept, f)
@@ -168,7 +185,8 @@ func (s *Server) registerSchemaTools() {
 			eval := func(info *kernel.RequestInfo) any {
 				ok, err := s.app.CanAccessRecord(rec, info, rule)
 				if err != nil {
-					return map[string]any{"error": err.Error()}
+					s.app.Logger().Warn("mcp: rule evaluation failed", "error", err)
+					return map[string]any{"error": "rule evaluation failed"}
 				}
 				return ok
 			}
@@ -178,7 +196,7 @@ func (s *Server) registerSchemaTools() {
 				"agent": true,
 			}
 			if in.AsUserID != "" {
-				user, ucol := s.findAuthRecord(in.AsUserID)
+				user, ucol := s.findAuthRecord(c.agent, in.AsUserID)
 				if user == nil {
 					return nil, fmt.Errorf("auth record %q not found in any auth collection", in.AsUserID)
 				}
@@ -197,12 +215,15 @@ func errModuleOff(name string) error {
 	return fmt.Errorf("module %s is not enabled in this instance", name)
 }
 
-func (s *Server) findAuthRecord(id string) (*kernel.Record, string) {
+func (s *Server) findAuthRecord(a *Agent, id string) (*kernel.Record, string) {
 	cols, err := s.app.FindAllCollections(kernel.CollectionTypeAuth)
 	if err != nil {
 		return nil, ""
 	}
 	for _, c := range cols {
+		if !canTouch(a, c, false) {
+			continue
+		}
 		if r, err := s.app.FindRecordById(c, id); err == nil {
 			return r, c.Name
 		}
@@ -218,7 +239,7 @@ func (s *Server) schemaJSON(a *Agent) (string, error) {
 	}
 	items := make([]map[string]any, 0, len(cols))
 	for _, c := range cols {
-		items = append(items, collectionSummary(c))
+		items = append(items, s.collectionSummary(a, c))
 	}
 	raw, err := json.MarshalIndent(map[string]any{"collections": items}, "", "  ")
 	return string(raw), err

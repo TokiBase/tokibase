@@ -63,7 +63,7 @@ func (s *Server) registerOpsTools() {
 			}
 			res, err := p(s.app, since, clampLimit(in.Limit))
 			if err != nil {
-				return nil, err
+				return nil, s.internal(c, "provider", err)
 			}
 			return map[string]any{"entries": jsonValue(res)}, nil
 		})
@@ -76,7 +76,7 @@ func (s *Server) registerOpsTools() {
 			}
 			res, err := p(s.app)
 			if err != nil {
-				return nil, err
+				return nil, s.internal(c, "provider", err)
 			}
 			return map[string]any{"result": jsonValue(res)}, nil
 		})
@@ -94,7 +94,7 @@ func (s *Server) registerOpsTools() {
 			c.set("name", name)
 			res, err := p(c.ctx, s.app, name)
 			if err != nil {
-				return nil, err
+				return nil, s.internal(c, "provider", err)
 			}
 			return map[string]any{"report": jsonValue(res)}, nil
 		})
@@ -107,7 +107,7 @@ func (s *Server) registerOpsTools() {
 			}
 			res, err := p(s.app)
 			if err != nil {
-				return nil, err
+				return nil, s.internal(c, "provider", err)
 			}
 			return map[string]any{"status": jsonValue(res)}, nil
 		})
@@ -128,7 +128,7 @@ func (s *Server) registerOpsTools() {
 			}
 			res, err := p(s.app, d, clampLimit(in.Limit))
 			if err != nil {
-				return nil, err
+				return nil, s.internal(c, "provider", err)
 			}
 			return map[string]any{"entries": jsonValue(res)}, nil
 		})
@@ -141,7 +141,7 @@ func (s *Server) registerOpsTools() {
 			}
 			res, err := p(s.app)
 			if err != nil {
-				return nil, err
+				return nil, s.internal(c, "provider", err)
 			}
 			return map[string]any{"entries": jsonValue(res)}, nil
 		})

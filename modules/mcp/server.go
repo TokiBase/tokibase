@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +35,15 @@ type Server struct {
 
 	mu    sync.Mutex
 	plans map[string]*plan
+
+	dmu    sync.Mutex
+	denied map[string]*deniedState
+}
+
+// deniedState throttles the audit rows of denied calls per agent and tool.
+type deniedState struct {
+	last       time.Time
+	suppressed int
 }
 
 type plan struct {
@@ -67,6 +78,7 @@ func NewServer(app core.App, agent *Agent, version string) *Server {
 		app: app, agentID: agent.ID, now: time.Now,
 		session: security.RandomString(16),
 		plans:   map[string]*plan{},
+		denied:  map[string]*deniedState{},
 	}
 	if version == "" {
 		version = getProviders().Version
@@ -92,42 +104,89 @@ func (s *Server) SDK() *sdk.Server { return s.sdk }
 // Run serves the transport until it closes or ctx is canceled.
 func (s *Server) Run(ctx context.Context, t sdk.Transport) error { return s.sdk.Run(ctx, t) }
 
-// authorize reloads the agent, enforces the role and the rate limit.
-func (s *Server) authorize(min Role) (*Agent, error) {
+// authorize reloads the agent, takes a rate limit token (denied calls count
+// too) and then enforces the role. c.agent is set whenever the agent resolved.
+func (s *Server) authorize(c *call, min Role) (*Agent, error) {
 	a, err := reload(s.app, s.agentID)
 	if err != nil {
 		return nil, err
 	}
-	if a.Role.rank() < min.rank() {
-		return a, fmt.Errorf("permission denied: tool needs role %s, agent %q is %s", min, a.Name, a.Role)
-	}
+	c.agent = a
 	if !s.bucket.allow(s.now(), a.RatePerMin) {
 		return a, fmt.Errorf("rate limit exceeded: %d calls/min for agent %q, retry shortly", a.RatePerMin, a.Name)
+	}
+	if a.Role.rank() < min.rank() {
+		return a, fmt.Errorf("permission denied: tool needs role %s, agent %q is %s", min, a.Name, a.Role)
 	}
 	return a, nil
 }
 
+var errUnaudited = errors.New("write tools are refused while the audit module is disabled (enable audit, or the operator sets " + EnvUnaudited + "=1 to accept unaudited agent writes)")
+
 // addTool registers a typed tool. write tools are always audited, operator
-// calls (read or write) as well.
+// calls (read or write) as well. Panics in a handler become "internal error".
 func addTool[In any](s *Server, name, desc string, min Role, write bool, h func(c *call, in In) (map[string]any, error)) {
 	sdk.AddTool(s.sdk, &sdk.Tool{Name: name, Description: desc},
 		func(ctx context.Context, _ *sdk.CallToolRequest, in In) (*sdk.CallToolResult, map[string]any, error) {
 			c := &call{ctx: ctx, tool: name}
-			a, err := s.authorize(min)
-			c.agent = a
-			var out map[string]any
-			denied := err != nil
-			if err == nil {
+			run := func() (out map[string]any, err error, denied bool) {
+				defer func() {
+					if r := recover(); r != nil {
+						s.app.Logger().Error("mcp: tool handler panic", "tool", name, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+						out, err, denied = nil, errInternal, false
+					}
+				}()
+				if _, err := s.authorize(c, min); err != nil {
+					return nil, err, true
+				}
+				if write && !auditEnabled() && !unauditedAllowed() {
+					return nil, errUnaudited, true
+				}
+				if tooBig(in) {
+					return nil, fmt.Errorf("payload too large (limit %d bytes)", maxPayload), false
+				}
 				out, err = h(c, in)
+				if err == nil && tooBig(out) {
+					return nil, fmt.Errorf("result too large (limit %d bytes): narrow the request (perPage, fields)", maxPayload), false
+				}
+				return out, err, false
 			}
-			if a != nil && (write || a.Role == RoleOperator) {
-				s.audit(c, err, denied)
+			out, err, denied := run()
+			if c.agent != nil && (write || c.agent.Role == RoleOperator) {
+				if denied {
+					s.auditDenied(c, err)
+				} else {
+					s.audit(c, err, false)
+				}
 			}
 			if err != nil {
 				return nil, nil, err
 			}
 			return nil, out, nil
 		})
+}
+
+// auditDenied records a denied call at most once per minute per agent and
+// tool; the row carries how many denials were folded into it.
+func (s *Server) auditDenied(c *call, err error) {
+	key := c.agent.ID + "|" + c.tool
+	now := s.now()
+	s.dmu.Lock()
+	st := s.denied[key]
+	if st == nil {
+		st = &deniedState{}
+		s.denied[key] = st
+	}
+	if !st.last.IsZero() && now.Sub(st.last) < deniedAuditEvery {
+		st.suppressed++
+		s.dmu.Unlock()
+		return
+	}
+	n := st.suppressed
+	st.suppressed, st.last = 0, now
+	s.dmu.Unlock()
+	c.set("denied_suppressed_since_last", n)
+	s.audit(c, err, true)
 }
 
 func (s *Server) audit(c *call, err error, denied bool) {
@@ -167,6 +226,13 @@ func (s *Server) issuePlan(a *Agent, tool string, args any) string {
 	}
 	tok := security.RandomString(24)
 	s.plans[tok] = &plan{agent: a.ID, tool: tool, hash: canonHash(args), expires: now.Add(planTTL)}
+	if requireHumanConfirm() {
+		if err := writePending(s.app.DataDir(), tok, &pendingConfirm{
+			Agent: a.Name, AgentID: a.ID, Tool: tool, Summary: planSummary(args), Expires: now.Add(planTTL),
+		}); err != nil {
+			s.app.Logger().Error("mcp: failed to store the pending confirmation", "error", err)
+		}
+	}
 	return tok
 }
 
@@ -177,6 +243,13 @@ func (s *Server) consumePlan(a *Agent, tool, token string, args any) error {
 	p, ok := s.plans[token]
 	if !ok {
 		return errors.New("confirm_token is unknown or already used: request a new plan (omit confirm_token)")
+	}
+	if requireHumanConfirm() {
+		pc, err := readPending(s.app.DataDir(), token)
+		if err != nil || !pc.Approved {
+			return approvalErr(token)
+		}
+		_ = os.Remove(confirmPath(s.app.DataDir(), token))
 	}
 	delete(s.plans, token)
 	if s.now().After(p.expires) {
@@ -194,7 +267,7 @@ var (
 	errNotFound = func(name string) error {
 		return fmt.Errorf("collection %q not found or not accessible to this agent", name)
 	}
-	secretKeyRe = regexp.MustCompile(`(?i)password|token|secret|key`)
+	secretKeyRe = regexp.MustCompile(`(?i)(password|secret|token|key|authorization|cookie|headers)`)
 )
 
 // guestInfo is the request info used to evaluate rules for non-operator agents.
@@ -209,10 +282,7 @@ func guestInfo() *kernel.RequestInfo {
 // other system collections only for operators (read) and never for writes.
 func (s *Server) collection(a *Agent, name string, write bool) (*kernel.Collection, error) {
 	c, err := s.app.FindCollectionByNameOrId(strings.TrimSpace(name))
-	if err != nil || c.Name == CollectionName || !a.allows(c.Name) {
-		return nil, errNotFound(name)
-	}
-	if c.System && (write || a.Role != RoleOperator) {
+	if err != nil || !canTouch(a, c, write) {
 		return nil, errNotFound(name)
 	}
 	if write && c.IsView() {
@@ -229,7 +299,7 @@ func (s *Server) visibleCollections(a *Agent) ([]*kernel.Collection, error) {
 	}
 	out := all[:0:0]
 	for _, c := range all {
-		if c.Name == CollectionName || !a.allows(c.Name) || (c.System && a.Role != RoleOperator) {
+		if !canTouch(a, c, false) {
 			continue
 		}
 		out = append(out, c)
