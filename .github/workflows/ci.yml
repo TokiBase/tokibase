@@ -12,6 +12,16 @@ jobs:
         with: { go-version-file: go.mod }
       - run: go vet -structtag=false ./...  # upstream test fixture has an intentional unexported tagged field
       - run: go test ./... -short
+  test-rule-ast:
+    # runs the filter/rule related suites through the AST + emitter path (TOKI_RULE_AST=1)
+    runs-on: ubuntu-latest
+    env:
+      TOKI_RULE_AST: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: go test ./kernel/rule/... ./tools/search/... ./kernel/... ./apis/... -short
   build-matrix:
     runs-on: ubuntu-latest
     strategy:
