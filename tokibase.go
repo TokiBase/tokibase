@@ -19,6 +19,7 @@ import (
 	"github.com/tokibase/tokibase/modules/adminlock"
 	"github.com/tokibase/tokibase/modules/audit"
 	"github.com/tokibase/tokibase/modules/backupcheck"
+	"github.com/tokibase/tokibase/modules/lockout"
 	"github.com/tokibase/tokibase/modules/ruleguard"
 	"github.com/tokibase/tokibase/modules/store/sqlite"
 	"github.com/tokibase/tokibase/modules/walreplica"
@@ -174,6 +175,23 @@ func NewWithConfig(config Config) *PocketBase {
 		})
 	}
 
+	// progressive per-identity lockout of failed password/OTP auth (TOKI_LOCKOUT=off disables)
+	if lockout.Enabled() {
+		lockout.Register(pb.App.(core.App))
+		if auditLog != nil {
+			lockout.SetAuditSink(func(action, collection, record string, details map[string]any) {
+				after, _ := json.Marshal(details)
+				afterStr := string(after)
+				if err := auditLog.Append(&audit.Entry{
+					ActorKind: "system", Action: action, Collection: collection,
+					Record: record, After: &afterStr,
+				}); err != nil {
+					pb.Logger().Warn("audit: failed to record "+action, "error", err)
+				}
+			})
+		}
+	}
+
 	// verify every created backup by restoring it to a temp dir (TOKI_BACKUP_VERIFY=off disables)
 	backupcheck.Register(pb.App.(core.App))
 	if auditLog != nil {
@@ -258,6 +276,7 @@ func (pb *PocketBase) Start() error {
 	if audit.Enabled() {
 		pb.RootCmd.AddCommand(audit.NewCommand(pb))
 	}
+	pb.RootCmd.AddCommand(cmd.NewLockoutCommand(pb))
 
 	return pb.Execute()
 }
