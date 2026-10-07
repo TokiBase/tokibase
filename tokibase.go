@@ -20,6 +20,7 @@ import (
 	"github.com/tokibase/tokibase/modules/audit"
 	"github.com/tokibase/tokibase/modules/backupcheck"
 	"github.com/tokibase/tokibase/modules/denylog"
+	"github.com/tokibase/tokibase/modules/fieldperm"
 	"github.com/tokibase/tokibase/modules/jobs"
 	"github.com/tokibase/tokibase/modules/lockout"
 	"github.com/tokibase/tokibase/modules/ruleguard"
@@ -230,6 +231,21 @@ func NewWithConfig(config Config) *PocketBase {
 		}
 	}
 
+	// per-field read/write rules in _field_rules (see docs/modules/fieldperm.md)
+	fieldperm.Register(pb.App.(core.App))
+	if auditLog != nil {
+		fieldperm.SetAuditSink(func(action, collection, record string, details map[string]any) {
+			after, _ := json.Marshal(details)
+			afterStr := string(after)
+			if err := auditLog.Append(&audit.Entry{
+				ActorKind: "system", Action: action, Collection: collection,
+				Record: record, After: &afterStr,
+			}); err != nil {
+				pb.Logger().Warn("audit: failed to record "+action, "error", err)
+			}
+		})
+	}
+
 	// warn when serving plain HTTP on a reachable address without trusted proxy headers (TOKI_TLS_CHECK=warn|strict|off)
 	tlscheck.Register(pb.App.(core.App))
 
@@ -330,6 +346,7 @@ func (pb *PocketBase) Start() error {
 	}
 	pb.RootCmd.AddCommand(cmd.NewTimeCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewDenyCommand(pb))
+	pb.RootCmd.AddCommand(cmd.NewFieldPermCommand(pb))
 
 	return pb.Execute()
 }

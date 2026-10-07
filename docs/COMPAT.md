@@ -101,6 +101,11 @@ Every deviation must be listed here with: what changed, why, migration path.
 - What: every auth token (login, refresh, impersonation) gains a `sid` claim and a row in the new `_sessions` table in `data.db`. A token whose session was revoked (CLI, password or email change, optional rotation) is treated as unauthenticated: authed endpoints return upstream's 401 shape before the token's `exp`. Tokens issued without the module (no `sid`) are unaffected. New `sessions` CLI command, optional request header `X-Toki-Device`. Rotation (`TOKI_SESSIONS_ROTATE=on`, default off) makes `auth-refresh` revoke the previous token, which can log out parallel tabs sharing a token. Endpoints, bodies and token signing are unchanged; the kernel gained the `kernel.OnAuthTokenIssue` seam (nil = upstream behavior).
 - Why: stolen or lost-device tokens could not be invalidated before expiry without changing the user's `tokenKey`.
 - Migration: nothing needed; an upstream `pb_data` gains the table on first start and upstream ignores it (upstream does not know `sid`, so after going back to upstream revoked tokens work again until expiry). `TOKI_SESSIONS=off` disables everything. See `docs/modules/sessions.md`.
+### `_field_rules` system collection and per-field rules (phase 2, `modules/fieldperm`)
+
+- What: new system collection `_field_rules` (superusers only) stores per-field `read_rule` / `write_rule`. A field whose read rule fails is simply absent from the JSON of list/view/create/update responses, realtime events and expanded records (same as a hidden field); a write rule that fails answers `400` with `data.<field>.code = validation_field_not_allowed`, in the upstream field error shape. New CLI `toki fieldperm`. Collection JSON, endpoints and SDK contracts are unchanged; with no rows nothing changes.
+- Why: guarding a single field (for example a clan `leader`) needed hand written hooks.
+- Migration: nothing needed; the collection is created at boot. Clients must not assume every schema field is present in a response. See `docs/modules/fieldperm.md`.
 
 ## Not promised
 
