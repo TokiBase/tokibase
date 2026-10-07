@@ -37,6 +37,10 @@ func MacroNames() []string {
 // Tokenizing and the grammar are delegated to the upstream fexpr parser, so
 // the accepted language and the returned errors are identical to it.
 func Parse(expr string) (*AST, error) {
+	if err := CheckLimits(expr); err != nil {
+		return nil, err
+	}
+
 	data, err := fexpr.Parse(expr)
 	if err != nil {
 		return nil, err

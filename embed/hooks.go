@@ -1,4 +1,4 @@
-//go:build !no_embed_jsvm
+//go:build !no_jsvm && !no_embed_jsvm
 
 package embed
 

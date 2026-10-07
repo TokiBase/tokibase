@@ -84,7 +84,9 @@ func main() {
 
 	// optional plugins; each one is compiled out by its no_<plugin> build tag
 	// (plugins_*.go and plugins_*_stub.go)
-	registerJSVM(app, migrationsDir, hooksDir, hooksWatch, hooksPool)
+	if err := registerJSVM(app, migrationsDir, hooksDir, hooksWatch, hooksPool); err != nil {
+		log.Fatal(err)
+	}
 	registerMigrateCmd(app, migrationsDir, automigrate)
 	registerGHUpdate(app)
 

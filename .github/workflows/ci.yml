@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod }
-      - run: go test ./kernel/rule/... ./tools/search/... ./kernel/... ./apis/... -short
+      - run: go test ./kernel/rule/... ./tools/search/... ./kernel/... ./apis/... ./modules/... -short
   build-matrix:
     runs-on: ubuntu-latest
     strategy:
@@ -45,11 +45,22 @@ jobs:
         run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -tags replica_s3 -ldflags "-s -w" -o out/toki-solo-s3 ./examples/base
       - name: size budget
         run: |
+          # solo/cluster budgets come from profiles.txt; no_ui is an extra check (not a profile)
+          budget() { awk -v p="$1" '$1==p {print $2}' profiles.txt; }
+          bs=$(budget solo); bc=$(budget cluster); bn=43
           s=$(stat -c %s out/toki-solo); n=$(stat -c %s out/toki-noui); x=$(stat -c %s out/toki-solo-s3)
-          echo "solo=$((s/1024/1024))MB noui=$((n/1024/1024))MB solo+s3=$((x/1024/1024))MB"
-          test $s -le $((46*1024*1024)) || { echo "solo over 46MB budget"; exit 1; }
-          test $n -le $((43*1024*1024)) || { echo "no_ui over 43MB budget"; exit 1; }
-          test $x -le $((55*1024*1024)) || { echo "solo+s3 over 55MB budget"; exit 1; }
+          echo "solo=$((s/1024/1024))MB (budget $bs) noui=$((n/1024/1024))MB (budget $bn) solo+s3=$((x/1024/1024))MB (budget $bc)"
+          test -n "$bs" -a -n "$bc" || { echo "missing solo/cluster budget in profiles.txt"; exit 1; }
+          test $s -le $((bs*1024*1024)) || { echo "solo over ${bs}MB budget"; exit 1; }
+          test $n -le $((bn*1024*1024)) || { echo "no_ui over ${bn}MB budget"; exit 1; }
+          test $x -le $((bc*1024*1024)) || { echo "solo+s3 over ${bc}MB budget"; exit 1; }
+      - name: team size budget (team = solo tags, budget from profiles.txt)
+        run: |
+          bt=$(awk '$1=="team" {print $2}' profiles.txt)
+          test -n "$bt" || { echo "missing team budget in profiles.txt"; exit 1; }
+          t=$(stat -c %s out/toki-solo)
+          echo "team=$((t/1024/1024))MB (budget $bt)"
+          test $t -le $((bt*1024*1024)) || { echo "team over ${bt}MB budget"; exit 1; }
   profiles:
     # edge/nano tag sets and budgets come from profiles.txt (docs/PROFILES.md)
     runs-on: ubuntu-latest
@@ -73,7 +84,7 @@ jobs:
         run: go vet -structtag=false -tags "$(awk -v p='${{ matrix.profile }}' '$1==p {for (i=3;i<=NF;i++) printf "%s%s", (i>3?",":""), $i}' profiles.txt)" ./...
       - name: stub builds (every module removed, each module removed)
         if: matrix.goarch == 'amd64' && matrix.profile == 'edge'
-        run: go test -run 'TestProfile|TestEachStub' -count=1 .
+        run: go test -run 'TestProfile|TestEachStub|TestExamplePluginTags' -count=1 .
   embed:
     # in-process Go API + gomobile facade, nano tag set from profiles.txt; gomobile itself is not run in CI
     runs-on: ubuntu-latest

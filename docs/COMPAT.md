@@ -155,6 +155,18 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: authenticator-app second factor and recovery codes without a custom backend.
 - Migration: nothing needed for REST clients and SDKs. Upstream PocketBase ignores the endpoints and treats `_totp` as a normal base collection; delete it to return to a pristine schema. See `docs/modules/totp.md`.
 
+### Lean build profiles `edge` and `nano` (phase 2, `profiles.txt`)
+
+- What: only for binaries built with the lean tag sets (`solo`, `team` and `cluster` are unchanged). `no_jsvm` removes the JS engine: `pb_hooks/` and JS `pb_migrations/*.js` are not loaded, so hooks (including authorization hooks) do not run and JS migrations are not applied; the `--hooksDir/--hooksWatch/--hooksPool/--migrationsDir` flags still parse. The binary refuses to start when `--hooksDir`/`--migrationsDir` is set or when a `pb_hooks`/`pb_migrations` directory exists next to the data dir, unless `TOKI_ALLOW_STUBBED_MODULES=1` (then it logs at ERROR). `no_migratecmd`: `toki migrate` exits with an explicit "compiled out" error and automigrate is off. `no_ghupdate`: `toki update` exits with a "compiled out" error. `no_totp`/`no_geo` drop the TOTP and geo endpoints (stubbed module guard applies to `_totp` and its env vars; run `toki geo` rebuild on a geo-enabled build before using `records/near` on data written by a `no_geo` build).
+- Why: smaller binaries for edge and embedded targets.
+- Migration: use the `solo` tag set (no tags) to keep full upstream behavior. See `docs/PROFILES.md`.
+
+### Opt-in rule compiler path `TOKI_RULE_AST=1` (phase 2, `kernel/rule`)
+
+- What: experimental switch, read once at process start (default off). With `1` filters and rules are parsed into an AST and emitted by `tools/search.EmitAST`; the SQL and parameters are byte-identical to the default compiler (differential tests). Both paths now also reject filters longer than 65536 bytes or nested deeper than 64 groups with a `400`-class filter error (upstream has no such limits).
+- Why: groundwork for other SQL dialects and an in-memory rule evaluator.
+- Migration: nothing needed; unset the variable to use the default path. See `docs/RULE_ENGINE.md`.
+
 ## Not promised
 
 - Go package API (`core`, `apis`, ...) may change between TokiBase minor versions.

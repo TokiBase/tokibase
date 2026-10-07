@@ -42,11 +42,7 @@ func (o buildOutcome) String() string {
 // The pseudorandom source is reseeded so that both paths must produce
 // byte-identical output (placeholders and aliases included).
 func buildOnce(app *tests.TestApp, col *kernel.Collection, ri *kernel.RequestInfo, expr string, useAST bool, hidden bool, extra ...dbx.Params) buildOutcome {
-	if useAST {
-		os.Setenv(search.RuleASTEnvVar, "1")
-	} else {
-		os.Setenv(search.RuleASTEnvVar, "0")
-	}
+	defer search.SetRuleASTForTest(useAST)()
 
 	restore := security.SeedPseudorandomForTest(42)
 	defer restore()
@@ -163,14 +159,7 @@ func collectionRules(app *tests.TestApp) []string {
 }
 
 func TestRuleASTDifferential(t *testing.T) {
-	prevEnv, hadEnv := os.LookupEnv(search.RuleASTEnvVar)
-	defer func() {
-		if hadEnv {
-			os.Setenv(search.RuleASTEnvVar, prevEnv)
-		} else {
-			os.Unsetenv(search.RuleASTEnvVar)
-		}
-	}()
+	defer search.SetRuleASTForTest(false)()
 
 	restoreClock := search.SetTimeNowForTest(func() time.Time {
 		return time.Date(2026, 10, 7, 12, 34, 56, 789000000, time.UTC)
@@ -295,7 +284,6 @@ func TestRuleASTDifferential(t *testing.T) {
 		if perr != nil {
 			continue
 		}
-		os.Setenv(search.RuleASTEnvVar, "0")
 		render := func(build func(*kernel.RecordFieldResolver) (dbx.Expression, error)) (string, error) {
 			restore := security.SeedPseudorandomForTest(7)
 			defer restore()
@@ -339,14 +327,7 @@ func TestRuleASTDifferential(t *testing.T) {
 }
 
 func TestRuleASTDifferentialPlaceholdersAndLimit(t *testing.T) {
-	prevEnv, hadEnv := os.LookupEnv(search.RuleASTEnvVar)
-	defer func() {
-		if hadEnv {
-			os.Setenv(search.RuleASTEnvVar, prevEnv)
-		} else {
-			os.Unsetenv(search.RuleASTEnvVar)
-		}
-	}()
+	defer search.SetRuleASTForTest(false)()
 
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
@@ -369,9 +350,10 @@ func TestRuleASTDifferentialPlaceholdersAndLimit(t *testing.T) {
 		expr := `text = 'a' && (number = 1 || bool = true) && email != ''`
 		var res [2]string
 		for i, useAST := range []bool{false, true} {
-			os.Setenv(search.RuleASTEnvVar, map[bool]string{false: "0", true: "1"}[useAST])
+			restoreAST := search.SetRuleASTForTest(useAST)
 			r := kernel.NewRecordFieldResolver(app, col, nil, false)
 			e, err := search.FilterData(expr).BuildExprWithLimit(r, limit)
+			restoreAST()
 			if err != nil {
 				res[i] = "ERR " + err.Error()
 			} else {

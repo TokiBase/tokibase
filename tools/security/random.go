@@ -6,6 +6,7 @@ import (
 	mathRand "math/rand/v2"
 	"sync"
 	"sync/atomic"
+	"testing"
 )
 
 // pseudorandomIntN is the source used by [PseudorandomStringWithAlphabet]
@@ -23,7 +24,13 @@ func init() {
 // It is intended ONLY for tests that need to compare two code paths
 // byte-for-byte; the caller must not run other goroutines that consume
 // pseudorandom strings meanwhile.
+//
+// It panics when called outside of a test binary.
 func SeedPseudorandomForTest(seed uint64) (restore func()) {
+	if !testing.Testing() {
+		panic("security.SeedPseudorandomForTest is for tests only")
+	}
+
 	var mu sync.Mutex
 	r := mathRand.New(mathRand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
 	f := func(n int) int {

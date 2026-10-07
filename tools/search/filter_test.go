@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pocketbase/dbx"
+	"github.com/tokibase/tokibase/kernel/rule"
 	"github.com/tokibase/tokibase/tools/search"
 )
 
@@ -376,5 +377,28 @@ func TestLikeParamsWrapping(t *testing.T) {
 	expectedQuery += "\n" + `b\\%' ESCAPE '\')`
 	if expectedQuery != calledQueries[0] {
 		t.Fatalf("Expected query \n%s, \ngot \n%s", expectedQuery, calledQueries[0])
+	}
+}
+
+func TestBuildExprLimitsLegacyPath(t *testing.T) {
+	r := search.NewSimpleFieldResolver("a")
+
+	deep := strings.Repeat("(", 65) + "a = 1" + strings.Repeat(")", 65)
+	if _, err := search.FilterData(deep).BuildExpr(r); !errors.Is(err, rule.ErrExprTooDeep) {
+		t.Fatalf("expected ErrExprTooDeep, got %v", err)
+	}
+
+	long := "a = '" + strings.Repeat("x", rule.MaxExprLen) + "'"
+	if _, err := search.FilterData(long).BuildExpr(r); !errors.Is(err, rule.ErrExprTooLong) {
+		t.Fatalf("expected ErrExprTooLong, got %v", err)
+	}
+
+	// the same limits through the AST path
+	defer search.SetRuleASTForTest(true)()
+	if _, err := search.FilterData(deep).BuildExpr(r); !errors.Is(err, rule.ErrExprTooDeep) {
+		t.Fatalf("ast: expected ErrExprTooDeep, got %v", err)
+	}
+	if _, err := search.FilterData(long).BuildExpr(r); !errors.Is(err, rule.ErrExprTooLong) {
+		t.Fatalf("ast: expected ErrExprTooLong, got %v", err)
 	}
 }

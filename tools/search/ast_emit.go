@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/ganigeorgiev/fexpr"
 	"github.com/pocketbase/dbx"
@@ -20,9 +21,19 @@ import (
 // identical SQL and parameters (verified by the differential tests).
 const RuleASTEnvVar = "TOKI_RULE_AST"
 
-// RuleASTEnabled reports whether the AST path is enabled (read on every call).
+// ruleASTOn is read from the environment once at process start, so the
+// compiler cannot flip mid-process (in-process os.Setenv has no effect) and
+// the hot path does not touch the environment lock. Tests use
+// setRuleASTForTest (export_test.go).
+var ruleASTOn atomic.Bool
+
+func init() {
+	ruleASTOn.Store(os.Getenv(RuleASTEnvVar) == "1")
+}
+
+// RuleASTEnabled reports whether the AST path is enabled (decided once at init).
 func RuleASTEnabled() bool {
-	return os.Getenv(RuleASTEnvVar) == "1"
+	return ruleASTOn.Load()
 }
 
 // parsedFilterAST caches parsed ASTs (same role as parsedFilterData).
@@ -39,7 +50,10 @@ func buildExprViaAST(raw, cacheKey string, fieldResolver FieldResolver, maxExpre
 		}
 
 		// same arbitrary cache size limit as for parsedFilterData
-		parsedFilterAST.SetIfLessThanLimit(cacheKey, ast, 500)
+		// (large filters are not cached: an AST is much bigger than its source)
+		if len(raw) <= 4096 {
+			parsedFilterAST.SetIfLessThanLimit(cacheKey, ast, 500)
+		}
 	}
 
 	return EmitAST(ast, fieldResolver, maxExpressions)

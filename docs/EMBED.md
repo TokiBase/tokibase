@@ -27,7 +27,7 @@ inst.Export(ctx, file)                                      // backup zip
 | `Listen` | Default `127.0.0.1:0`. `-` serves nothing over TCP: only `Call`/`Subscribe` work (best for mobile: no port other apps can reach). |
 | `Profile` | `nano` (default), `edge`, `solo`, `team`, `cluster`. Run time only: turns compiled-in modules off through `TOKI_*` switches. What is compiled in is decided by build tags (`profiles.txt`). Switches of modules already compiled out are not set (the stubbed module boot guard would refuse them). |
 | `Env` | Environment variables, applied with `os.Setenv`. **Process wide and not undone by `Stop`.** Wins over profile defaults. |
-| `HooksDir` | JS `pb_hooks` directory (no file watching). Build with `-tags no_embed_jsvm` to drop the JS engine (about 7 MiB). |
+| `HooksDir` | JS `pb_hooks` directory (no file watching). Build with `-tags no_jsvm` (part of the nano set) or `-tags no_embed_jsvm` to drop the JS engine (about 7 MiB). |
 | `LogLevel` | `debug`, `info` (default), `warn`, `error`; stored in the app log settings. |
 | `MaxBodyBytes` | Request body cap for TCP and `Call`, 413 above it. Default 4 MiB (`DefaultMaxBodyBytes`), negative = unlimited. Raise it if the app uploads larger files. |
 
@@ -89,7 +89,7 @@ final pb = PocketBase(url!);
 
 ## What nano excludes
 
-Tags `no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_replica no_backupcheck no_audit no_wasm`: no admin UI, no MCP, passkeys, push, webhooks, audit log, WASM hooks, WAL replication, backup verification. Kept: REST, realtime, auth (password/OAuth2/OTP), sessions, TOTP, lockout, rules and ruleguard, fieldperm, crypto, computed, jobs, geo, timelint, JS hooks (unless `no_embed_jsvm`).
+Tags `no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_replica no_backupcheck no_audit no_wasm no_jsvm no_ghupdate no_migratecmd no_totp no_geo` (the nano line of `profiles.txt`): no admin UI, no MCP, passkeys, push, webhooks, audit log, WASM hooks, WAL replication, backup verification, JS hooks (`HooksDir` is refused), TOTP and geo. Kept: REST, realtime, auth (password/OAuth2/OTP), sessions, lockout, rules and ruleguard, fieldperm, crypto, computed, jobs, timelint. Both `no_jsvm` and `no_embed_jsvm` drop the JS engine from the embed package.
 
 ## Size
 
@@ -100,5 +100,7 @@ Stripped (`-trimpath -s -w`, `CGO_ENABLED=0`), nano tags:
 | `examples/base` | 29.3 MiB | 28.4 MiB |
 | `examples/embed` (with JS hooks) | 29.3 MiB | 28.4 MiB |
 | `examples/embed` + `no_embed_jsvm` | 21.9 MiB | 21.2 MiB |
+
+Sizes above were measured before `no_jsvm no_ghupdate no_migratecmd no_totp no_geo` joined the nano tag set; with the current nano tags `examples/embed` is about as small as the `no_embed_jsvm` row or smaller (re-measure before quoting).
 
 gomobile output sizes (AAR/XCFramework, per ABI) were not measured here.
