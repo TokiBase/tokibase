@@ -55,6 +55,7 @@ Exit gate: all modules on by default in profile `solo`, failover drill RTO under
 
 - [x] sessions: server-side sessions with `sid` JWT claim, revoke per device/all, revoke on password/email change, optional refresh rotation, `toki sessions` (`docs/modules/sessions.md`).
 - [x] jobs: durable `_jobs` queue with retry/backoff, dead-letter, cron and worker role; consumer interface `kernel.Jobs(app)` so modules never import each other, `toki jobs ...` (`docs/modules/jobs.md`).
+- [x] fieldperm: per-field read/write rules in `_field_rules`, `toki fieldperm list|set|rm|lint` (`docs/modules/fieldperm.md`).
 
 ## Size budgets (stripped; CI enforces solo 36 MiB, no_ui 33 MiB, solo+replica_s3 45 MiB)
 
