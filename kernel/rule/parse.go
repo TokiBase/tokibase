@@ -176,11 +176,11 @@ func newIdent(name string, pos Pos) *Ident {
 
 	parts := strings.Split(body, ".")
 
-	switch {
-	case parts[0] == "@request":
+	switch parts[0] {
+	case "@request":
 		id.Kind = KindRequest
 		id.Path = parts[1:]
-	case parts[0] == "@collection":
+	case "@collection":
 		id.Kind = KindCollection
 		if len(parts) > 1 {
 			name, alias, _ := strings.Cut(parts[1], ":")
