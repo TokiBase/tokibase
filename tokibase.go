@@ -20,6 +20,7 @@ import (
 	"github.com/tokibase/tokibase/modules/audit"
 	"github.com/tokibase/tokibase/modules/backupcheck"
 	"github.com/tokibase/tokibase/modules/denylog"
+	"github.com/tokibase/tokibase/modules/jobs"
 	"github.com/tokibase/tokibase/modules/lockout"
 	"github.com/tokibase/tokibase/modules/ruleguard"
 	"github.com/tokibase/tokibase/modules/sessions"
@@ -213,6 +214,22 @@ func NewWithConfig(config Config) *PocketBase {
 		}
 	}
 
+	// durable job queue (TOKI_JOBS=off disables; TOKI_JOBS_WORKERS, TOKI_ROLE=worker)
+	if jobs.Enabled() {
+		jobs.Register(pb.App.(core.App))
+		if auditLog != nil {
+			jobs.SetAuditSink(func(action, collection, record string, details map[string]any) {
+				after, _ := json.Marshal(details)
+				afterStr := string(after)
+				if err := auditLog.Append(&audit.Entry{
+					ActorKind: "system", Action: action, Collection: collection, Record: record, After: &afterStr,
+				}); err != nil {
+					pb.Logger().Warn("audit: failed to record "+action, "error", err)
+				}
+			})
+		}
+	}
+
 	// warn when serving plain HTTP on a reachable address without trusted proxy headers (TOKI_TLS_CHECK=warn|strict|off)
 	tlscheck.Register(pb.App.(core.App))
 
@@ -308,6 +325,9 @@ func (pb *PocketBase) Start() error {
 	}
 	pb.RootCmd.AddCommand(cmd.NewLockoutCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewSessionsCommand(pb))
+	if jobs.Enabled() {
+		pb.RootCmd.AddCommand(jobs.NewCommand(pb))
+	}
 	pb.RootCmd.AddCommand(cmd.NewTimeCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewDenyCommand(pb))
 
