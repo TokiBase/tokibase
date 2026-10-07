@@ -55,6 +55,12 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: such a server is probably reached by clients without encryption.
 - Migration: nothing needed (default `warn`). Set the trusted proxy headers behind nginx/Caddy/Cloudflare, or `TOKI_TLS_CHECK=off`.
 
+### Time zone check for submitted date values, new validation error code (phase 1, timelint)
+
+- What: `modules/timelint` inspects date fields in record create/update requests. Default `TOKI_TIMELINT=warn` only logs (once per collection+field per hour) and changes nothing. With `TOKI_TIMELINT=strict` a date-time string that carries no zone designator (for example `2026-10-07 10:00:00`) is rejected with 400 and a field error with the new code `validation_invalid_timezone`, in the same shape as upstream field errors (`data.<field>.code/message`). Date-only values (`YYYY-MM-DD`) and values with `Z` or `+hh:mm` are accepted. New CLI `toki time lint`.
+- Why: zoneless values are silently read as UTC, a common cause of "+N hours per sync" bugs.
+- Migration: nothing needed (default `warn`). Before enabling `strict`, make clients send ISO 8601 with an offset or `Z`; stock PocketBase SDKs that send `Date.toISOString()` already comply.
+
 ### Backup verification after create, `toki backup` CLI (phase 1, backupcheck)
 
 - What: `modules/backupcheck` verifies every created backup asynchronously (restore to a temp dir, `PRAGMA integrity_check`, counts, sampled files) and logs the result. New `toki backup create|list|verify|verify-all` commands (no `backup` CLI existed). Nothing changes in REST endpoints, backup file format or settings.

@@ -45,7 +45,7 @@ Exit gate: 100% SDK suite pass, kernel has no `net/http` import, all builds unde
 - [x] adminlock: `TOKI_ADMIN_UI=on|readonly|off` (`docs/modules/adminlock.md`).
 - [x] lockout: progressive per-identity lockout for failed password/OTP auth (`docs/modules/lockout.md`).
 - [x] tlscheck: boot warning when serving plain HTTP without a trusted proxy header (`docs/modules/tlscheck.md`).
-- [ ] timelint: reject date values without a timezone at the API boundary (`lint` + boot warning).
+- [x] timelint: warn about or reject date values without a timezone at the API boundary, `toki time lint` (`docs/modules/timelint.md`).
 - [ ] structured denial logs: every 401/403/429 carries a machine-readable reason.
 - [ ] Production proof: run on the FGR replica node with real data for 7 days, then cut over.
 

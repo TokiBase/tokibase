@@ -22,6 +22,7 @@ import (
 	"github.com/tokibase/tokibase/modules/lockout"
 	"github.com/tokibase/tokibase/modules/ruleguard"
 	"github.com/tokibase/tokibase/modules/store/sqlite"
+	"github.com/tokibase/tokibase/modules/timelint"
 	"github.com/tokibase/tokibase/modules/tlscheck"
 	"github.com/tokibase/tokibase/modules/walreplica"
 	"github.com/tokibase/tokibase/tools/hook"
@@ -196,6 +197,9 @@ func NewWithConfig(config Config) *PocketBase {
 	// warn when serving plain HTTP on a reachable address without trusted proxy headers (TOKI_TLS_CHECK=warn|strict|off)
 	tlscheck.Register(pb.App.(core.App))
 
+	// date values without a time zone: TOKI_TIMELINT=off|warn|strict (default warn)
+	timelint.Register(pb.App.(core.App))
+
 	// verify every created backup by restoring it to a temp dir (TOKI_BACKUP_VERIFY=off disables)
 	backupcheck.Register(pb.App.(core.App))
 	if auditLog != nil {
@@ -281,6 +285,7 @@ func (pb *PocketBase) Start() error {
 		pb.RootCmd.AddCommand(audit.NewCommand(pb))
 	}
 	pb.RootCmd.AddCommand(cmd.NewLockoutCommand(pb))
+	pb.RootCmd.AddCommand(cmd.NewTimeCommand(pb))
 
 	return pb.Execute()
 }
