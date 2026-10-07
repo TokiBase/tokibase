@@ -2,9 +2,10 @@ package push
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
@@ -28,6 +29,9 @@ func (m *Module) bindRoutes() {
 		Id: hookId + "routes", Priority: hookPriority,
 		Func: func(e *core.ServeEvent) error {
 			e.Router.POST("/api/push/devices", m.apiRegister).Bind(apis.RequireAuth())
+			// preferred: token in the JSON body ({"token": ...}) or the X-Push-Token header
+			e.Router.DELETE("/api/push/devices", m.apiDeleteDevice).Bind(apis.RequireAuth())
+			// legacy: the token is part of the URL and therefore of request logs
 			e.Router.DELETE("/api/push/devices/{token}", m.apiDeleteDevice).Bind(apis.RequireAuth())
 			e.Router.POST("/api/push/subscribe", m.apiSubscribe(true)).Bind(apis.RequireAuth())
 			e.Router.POST("/api/push/unsubscribe", m.apiSubscribe(false)).Bind(apis.RequireAuth())
@@ -58,9 +62,24 @@ func (m *Module) apiRegister(e *core.RequestEvent) error {
 }
 
 func (m *Module) apiDeleteDevice(e *core.RequestEvent) error {
-	token, err := url.PathUnescape(e.Request.PathValue("token"))
-	if err != nil {
-		return e.BadRequestError("Invalid token.", nil)
+	token := strings.TrimSpace(e.Request.Header.Get("X-Push-Token"))
+	if raw := e.Request.PathValue("token"); raw != "" {
+		t, err := url.PathUnescape(raw)
+		if err != nil {
+			return e.BadRequestError("Invalid token.", nil)
+		}
+		token = t
+	}
+	if token == "" {
+		var body struct {
+			Token string `json:"token" form:"token"`
+		}
+		if err := e.BindBody(&body); err == nil {
+			token = body.Token
+		}
+	}
+	if token == "" {
+		return e.BadRequestError("token is required (JSON body, X-Push-Token header or URL).", nil)
 	}
 	id, ok := m.ownDevice(e, token)
 	if !ok {
@@ -91,12 +110,15 @@ func (m *Module) apiSubscribe(add bool) func(*core.RequestEvent) error {
 		}
 		var err error
 		if add {
-			err = Subscribe(m.app, id, body.Topic)
+			err = SubscribePublic(m.app, id, body.Topic)
 		} else {
 			err = Unsubscribe(m.app, id, body.Topic)
 		}
 		if err == errTopicNotFound {
 			return e.NotFoundError("Topic not found.", nil)
+		}
+		if err == errTooManySubs {
+			return e.TooManyRequestsError("Too many subscriptions for this device.", nil)
 		}
 		if err != nil {
 			return e.InternalServerError("Failed to update the subscription.", err)
@@ -106,7 +128,7 @@ func (m *Module) apiSubscribe(add bool) func(*core.RequestEvent) error {
 }
 
 func (m *Module) apiTopics(e *core.RequestEvent) error {
-	topics, err := ListTopics(m.app)
+	topics, err := ListPublicTopics(m.app)
 	if err != nil {
 		return e.InternalServerError("Failed to list topics.", err)
 	}
@@ -122,8 +144,12 @@ func stringifyData(in map[string]any) (map[string]string, error) {
 			out[k] = t
 		case nil:
 			out[k] = ""
-		case float64, bool:
-			out[k] = fmt.Sprint(t)
+		case float64:
+			out[k] = strconv.FormatFloat(t, 'f', -1, 64)
+		case json.Number:
+			out[k] = t.String()
+		case bool:
+			out[k] = strconv.FormatBool(t)
 		default:
 			b, err := json.Marshal(t)
 			if err != nil {
@@ -145,7 +171,10 @@ func (m *Module) apiSend(e *core.RequestEvent) error {
 		CollapseKey string         `json:"collapse_key"`
 		Priority    string         `json:"priority"`
 	}
-	if err := e.BindBody(&body); err != nil {
+	// decode with UseNumber so integers above 2^53 keep their digits
+	dec := json.NewDecoder(http.MaxBytesReader(e.Response, e.Request.Body, 4<<20))
+	dec.UseNumber()
+	if err := dec.Decode(&body); err != nil {
 		return e.BadRequestError("Invalid request body.", nil)
 	}
 	if len(body.To.Users)+len(body.To.Topics)+len(body.To.Tokens) == 0 {

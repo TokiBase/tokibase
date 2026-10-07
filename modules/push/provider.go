@@ -42,6 +42,10 @@ type Notification struct {
 	TTLSeconds  int               `json:"ttl_seconds,omitempty"`
 	CollapseKey string            `json:"collapse_key,omitempty"`
 	Priority    string            `json:"priority,omitempty"` // high (default) | normal
+
+	// Topic is the per-device APNs topic (bundle id), set by the delivery
+	// code from the device's app_id; never serialized.
+	Topic string `json:"-"`
 }
 
 // Provider sends one notification to one device token.
@@ -72,6 +76,20 @@ type PermanentError struct{ Err error }
 
 func (e *PermanentError) Error() string { return "push: rejected: " + e.Err.Error() }
 func (e *PermanentError) Unwrap() error { return e.Err }
+
+// ConfigError is a provider-side failure caused by the server configuration
+// (credentials, project, topic, environment) rather than by one device token.
+// The job is retried with backoff and stays visible in `toki jobs`, the error
+// is logged loudly and audited as `push.provider_error`; the device is never
+// disabled because of it.
+type ConfigError struct{ Err error }
+
+func (e *ConfigError) Error() string { return "push: provider configuration error: " + e.Err.Error() }
+func (e *ConfigError) Unwrap() error { return e.Err }
+
+func configErr(format string, a ...any) error {
+	return &ConfigError{Err: fmt.Errorf(format, a...)}
+}
 
 func retryable(format string, a ...any) error {
 	return &RetryableError{Err: fmt.Errorf(format, a...)}

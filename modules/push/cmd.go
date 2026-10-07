@@ -175,6 +175,7 @@ func NewCommand(app core.App) *cobra.Command {
 	prune.Flags().IntVar(&days, "days", 90, "age in days")
 
 	var desc string
+	var public bool
 	topicCmd := &cobra.Command{Use: "topic", Short: "Manage topics"}
 	topicAdd := &cobra.Command{
 		Use: "add <name>", Short: "Create a topic", Args: cobra.ExactArgs(1), SilenceUsage: true,
@@ -182,7 +183,11 @@ func NewCommand(app core.App) *cobra.Command {
 			if err := ensureCollections(app); err != nil {
 				return err
 			}
-			if err := CreateTopic(app, args[0], desc); err != nil {
+			vis := VisibilityPrivate
+			if public {
+				vis = VisibilityPublic
+			}
+			if err := CreateTopicVisibility(app, args[0], desc, vis); err != nil {
 				return err
 			}
 			fmt.Fprintf(c.OutOrStdout(), "topic %q ready\n", args[0])
@@ -190,6 +195,7 @@ func NewCommand(app core.App) *cobra.Command {
 		},
 	}
 	topicAdd.Flags().StringVar(&desc, "description", "", "description")
+	topicAdd.Flags().BoolVar(&public, "public", false, "let end users list and subscribe (default: private)")
 	topicList := &cobra.Command{
 		Use: "list", Short: "List topics", SilenceUsage: true,
 		RunE: func(c *cobra.Command, _ []string) error {
@@ -201,7 +207,7 @@ func NewCommand(app core.App) *cobra.Command {
 				return err
 			}
 			for _, t := range ts {
-				fmt.Fprintf(c.OutOrStdout(), "%s\t%s\n", t.Name, t.Description)
+				fmt.Fprintf(c.OutOrStdout(), "%s\t%s\t%s\n", t.Name, t.Visibility, t.Description)
 			}
 			return nil
 		},

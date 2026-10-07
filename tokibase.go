@@ -223,7 +223,8 @@ func NewWithConfig(config Config) *PocketBase {
 
 	// WebAuthn passkeys: active only when TOKI_PASSKEY_RP_ID is set (see docs/modules/passkey.md)
 	passkey.Register(pb.App.(core.App))
-	passkey.SetFailureSink(lockout.RecordFailure)
+	passkey.SetFailureSink(lockout.RecordFailureFor)
+	passkey.SetLockedSink(lockout.IsLocked)
 	if auditLog != nil {
 		passkey.SetAuditSink(func(action, collection, record string, details map[string]any) {
 			after, _ := json.Marshal(details)

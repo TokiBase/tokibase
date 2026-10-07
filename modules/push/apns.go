@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	apnsProd    = "https://api.push.apple.com"
-	apnsSandbox = "https://api.sandbox.push.apple.com"
-	apnsJWTTTL  = 50 * time.Minute // Apple accepts 20-60 minutes
+	apnsProd       = "https://api.push.apple.com"
+	apnsSandbox    = "https://api.sandbox.push.apple.com"
+	apnsJWTTTL     = 50 * time.Minute // Apple accepts 20-60 minutes
+	apnsMinRefresh = 20 * time.Minute
 )
 
 // APNsConfig holds the token based auth settings.
@@ -85,9 +86,14 @@ func (a *APNs) providerToken() (string, error) {
 	return t, nil
 }
 
+// dropToken forgets the cached provider token so the next request signs a
+// new one. Apple answers TooManyProviderTokenUpdates when the token is
+// refreshed more often than every 20 minutes, so a token younger than that is kept.
 func (a *APNs) dropToken() {
 	a.mu.Lock()
-	a.jwt = ""
+	if a.Now().Sub(a.jwtAt) >= apnsMinRefresh {
+		a.jwt = ""
+	}
 	a.mu.Unlock()
 }
 
@@ -131,7 +137,11 @@ func (a *APNs) BuildRequest(ctx context.Context, n *Notification, token string) 
 		return nil, permanent("apns: request: %v", err)
 	}
 	req.Header.Set("Authorization", "bearer "+jwt)
-	req.Header.Set("apns-topic", a.cfg.Topic)
+	topic := a.cfg.Topic
+	if n.Topic != "" {
+		topic = n.Topic // per-device app_id
+	}
+	req.Header.Set("apns-topic", topic)
 	req.Header.Set("apns-push-type", "alert")
 	prio := "10"
 	if n.Priority == PriorityNormal {
@@ -159,6 +169,11 @@ func (a *APNs) Send(ctx context.Context, n *Notification, token string) error {
 	}
 	res, err := a.Client.Do(req)
 	if err != nil {
+		// *url.Error embeds the request URL, which contains the device token
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = fmt.Errorf("apns: request failed: %w", ue.Err)
+		}
 		return err
 	}
 	defer res.Body.Close()
@@ -176,9 +191,15 @@ func classifyAPNs(a *APNs, status int, body []byte) error {
 	_ = json.Unmarshal(body, &e)
 	msg := fmt.Sprintf("apns: HTTP %d %s", status, e.Reason)
 	switch {
-	case status == 410 || e.Reason == "BadDeviceToken" || e.Reason == "Unregistered" || e.Reason == "DeviceTokenNotForTopic":
+	case status == 410 || e.Reason == "BadDeviceToken" || e.Reason == "Unregistered":
 		return fmt.Errorf("%w (%s)", ErrInvalidToken, msg)
-	case status == 403 && (e.Reason == "ExpiredProviderToken" || e.Reason == "InvalidProviderToken"):
+	case e.Reason == "DeviceTokenNotForTopic" || e.Reason == "BadTopic" || e.Reason == "MissingTopic" || e.Reason == "TopicDisallowed" ||
+		e.Reason == "InvalidProviderToken" || e.Reason == "BadCertificate" || e.Reason == "BadCertificateEnvironment" || e.Reason == "Forbidden":
+		if e.Reason == "InvalidProviderToken" {
+			a.dropToken()
+		}
+		return &ConfigError{Err: errors.New(msg)}
+	case status == 403 && e.Reason == "ExpiredProviderToken":
 		a.dropToken()
 		return &RetryableError{Err: errors.New(msg)}
 	case status == 429 || status >= 500:

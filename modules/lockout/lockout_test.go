@@ -263,3 +263,26 @@ func TestRecordFailureExported(t *testing.T) {
 		t.Fatal("exported RecordFailure must count towards the lock")
 	}
 }
+
+// Passkey integration: IdentityKey/IsLocked/RecordFailureFor share the key of
+// the password flow, so passkey failures and password failures add up.
+func TestIdentityKeySharedWithPasswordFlow(t *testing.T) {
+	e := setup(t, Policy{Threshold: 3})
+	rec, err := e.app.FindAuthRecordByEmail("users", "test@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if IdentityKey("users", rec) != Key("users", "TEST@example.com ") {
+		t.Fatalf("key %q", IdentityKey("users", rec))
+	}
+	if IsLocked("users", rec) {
+		t.Fatal("not locked yet")
+	}
+	e.pw(t, "test@example.com", "wrong", "1.1.1.1", 400)
+	RecordFailureFor("users", rec)
+	RecordFailureFor("users", rec) // 3rd failure overall
+	if !IsLocked("users", rec) {
+		t.Fatal("mixed failures must lock")
+	}
+	e.pw(t, "test@example.com", "1234567890", "1.1.1.1", 400) // locked: even the right password
+}
