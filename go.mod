@@ -22,6 +22,7 @@ require (
 	github.com/pocketbase/tygoja v0.1.0
 	github.com/spf13/cast v1.10.0
 	github.com/spf13/cobra v1.10.2
+	github.com/tetratelabs/wazero v1.12.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/image v0.46.0
 	golang.org/x/net v0.59.0
@@ -87,7 +88,6 @@ require (
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/superfly/ltx v0.5.2 // indirect
-	github.com/tetratelabs/wazero v1.2.1 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/wasilibs/go-re2 v1.3.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
