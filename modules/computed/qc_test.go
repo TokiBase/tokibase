@@ -224,11 +224,11 @@ func TestC5C6QueryShapes(t *testing.T) {
 
 	last := base
 	last.Kind, last.SourceField = KindLast, "amount"
-	if s := sql(last, []string{"x"}); !strings.Contains(s, "ORDER BY") || !strings.Contains(s, "`CREATED` DESC") || !strings.Contains(s, "`ID` DESC") || !strings.Contains(s, "LIMIT 1") {
+	if s := sql(last, []string{"x"}); !strings.Contains(s, "ORDER BY") || !strings.Contains(s, "`CREATED` DESC") || !strings.Contains(s, "`_ROWID_` DESC") || !strings.Contains(s, "LIMIT 1") {
 		t.Fatalf("last must be ORDER BY created DESC, _rowid_ DESC LIMIT 1: %s", s)
 	}
 
-	// behaviour: newest wins, ties on created broken by id, NULL counts as 0
+	// behaviour: newest wins, ties on created broken by rowid, NULL counts as 0
 	e.def(t, "lst", "last", "amount", "")
 	p := e.parent(t)
 	e.kid(t, p, 5, "")
