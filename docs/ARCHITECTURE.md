@@ -36,13 +36,22 @@ Goal: profile `solo` behaves identically to PocketBase v0.40.4.
 
 Exit gate: 100% SDK suite pass, kernel has no `net/http` import, all builds under budget.
 
-## Phase 1 (in progress)
+## Phase 1 (functional scope done 2026-10-07; production proof pending)
 
-- [x] ruleguard: explicit public API rules (`docs/modules/ruleguard.md`).
+- [x] ruleguard: explicit public API rules, `toki rule lint` (`docs/modules/ruleguard.md`).
+- [x] audit: append-only hash-chained `_audit` log, `toki audit tail|verify|export` (`docs/modules/audit.md`).
+- [x] backupcheck: every backup is restored to a temp dir and verified, `toki backup verify` (`docs/modules/backupcheck.md`).
+- [x] walreplica: continuous WAL replication with embedded Litestream, `toki replica status|restore|snapshot|promote`, lease guard, failover drill in CI (`docs/modules/walreplica.md`). S3 backend behind `-tags replica_s3`.
+- [x] adminlock: `TOKI_ADMIN_UI=on|readonly|off` (`docs/modules/adminlock.md`).
 - [x] lockout: progressive per-identity lockout for failed password/OTP auth (`docs/modules/lockout.md`).
-- [x] wal-replica: continuous WAL replication of `data.db` and `auxiliary.db` to a file path or S3 with Litestream embedded, plus restore (`docs/modules/walreplica.md`). Automatic promotion is still to come.
+- [ ] tlscheck: boot warning when serving plain HTTP without a trusted proxy header.
+- [ ] timelint: reject date values without a timezone at the API boundary (`lint` + boot warning).
+- [ ] structured denial logs: every 401/403/429 carries a machine-readable reason.
+- [ ] Production proof: run on the FGR replica node with real data for 7 days, then cut over.
 
-## Size budgets (phase 0 baseline, stripped)
+Exit gate: all modules on by default in profile `solo`, failover drill RTO under 30 s in CI, no COMPAT deviation on the REST contract.
+
+## Size budgets (stripped; CI enforces solo 36 MiB, no_ui 33 MiB, solo+replica_s3 45 MiB)
 
 | Profile | Budget |
 | --- | --- |
