@@ -35,6 +35,7 @@ import (
 	"github.com/tokibase/tokibase/modules/timelint"
 	"github.com/tokibase/tokibase/modules/tlscheck"
 	"github.com/tokibase/tokibase/modules/walreplica"
+	"github.com/tokibase/tokibase/modules/wasm"
 	"github.com/tokibase/tokibase/modules/webhooks"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/list"
@@ -351,6 +352,9 @@ func NewWithConfig(config Config) *PocketBase {
 		}
 	}
 
+	// sandboxed WASM hooks from pb_hooks_wasm/ (TOKI_WASM=off or -tags no_wasm disables)
+	wasm.Register(pb.App.(core.App), pb.RootCmd)
+
 	// push notifications to FCM/APNs through the job queue (TOKI_PUSH=off disables)
 	if push.Enabled() {
 		push.Register(pb.App.(core.App))
@@ -470,6 +474,9 @@ func (pb *PocketBase) Start() error {
 	pb.RootCmd.AddCommand(computed.NewCommand(pb))
 	pb.RootCmd.AddCommand(crypto.NewCommand(pb))
 	pb.RootCmd.AddCommand(geo.NewCommand(pb))
+	if c := wasm.NewCommand(pb); c != nil {
+		pb.RootCmd.AddCommand(c)
+	}
 	for _, c := range mcp.NewCommands(pb) {
 		pb.RootCmd.AddCommand(c)
 	}

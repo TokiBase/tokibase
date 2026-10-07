@@ -138,6 +138,11 @@ Every deviation must be listed here with: what changed, why, migration path.
 - What: an additive endpoint for radius (`near=<field>:<lat>,<lon>,<km>`) and bounding-box (`bbox=...`) queries on `geoPoint` fields. It returns the standard list envelope; with `near` each item carries one extra top-level key `distance_km` and results are ordered by distance. The collection `listRule` applies as on the list endpoint. `toki geo index` can create an SQLite R*Tree virtual table `_geo_<collection>_<field>` in `data.db`. No existing endpoint, status code, body shape or the filter language changes. The path `records/near` shadows a record whose id is literally `near` (ids are 15 characters by default).
 - Why: nearby search without custom hooks or client-side filtering that breaks pagination.
 - Migration: nothing needed for REST clients and SDKs. Drop the `_geo_*` tables (`toki geo drop`) before returning to upstream if you want a pristine schema; upstream ignores them. See `docs/modules/geo.md`.
+### New hooks directory `pb_hooks_wasm/`, `_wasm_kv` and `_wasm_stats` tables (phase 2, `modules/wasm`)
+
+- What: new flags `--wasmHooksDir` (default `<dataDir>/../pb_hooks_wasm`) and `--wasmHooksWatch`; `*.wasm` modules found there run as sandboxed record, cron, route and job hooks (a record before-hook can change fields or reject with a 4xx/5xx the guest chooses; a failing guest answers `500 {"message":"Hook failed."}`); custom routes only appear when a module declares them; new `wasm` CLI command; two small tables `_wasm_kv` and `_wasm_stats` in `auxiliary.db` (not collections, not visible in the REST API). No existing endpoint, status code or response shape changes, and with an empty or missing directory nothing runs. JS `pb_hooks` are untouched and run after WASM handlers of the same event.
+- Why: business logic in any language with CPU/memory/time limits, without goja.
+- Migration: nothing needed. `TOKI_WASM=off` or `-tags no_wasm` removes the feature; upstream PocketBase ignores the directory and the auxiliary tables.
 
 ## Not promised
 
