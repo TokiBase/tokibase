@@ -45,8 +45,11 @@ const (
 // remove or overwrite the standard claims. A nil value (the default) keeps
 // the upstream behavior byte for byte.
 //
+// A non-nil returned error aborts the token creation (fail closed), so a
+// token that could not be recorded is never handed out.
+//
 // It is a process wide variable, set once at startup (see modules/sessions).
-var OnAuthTokenIssue func(record *Record, kind string, claims jwt.MapClaims, duration time.Duration)
+var OnAuthTokenIssue func(record *Record, kind string, claims jwt.MapClaims, duration time.Duration) error
 
 // NewStaticAuthToken generates and returns a new static record authentication token.
 //
@@ -89,7 +92,9 @@ func (m *Record) newAuthToken(duration time.Duration, refreshable bool) (string,
 		if !refreshable {
 			kind = TokenIssueStatic
 		}
-		fn(m, kind, claims, duration)
+		if err := fn(m, kind, claims, duration); err != nil {
+			return "", err
+		}
 	}
 
 	return security.NewJWT(claims, key, duration)
