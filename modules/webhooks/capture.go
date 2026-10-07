@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/security"
 )
@@ -133,7 +134,7 @@ func (m *Module) bindCapture() {
 
 // safeExport is the public export without credential fields.
 func safeExport(r *core.Record) map[string]any {
-	m := r.PublicExport()
+	m := kernel.RedactExport(r, r.PublicExport(), "") // encrypted fields never leave as plaintext or ciphertext
 	delete(m, core.FieldNamePassword)
 	delete(m, core.FieldNameTokenKey)
 	return m
@@ -163,6 +164,16 @@ func changedFields(r *core.Record) (map[string]any, []string) {
 			continue
 		}
 		a, b := r.Get(n), orig.Get(n)
+		if kernel.IsSensitive(r.Collection().Id, n) {
+			// the new and old values differ by nonce even when nothing changed
+			// and the old value is ciphertext: report only the field name
+			if jsonEqual(a, b) {
+				continue
+			}
+			changed = append(changed, n)
+			old[n] = kernel.SensitiveMarker
+			continue
+		}
 		if jsonEqual(a, b) {
 			continue
 		}

@@ -447,3 +447,21 @@ func TestLowRuneSafeTruncation(t *testing.T) {
 		t.Fatal("invalid utf8")
 	}
 }
+
+func TestSensitiveFieldsRedactedForOperator(t *testing.T) {
+	e := setup(t)
+	c := e.pub("vaultmcp", &kernel.TextField{Name: "title"}, &kernel.TextField{Name: "enc"})
+	kernel.RegisterSensitiveField(c.Id, "enc")
+	t.Cleanup(func() { kernel.UnregisterSensitiveField(c.Id, "enc") })
+	rec := e.seed("vaultmcp", map[string]any{"title": "t", "enc": "tkc1:1:CIPHERTEXT"})
+	op, _ := e.connect(e.agent("op", RoleOperator))
+	out := mustOK(t, op, "records.get", map[string]any{"collection": "vaultmcp", "id": rec.Id})
+	r := out["record"].(map[string]any)
+	if r["enc"] != "[encrypted]" || r["title"] != "t" {
+		t.Fatalf("operator export: %v", r)
+	}
+	out = mustOK(t, op, "records.delete", map[string]any{"collection": "vaultmcp", "id": rec.Id, "reason": "probe"})
+	if p := out["plan"].(map[string]any)["preview"].(map[string]any); p["enc"] != "[encrypted]" {
+		t.Fatalf("preview: %v", p)
+	}
+}

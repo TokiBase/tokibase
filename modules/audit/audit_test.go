@@ -11,6 +11,7 @@ import (
 
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/modules/audit"
 	"github.com/tokibase/tokibase/tests"
 )
@@ -231,5 +232,55 @@ func TestOversizedJSONTruncated(t *testing.T) {
 				t.Fatalf("json column not capped: %d", len(*s))
 			}
 		}
+	}
+}
+
+func TestSensitiveFieldsNeverStoredInAudit(t *testing.T) {
+	app := newApp(t)
+	col := core.NewBaseCollection("vault_items")
+	col.Fields.Add(&core.TextField{Name: "label"}, &core.TextField{Name: "diagnote"})
+	open := ""
+	col.ListRule, col.ViewRule, col.CreateRule, col.UpdateRule, col.DeleteRule = &open, &open, &open, &open, &open
+	if err := app.Save(col); err != nil {
+		t.Fatal(err)
+	}
+	kernel.RegisterSensitiveField(col.Id, "diagnote")
+	t.Cleanup(func() { kernel.UnregisterSensitiveField(col.Id, "diagnote") })
+	tok, _ := tokenFor(t, app, core.CollectionNameSuperusers, "test@example.com")
+
+	res := do(t, app, "POST", "/api/collections/vault_items/records", `{"label":"a","diagnote":"PLAINTEXT-ONE"}`, tok)
+	if res.StatusCode != 200 {
+		t.Fatalf("create %d", res.StatusCode)
+	}
+	var created map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&created)
+	id := created["id"].(string)
+	if res := do(t, app, "PATCH", "/api/collections/vault_items/records/"+id, `{"diagnote":"PLAINTEXT-TWO"}`, tok); res.StatusCode != 200 {
+		t.Fatalf("update %d", res.StatusCode)
+	}
+	if res := do(t, app, "DELETE", "/api/collections/vault_items/records/"+id, ``, tok); res.StatusCode != 204 {
+		t.Fatalf("delete %d", res.StatusCode)
+	}
+	n := 0
+	for _, e := range rows(t, app) {
+		if e.Collection != "vault_items" {
+			continue
+		}
+		n++
+		all := ""
+		for _, p := range []*string{e.Before, e.After, e.Diff} {
+			if p != nil {
+				all += *p
+			}
+		}
+		if strings.Contains(all, "PLAINTEXT") {
+			t.Fatalf("%s leaked plaintext: %s", e.Action, all)
+		}
+		if e.Action != audit.ActionRecordDelete && !strings.Contains(all, "[encrypted]") && e.Action == audit.ActionRecordCreate {
+			t.Fatalf("expected the marker in %s: %s", e.Action, all)
+		}
+	}
+	if n != 3 {
+		t.Fatalf("expected 3 audit rows, got %d", n)
 	}
 }
