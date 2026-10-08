@@ -451,7 +451,7 @@ func TestAutoHealRebootstrapsAfterTwoDigestMismatches(t *testing.T) {
 	b.sync(t)
 	requireConverged(t, h, a, b)
 	// the metadata of one record drifts (a raw write the capture never saw)
-	if _, err := a.app.NonconcurrentDB().NewQuery("UPDATE _sync_meta SET hash=randomblob(32) WHERE rowid=(SELECT MIN(rowid) FROM _sync_meta WHERE collection={:c})").
+	if _, err := a.app.NonconcurrentDB().NewQuery("UPDATE _sync_meta SET hash=randomblob(32) WHERE collection={:c} AND record=(SELECT MIN(record) FROM _sync_meta WHERE collection={:c})").
 		Bind(dbx.Params{"c": h.items.Id}).Execute(); err != nil {
 		t.Fatal(err)
 	}

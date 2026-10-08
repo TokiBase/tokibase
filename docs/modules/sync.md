@@ -285,6 +285,13 @@ Triggers: the handshake says `rebootstrap`, pull answers 410, `_sync_cursors.sta
 
 `state` values: `idle`, `bootstrapping`, `rebootstrap_required`, `paused`. `toki sync status` shows `state` and, during a bootstrap, `snapshot` (the position or phase). Local writes during a bootstrap are captured normally; edits older than the parked ones are re-stamped newer than them (the fresh-HLC rule of the design).
 
+### Deviations from the design text
+
+- The collections are emptied lazily, with the first page of each collection (in the same transaction), not all before the first page: a bootstrap that never finishes leaves the not yet reached collections intact.
+- Unpushed local changes are parked in place (`_changes.status = 'rebase'`) instead of copied to a side table, and their rows become fillers instead of being deleted: the hub's `pushed_origin_seq` must stay contiguous.
+- The hub reactivates the node when the data pages are applied (ack with `snapshot_id`), before the log is pulled, because a pull of a node still flagged `stale` is refused with 410.
+- A restore is noticed through a marker file, because the restore replaces `data.db` (an epoch stored in it would be rolled back too). The handshake does not set `rebootstrap` on an epoch change; the spoke resets its cursor instead (design §3.9 over §3.3).
+
 ### Triggers and CLI
 
 - `toki sync rebootstrap` (spoke): sets `rebootstrap_required`; the running loop starts at its next cycle. `--now` runs the bootstrap in the CLI process.
