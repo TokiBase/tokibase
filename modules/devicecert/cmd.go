@@ -87,7 +87,7 @@ func NewCommand(app core.App) *cobra.Command {
 			if _, err := c.OutOrStdout().Write(b); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.ErrOrStderr(), "SHA256 Fingerprint=%s\nsubject=%s\nnot_after=%s\n", Fingerprint(cert.Raw), cert.Subject.CommonName, cert.NotAfter.UTC().Format(time.RFC3339))
+			fmt.Fprintf(os.Stderr, "SHA256 Fingerprint=%s\nsubject=%s\nnot_after=%s\n", Fingerprint(cert.Raw), cert.Subject.CommonName, cert.NotAfter.UTC().Format(time.RFC3339))
 			return nil
 		},
 	}
