@@ -193,9 +193,13 @@ curl -fsS "$URL_S1/api/scan/events?scanner=belt" -H "Authorization: $TOK" | jget
 [ "$(code_of "$URL_S1/api/scan/events?scanner=belt")" != 200 ] || fail "a guest read the scan events"
 log "(2) pty scans visible on /api/scan/events for the kiosk session (filtered code dropped)"
 
-# ---- 6. the kiosk issues a ticket (reserved number) and prints it ----
+# ---- 6. a ticket gets a reserved number and the kiosk prints it ----
+# Tickets are written with the node's operator token (superuser of the spoke = captured as the
+# `node` actor, replayed on the hub as the service actor). A write made as the kiosk actor itself
+# (gate_devices/...) is captured as `rec:...` and the hub PARKS it unless the actor holds a sync
+# grant (docs/EDGE_GATE.md, "Who writes"); that parked path is the parking scenario, not tested here.
 NO=""
-wait_for "first reserved number on the spoke" 'NO="$(curl -fsS -X POST "$URL_S1/api/collections/tickets/records" -H "Authorization: $TOK" -H "Content-Type: application/json" -d "{\"plate\":\"B 1234 XY\"}" 2>/dev/null | jget "d[\"no\"]" 2>/dev/null)" && [ -n "$NO" ]'
+wait_for "first reserved number on the spoke" 'NO="$(curl -fsS -X POST "$URL_S1/api/collections/tickets/records" -H "Authorization: $TS" -H "Content-Type: application/json" -d "{\"plate\":\"B 1234 XY\"}" 2>/dev/null | jget "d[\"no\"]" 2>/dev/null)" && [ -n "$NO" ]'
 JOB="$(curl -fsS -X POST "$URL_S1/api/print" -H "Authorization: $TOK" -H 'Content-Type: application/json' \
   -d "{\"template\":\"ticket\",\"data\":{\"no\":\"$NO\",\"plate\":\"B 1234 XY\",\"qr\":\"GATE-$NO\"},\"idempotency_key\":\"edge-gate-1\"}" | jget 'd["id"]')" || fail "POST /api/print"
 wait_for "print job done" '[ "$(curl -fsS "$URL_S1/api/print/$JOB" -H "Authorization: $TOK" | jget "d[\"state\"]")" = done ]'
@@ -236,7 +240,7 @@ stop_node hub
 log "hub stopped"
 OFF_NOS=""
 for i in 1 2 3 4 5; do
-  n="$(curl -fsS -X POST "$URL_S1/api/collections/tickets/records" -H "Authorization: $TOK" -H 'Content-Type: application/json' -d "{\"plate\":\"OFF $i\"}" | jget 'd["no"]')" \
+  n="$(curl -fsS -X POST "$URL_S1/api/collections/tickets/records" -H "Authorization: $TS" -H 'Content-Type: application/json' -d "{\"plate\":\"OFF $i\"}" | jget 'd["no"]')" \
     || fail "ticket $i could not be issued offline"
   OFF_NOS="$OFF_NOS $n"
 done
