@@ -263,7 +263,7 @@ func TestClientSeqIdempotent(t *testing.T) {
 	e := setup(t)
 	sc := testScanner(KindWeb)
 	a, _ := e.m.Ingest(context.Background(), sc, "X1234", IngestOptions{Actor: "users/a", ClientSeq: "7"})
-	e.clk.add(time.Hour) // far outside any dedupe window, still the same retry
+	e.clk.add(5 * time.Minute) // far outside any dedupe window, inside the 10 minute retry memory
 	b, _ := e.m.Ingest(context.Background(), sc, "X1234", IngestOptions{Actor: "users/a", ClientSeq: "7"})
 	c, _ := e.m.Ingest(context.Background(), sc, "X1234", IngestOptions{Actor: "users/b", ClientSeq: "7"})
 	if !b.Duplicate || b.ID != a.ID || c.Duplicate {
