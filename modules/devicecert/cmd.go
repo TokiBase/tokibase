@@ -3,11 +3,15 @@
 package devicecert
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tokibase/tokibase/kernel"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -24,6 +28,9 @@ func printJSON(w io.Writer, v any) error {
 // cliModule is the registered module of app or a fresh one with the schema
 // ensured (the commands work with TOKI_DEVICECERT unset).
 func cliModule(app core.App) (*Module, error) {
+	if !Enabled() {
+		return nil, errors.New("devicecert is off (set TOKI_DEVICECERT=on); nothing is created while it is off")
+	}
 	if err := ensureSchema(app); err != nil {
 		return nil, err
 	}
@@ -97,6 +104,14 @@ func NewCommand(app core.App) *cobra.Command {
 	status := &cobra.Command{
 		Use: "status", Short: "Show the edge certificate of this node and the listener settings", SilenceUsage: true,
 		RunE: func(c *cobra.Command, _ []string) error {
+			if !Enabled() { // read-only: do not create tables while the module is off
+				h := New(app).Health()
+				if asJSON {
+					return printJSON(c.OutOrStdout(), h)
+				}
+				fmt.Fprintln(c.OutOrStdout(), "enabled:   false (set TOKI_DEVICECERT=on)")
+				return nil
+			}
 			m, err := cliModule(app)
 			if err != nil {
 				return err
@@ -111,7 +126,10 @@ func NewCommand(app core.App) *cobra.Command {
 				return printJSON(c.OutOrStdout(), h)
 			}
 			w := c.OutOrStdout()
-			fmt.Fprintf(w, "enabled:   %v\nrole:      %s\nlisten:    %s\nmtls:      %s\nleaf_days: %d\n", h.Enabled, h.Role, orDash(h.Listen), h.MTLS, h.LeafDays)
+			fmt.Fprintf(w, "enabled:   %v\nrole:      %s\nlisten:    %s\nmtls:      %s\nleaf_days: %d\ncas:       %d\ndeny_list: %d\n", h.Enabled, h.Role, orDash(h.Listen), h.MTLS, h.LeafDays, h.CAs, h.DenyList)
+			if h.HubKeyInDB {
+				fmt.Fprintln(w, "warning:   the hub key is in data.db next to the wrapped CA key (set TOKI_SYNC_HUB_KEY_FILE)")
+			}
 			if h.CAFingerpr != "" {
 				fmt.Fprintf(w, "ca:        %s\n", h.CAFingerpr)
 			}
@@ -169,7 +187,7 @@ func NewCommand(app core.App) *cobra.Command {
 	}
 	list.Flags().BoolVar(&asJSON, "json", false, "output JSON")
 
-	root.AddCommand(ca, status, list)
+	root.AddCommand(ca, status, list, issueCommand(app), revokeCommand(app), rotateCommand(app))
 	return root
 }
 
@@ -178,4 +196,148 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+func issueCommand(app core.App) *cobra.Command {
+	var name, scope, out, p12Pass string
+	var days int
+	var p12 bool
+	cmd := &cobra.Command{
+		Use: "issue", Short: "Hub: issue a client certificate for a LAN peer (gate controller, scanner box)", SilenceUsage: true,
+		Long: "Issues a clientAuth certificate and writes <name>.key.pem (0600), <name>.crt.pem and ca.pem to --out.\n" +
+			"--scope lists the route prefixes the certificate may call without a token (for example\n" +
+			"/api/scan,/api/print,/api/kiosk/status). Without --scope the certificate only proves identity and grants no route.\n" +
+			"--p12 also writes <name>.p12 (needs the openssl binary; the password is --p12-pass or a random one printed once).",
+		RunE: func(c *cobra.Command, _ []string) error {
+			if name == "" {
+				return errors.New("--name is required")
+			}
+			if !validDNS(name) && !validLabel(name) {
+				return errors.New("--name may contain letters, digits, '-', '_' and '.'")
+			}
+			m, err := cliModule(app)
+			if err != nil {
+				return err
+			}
+			cert, err := m.Issue(c.Context(), kernel.DeviceCertRequest{Name: name, Kind: kernel.DeviceCertClient, Days: days, RouteScope: scope})
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(out, 0o700); err != nil {
+				return err
+			}
+			keyPath, crtPath, caPath := filepath.Join(out, name+".key.pem"), filepath.Join(out, name+".crt.pem"), filepath.Join(out, "ca.pem")
+			if err := writeFileAtomic(keyPath, cert.KeyPEM, 0o600); err != nil {
+				return err
+			}
+			if err := writeFileAtomic(crtPath, cert.CertPEM, 0o644); err != nil {
+				return err
+			}
+			if err := writeFileAtomic(caPath, cert.CAPEM, 0o644); err != nil {
+				return err
+			}
+			w := c.OutOrStdout()
+			fmt.Fprintf(w, "serial:     %s\nname:       %s\nnot_after:  %s\nroute_scope: %s\nkey:        %s\ncert:       %s\nca:         %s\n",
+				cert.Serial, cert.Name, cert.NotAfter.UTC().Format(time.RFC3339), orDash(cert.RouteScope), keyPath, crtPath, caPath)
+			if p12 {
+				p12Path := filepath.Join(out, name+".p12")
+				pass := p12Pass
+				if pass == "" {
+					pass = randomPass()
+					fmt.Fprintf(os.Stderr, "p12 password: %s\n", pass)
+				}
+				if err := makeP12(keyPath, crtPath, caPath, p12Path, pass); err != nil {
+					return err
+				}
+				fmt.Fprintf(w, "p12:        %s\n", p12Path)
+			}
+			return nil
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&name, "name", "", "name of the peer (CN), for example gate-ctrl-1")
+	f.IntVar(&days, "days", 90, "validity in days (at most 365)")
+	f.StringVar(&scope, "scope", "", "comma separated route prefixes the certificate may call without a token")
+	f.StringVar(&out, "out", ".", "directory for the PEM files")
+	f.BoolVar(&p12, "p12", false, "also write a PKCS#12 bundle (uses openssl)")
+	f.StringVar(&p12Pass, "p12-pass", "", "password of the .p12 (default: random, printed to stderr)")
+	return cmd
+}
+
+func validLabel(s string) bool {
+	if s == "" || len(s) > 128 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+func randomPass() string {
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// makeP12 builds a PKCS#12 file with the openssl binary (the Go standard
+// library has no encoder). The password goes through the environment, never
+// the command line.
+func makeP12(key, crt, ca, out, pass string) error {
+	bin, err := exec.LookPath("openssl")
+	if err != nil {
+		return errors.New("--p12 needs the openssl binary in PATH")
+	}
+	cmd := exec.Command(bin, "pkcs12", "-export", "-inkey", key, "-in", crt, "-certfile", ca, "-out", out, "-passout", "env:TOKI_P12_PASS")
+	cmd.Env = append(os.Environ(), "TOKI_P12_PASS="+pass)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("openssl pkcs12 failed: %v: %s", err, b)
+	}
+	return os.Chmod(out, 0o600)
+}
+
+func revokeCommand(app core.App) *cobra.Command {
+	return &cobra.Command{
+		Use: "revoke <serial|name>", Short: "Hub: revoke a certificate (a name revokes all its unrevoked certificates)", SilenceUsage: true,
+		Args: cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			m, err := cliModule(app)
+			if err != nil {
+				return err
+			}
+			if err := m.Revoke(c.Context(), args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "revoked %s (nodes learn it with the next sync pull, within a few seconds when online)\n", args[0])
+			return nil
+		},
+	}
+}
+
+func rotateCommand(app core.App) *cobra.Command {
+	var overlap int
+	cmd := &cobra.Command{
+		Use: "rotate-ca", Short: "Hub: add a new CA; the old one stays trusted for the overlap window", SilenceUsage: true,
+		RunE: func(c *cobra.Command, _ []string) error {
+			m, err := cliModule(app)
+			if err != nil {
+				return err
+			}
+			if overlap < 0 {
+				overlap = CAOverlapDays()
+			}
+			ca, retire, err := m.RotateCA(overlap)
+			if err != nil {
+				return err
+			}
+			w := c.OutOrStdout()
+			fmt.Fprintf(w, "new root:    %s\nold root retires: %s\n", ca.Fingerprint(), retire.UTC().Format(time.RFC3339))
+			fmt.Fprintln(w, "Install the new root (toki devicecert ca) on browsers and peers before the old one retires; nodes receive it with their next leaf.")
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&overlap, "overlap-days", -1, "days the old root stays trusted (default TOKI_DEVICECERT_CA_OVERLAP_DAYS, 30)")
+	return cmd
 }

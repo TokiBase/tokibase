@@ -48,8 +48,11 @@ type DeviceCert struct {
 	CertPEM   []byte
 	// KeyPEM is set only by Issue when the provider generated the key.
 	KeyPEM []byte
-	// CAPEM is the root certificate that signed the certificate (set by Issue).
+	// CAPEM is the root bundle (set by Issue): the signing root first, then
+	// rotated-out roots that are still in their overlap.
 	CAPEM []byte
+	// RouteScope is the normalized route allowlist of a client certificate.
+	RouteScope string
 }
 
 // LeafRequest is what a node sends to the hub to get its edge server

@@ -182,6 +182,9 @@ func (c *policyCache) load() (map[string]*policy, error) {
 		out[ref] = p
 		if col, err := c.m.app.FindCachedCollectionByNameOrId(ref); err == nil && col != nil {
 			p.ColID = col.Id
+			if systemAllowed(col) {
+				p.SkipViewRule = true // rules are null by design (syscollections.go)
+			}
 			out[col.Id] = p
 			out[col.Name] = p
 		}
@@ -209,6 +212,9 @@ func (c *policyCache) partitioned() ([]*policy, error) {
 // eligible reports whether col can ever be captured as data: system
 // collections (names starting with "_") and views never are.
 func eligible(col *core.Collection) bool {
+	if systemAllowed(col) { // explicit allowlist (syscollections.go)
+		return true
+	}
 	return col != nil && !col.System && !col.IsView() && len(col.Name) > 0 && col.Name[0] != '_'
 }
 

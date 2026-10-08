@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cast"
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/internal/edgeguard"
 	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/security"
@@ -352,7 +353,7 @@ func (m *Module) Status() map[string]any {
 }
 
 func (m *Module) handleStatus(e *core.RequestEvent) error {
-	if e.Auth == nil {
+	if e.Auth == nil && edgeguard.Device(e) == "" {
 		d, st, code, msg := m.deviceFrom(e)
 		if d == nil {
 			return kioskError(e, st, code, msg)

@@ -17,12 +17,14 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/internal/edgeguard"
 	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/hook"
 )
@@ -64,7 +66,12 @@ type Module struct {
 	deny *denyList
 
 	caMu sync.Mutex
-	ca   *CA
+	cas  *caSet
+
+	infoMu sync.Mutex
+	infos  map[string]certInfo
+
+	deviceThr *edgeguard.Throttle
 
 	pendMu      sync.Mutex
 	pendingSANs []string
@@ -86,7 +93,8 @@ var (
 func New(app core.App) *Module {
 	m := &Module{app: app, now: func() time.Time { return time.Now().UTC() }, lanIPs: lanIPs}
 	m.leaf = newLeafStore(app.DataDir())
-	m.deny = &denyList{m: m, ttl: 15 * time.Second, load: m.loadRevoked}
+	m.deny = &denyList{m: m, ttl: 15 * time.Second, grace: denyGrace, load: m.loadRevoked}
+	m.deviceThr = edgeguard.NewThrottle(30, time.Minute)
 	return m
 }
 
@@ -118,6 +126,7 @@ func Register(app core.App) *Module {
 	})
 	kernel.SetDeviceCerts(app, m)
 	m.bindServe()
+	m.bindHTTP()
 	apis.SetHealthExtra(app, "devicecert", func(core.App) any { return m.Health() })
 	return m
 }
@@ -146,13 +155,64 @@ func wrapSecret(ni kernel.NodeIdentity) ([]byte, error) {
 	return ni.Sign([]byte(caWrapInfo))
 }
 
+// caRefresh is how long the loaded CA set is trusted before the state table is
+// read again (so `toki devicecert rotate-ca` in another process is picked up).
+const caRefresh = 10 * time.Second
+
+// caSet is the CA state: the current (signing) CA and the rotated-out roots.
+type caSet struct {
+	cur    *CA
+	epoch  int
+	old    []Root // RetireAt set; some may be past their overlap
+	raw    string
+	rawOld string
+	at     time.Time
+}
+
+type storedOld struct {
+	CertPEM  string `json:"cert_pem"`
+	RetireAt string `json:"retire_at"`
+}
+
+// roots lists the roots a client certificate may chain to at now.
+func (c *caSet) roots(now time.Time) []Root {
+	out := []Root{{Cert: c.cur.Cert, PEM: c.cur.PEM}}
+	for _, r := range c.old {
+		if r.Active(now) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// bundle is the PEM bundle given to peers: the signing root first, then the
+// rotated-out roots that are still in their overlap (with their retire time).
+func (c *caSet) bundle(now time.Time) []byte {
+	out := append([]byte{}, c.cur.PEM...)
+	for _, r := range c.old {
+		if r.Active(now) {
+			out = append(out, EncodeRoot(r.PEM, r.RetireAt)...)
+		}
+	}
+	return out
+}
+
 // CA loads the hub CA, creating it on first use when create is true. It
 // returns (nil, nil) when there is none and create is false.
 func (m *Module) CA(create bool) (*CA, error) {
+	cs, err := m.loadCAs(create)
+	if err != nil || cs == nil {
+		return nil, err
+	}
+	return cs.cur, nil
+}
+
+func (m *Module) loadCAs(create bool) (*caSet, error) {
 	m.caMu.Lock()
 	defer m.caMu.Unlock()
-	if m.ca != nil {
-		return m.ca, nil
+	now := m.now()
+	if m.cas != nil && now.Sub(m.cas.at) < caRefresh {
+		return m.cas, nil
 	}
 	ni, err := m.hubIdentity()
 	if err != nil {
@@ -174,7 +234,7 @@ func (m *Module) CA(create bool) (*CA, error) {
 		if !create {
 			return nil, nil
 		}
-		ca, err := NewCA(ni.HubID(), m.now())
+		ca, err := NewCA(ni.HubID(), now)
 		if err != nil {
 			return nil, err
 		}
@@ -189,6 +249,17 @@ func (m *Module) CA(create bool) (*CA, error) {
 		if v, ok, err = st.get(stateCA); err != nil || !ok { // another process may have won
 			return nil, errors.Join(err, errors.New("devicecert: the CA was not stored"))
 		}
+		if os.Getenv("TOKI_SYNC_HUB_KEY_FILE") == "" {
+			m.app.Logger().Warn("devicecert: the hub key is stored in data.db next to the wrapped CA key, so a copy of data.db can mint certificates; set TOKI_SYNC_HUB_KEY_FILE to keep the hub key outside the database")
+		}
+	}
+	rawOld, _, err := st.get(stateCAOld)
+	if err != nil {
+		return nil, err
+	}
+	if m.cas != nil && m.cas.raw == v && m.cas.rawOld == rawOld {
+		m.cas.at = now
+		return m.cas, nil
 	}
 	var sc storedCA
 	if err := json.Unmarshal([]byte(v), &sc); err != nil {
@@ -202,8 +273,26 @@ func (m *Module) CA(create bool) (*CA, error) {
 	if err != nil {
 		return nil, err
 	}
-	m.ca = ca
-	return ca, nil
+	cs := &caSet{cur: ca, epoch: sc.Epoch, raw: v, rawOld: rawOld, at: now}
+	if rawOld != "" {
+		var olds []storedOld
+		if err := json.Unmarshal([]byte(rawOld), &olds); err != nil {
+			return nil, fmt.Errorf("devicecert: invalid stored old CAs: %w", err)
+		}
+		for _, o := range olds {
+			c, err := ParseCertPEM([]byte(o.CertPEM))
+			if err != nil {
+				return nil, err
+			}
+			t, err := time.Parse(time.RFC3339, o.RetireAt)
+			if err != nil {
+				return nil, err
+			}
+			cs.old = append(cs.old, Root{Cert: c, PEM: []byte(o.CertPEM), RetireAt: t})
+		}
+	}
+	m.cas = cs
+	return cs, nil
 }
 
 type storedCA struct {
@@ -212,12 +301,68 @@ type storedCA struct {
 	Epoch      int    `json:"epoch"`
 }
 
+// RotateCA creates a new CA. The previous root stays trusted for overlapDays
+// (peers and nodes get both roots in the bundle); the new one signs from now
+// on. The old root is listed with its retire time.
+func (m *Module) RotateCA(overlapDays int) (*CA, time.Time, error) {
+	m.caMu.Lock()
+	m.cas = nil // read the stored state, not a cache
+	m.caMu.Unlock()
+	cs, err := m.loadCAs(true)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	ni, err := m.hubIdentity()
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	secret, err := wrapSecret(ni)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	now := m.now()
+	ca, err := NewCA(ni.HubID(), now)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	wrapped, err := WrapCAKey(secret, ca)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	retire := now.Add(time.Duration(overlapDays) * 24 * time.Hour)
+	olds := []storedOld{{CertPEM: string(cs.cur.PEM), RetireAt: retire.UTC().Format(time.RFC3339)}}
+	for _, r := range cs.old { // drop the roots that are past their overlap
+		if r.Active(now) {
+			olds = append(olds, storedOld{CertPEM: string(r.PEM), RetireAt: r.RetireAt.UTC().Format(time.RFC3339)})
+		}
+	}
+	ob, _ := json.Marshal(olds)
+	nb, _ := json.Marshal(storedCA{CertPEM: string(ca.PEM), KeyWrapped: base64.StdEncoding.EncodeToString(wrapped), Epoch: cs.epoch + 1})
+	st := stateDB{m.app}
+	// the old list first: a crash between the two leaves the previous root
+	// both current and listed, which is harmless
+	if err := st.put(stateCAOld, string(ob)); err != nil {
+		return nil, time.Time{}, err
+	}
+	if err := st.put(stateCA, string(nb)); err != nil {
+		return nil, time.Time{}, err
+	}
+	m.caMu.Lock()
+	m.cas = nil
+	m.caMu.Unlock()
+	audit("devicecert.rotate_ca", Fingerprint(ca.Cert.Raw), map[string]any{
+		"new": Fingerprint(ca.Cert.Raw), "old": Fingerprint(cs.cur.Cert.Raw), "overlap_until": retire.UTC().Format(time.RFC3339), "epoch": cs.epoch + 1,
+	})
+	return ca, retire, nil
+}
+
 // Issue implements [kernel.DeviceCertProvider]. Only the hub issues.
 func (m *Module) Issue(ctx context.Context, req kernel.DeviceCertRequest) (*kernel.DeviceCert, error) {
-	ca, err := m.CA(true)
+	cs, err := m.loadCAs(true)
 	if err != nil {
 		return nil, err
 	}
+	ca := cs.cur
 	kind := req.Kind
 	if kind == "" {
 		kind = kernel.DeviceCertServer
@@ -244,8 +389,17 @@ func (m *Module) Issue(ctx context.Context, req kernel.DeviceCertRequest) (*kern
 		}
 	}
 	sans := req.SANs
+	scope := ""
 	if kind == kernel.DeviceCertServer && req.Node != "" {
+		if !validDNS(req.Node + NodeDNSSuffix) {
+			return nil, fmt.Errorf("devicecert: node id %q is not usable as a DNS label", req.Node)
+		}
 		sans = append(append([]string{}, sans...), req.Node+NodeDNSSuffix)
+	}
+	if kind == kernel.DeviceCertClient {
+		if scope, err = NormalizeScope(req.RouteScope); err != nil {
+			return nil, err
+		}
 	}
 	dns, ips := SplitSANs(sans)
 	days := req.Days
@@ -257,16 +411,16 @@ func (m *Module) Issue(ctx context.Context, req kernel.DeviceCertRequest) (*kern
 		return nil, err
 	}
 	serial := SerialHex(cert.SerialNumber)
-	if err := m.insertCert(serial, name, kind, req.Node, cert.NotAfter, req.RouteScope); err != nil {
+	if err := m.insertCert(serial, name, kind, req.Node, cert.NotAfter, scope); err != nil {
 		return nil, fmt.Errorf("devicecert: failed to record the certificate: %w", err)
 	}
 	audit("devicecert.issue", serial, map[string]any{
 		"name": name, "kind": string(kind), "node": req.Node, "not_after": cert.NotAfter.UTC().Format(time.RFC3339),
-		"dns": dns, "ips": ipStrings(ips),
+		"dns": dns, "ips": ipStrings(ips), "route_scope": scope,
 	})
 	return &kernel.DeviceCert{
 		Serial: serial, Name: name, Kind: kind, Node: req.Node, NotAfter: cert.NotAfter,
-		CertPEM: certPEM, KeyPEM: keyPEM, CAPEM: ca.PEM,
+		CertPEM: certPEM, KeyPEM: keyPEM, CAPEM: cs.bundle(m.now()), RouteScope: scope,
 	}, nil
 }
 
@@ -287,23 +441,26 @@ func (m *Module) Lookup(ctx context.Context, serialOrName string) (*kernel.Devic
 	return recordToCert(r), nil
 }
 
-// Revoke implements [kernel.DeviceCertProvider].
+// Revoke implements [kernel.DeviceCertProvider]. A serial revokes one
+// certificate; a name revokes every unrevoked certificate of that name (a
+// node's leaves, or all certificates issued to one LAN peer).
 func (m *Module) Revoke(ctx context.Context, serialOrName string) error {
-	r, err := m.find(serialOrName)
+	rows, err := m.revokeTargets(serialOrName)
 	if err != nil {
 		return err
 	}
-	if !r.GetDateTime("revoked_at").IsZero() {
-		return nil
+	for _, r := range rows {
+		if !r.GetDateTime("revoked_at").IsZero() {
+			continue
+		}
+		r.Set("revoked_at", m.now().UTC().Format("2006-01-02 15:04:05.000Z"))
+		if err := m.app.Save(r); err != nil {
+			return err
+		}
+		audit("devicecert.revoke", r.GetString("serial"), map[string]any{"name": r.GetString("name"), "node": r.GetString("node"), "kind": r.GetString("kind")})
 	}
-	r.Set("revoked_at", m.now().UTC().Format("2006-01-02 15:04:05.000Z"))
-	if err := m.app.Save(r); err != nil {
-		return err
-	}
-	m.deny.mu.Lock()
-	m.deny.set = nil
-	m.deny.mu.Unlock()
-	audit("devicecert.revoke", r.GetString("serial"), map[string]any{"name": r.GetString("name"), "node": r.GetString("node")})
+	m.deny.reset()
+	m.resetInfos()
 	return nil
 }
 
@@ -321,7 +478,13 @@ func (m *Module) selfIssue(ctx context.Context) error {
 		return err
 	}
 	wanted := m.wantedSANs()
-	if !m.leaf.due(m.now(), wanted) {
+	cs, err := m.loadCAs(true)
+	if err != nil {
+		return err
+	}
+	leaf, _, _ := m.leaf.current()
+	// a rotated CA signs the hub leaf again at once
+	if !m.leaf.due(m.now(), wanted) && leaf != nil && leaf.CheckSignatureFrom(cs.cur.Cert) == nil {
 		return nil
 	}
 	spki, err := m.leaf.spki()
@@ -333,7 +496,7 @@ func (m *Module) selfIssue(ctx context.Context) error {
 		return err
 	}
 	m.leaf.setLastReq(wanted)
-	return m.leaf.install(c.CertPEM, c.CAPEM, true)
+	return m.leaf.install(c.CertPEM, c.CAPEM, true, false)
 }
 
 // ---- node side ----------------------------------------------------------
@@ -356,7 +519,16 @@ func (m *Module) LeafRequest(now time.Time) (*kernel.LeafRequest, error) {
 
 // InstallLeaf implements [kernel.EdgeLeafProvider].
 func (m *Module) InstallLeaf(certPEM, caPEM []byte) error {
-	if err := m.leaf.install(certPEM, caPEM, true); err != nil {
+	if ni := kernel.NodeIdentityOf(m.app); ni != nil && ni.NodeID() != "" {
+		leaf, err := ParseCertPEM(certPEM)
+		if err != nil {
+			return err
+		}
+		if err := leaf.VerifyHostname(ni.NodeID() + NodeDNSSuffix); err != nil {
+			return fmt.Errorf("devicecert: the leaf does not carry the node name %s%s", ni.NodeID(), NodeDNSSuffix)
+		}
+	}
+	if err := m.leaf.install(certPEM, caPEM, true, true); err != nil {
 		return err
 	}
 	m.pendMu.Lock()
@@ -390,6 +562,15 @@ type Health struct {
 	LeafDays   int       `json:"leaf_days"`
 	RenewDue   bool      `json:"renew_due"`
 	LastError  string    `json:"last_error,omitempty"`
+	// DenyList is the number of revoked serials this node refuses.
+	DenyList int `json:"deny_list"`
+	// CAs is the number of roots trusted now (the signing root plus the
+	// rotated-out ones inside their overlap).
+	CAs int `json:"cas"`
+	// HubKeyInDB is true on a hub that keeps its key in data.db next to the
+	// wrapped CA key (no TOKI_SYNC_HUB_KEY_FILE): the wrapping then protects
+	// nothing against a copy of data.db.
+	HubKeyInDB bool `json:"hub_key_in_db,omitempty"`
 }
 
 // Health reports the state of this node.
@@ -409,6 +590,16 @@ func (m *Module) Health() *Health {
 	}
 	if root != nil {
 		h.CAFingerpr = Fingerprint(root.Raw)
+	}
+	h.CAs = m.leaf.rootCount()
+	if h.Role == "hub" {
+		h.HubKeyInDB = os.Getenv("TOKI_SYNC_HUB_KEY_FILE") == ""
+		if cs, _ := m.loadCAs(false); cs != nil {
+			h.CAs = len(cs.roots(m.now()))
+		}
+	}
+	if Enabled() {
+		h.DenyList = m.deny.size()
 	}
 	return h
 }

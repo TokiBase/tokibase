@@ -125,13 +125,13 @@ func check(e *core.ServeEvent, mode Mode) error {
 	if !Exposed(in) {
 		return nil
 	}
-	if addr := edgeTLSAddr(); addr != "" {
-		// clients have an encrypted, authenticated door: the plain port is the
-		// local one (kiosk on the same host, health checks)
-		e.App.Logger().Info("tlscheck: plain HTTP is also served, but modules/devicecert serves HTTPS", "plain", in.Addr, "tls", addr)
-		return nil
-	}
 	msg := Message(in.Addr)
+	// modules/devicecert serves HTTPS on a second port, but that does not close
+	// the plain one (it carries the same routes, superuser login included), so
+	// strict mode keeps refusing; bind the plain port to loopback instead.
+	if addr := edgeTLSAddr(); addr != "" {
+		msg += " modules/devicecert serves HTTPS on " + addr + " but the plain port stays open: bind --http to 127.0.0.1."
+	}
 	if mode == ModeStrict {
 		return fmt.Errorf("%s (TOKI_TLS_CHECK=strict: refusing to start)", msg)
 	}

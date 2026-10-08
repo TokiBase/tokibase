@@ -30,6 +30,8 @@ const (
 	devCertNodeSuffix = ".edge.toki.local"
 	// devCertRetry is the wait after a failed renewal.
 	devCertRetry = 5 * time.Minute
+	// devCertMinGap is the shortest time between two renewals.
+	devCertMinGap = time.Minute
 )
 
 // devCertDNSSuffixes are the DNS suffixes a node may ask for besides its own
@@ -72,12 +74,34 @@ func (m *Module) bindDevCert() {
 	}
 }
 
-// devCertSANs keeps the addresses and names a node may get in its leaf: valid
-// IPs (not unspecified, multicast or link-local) and DNS names under private
-// suffixes. Names under .edge.toki.local belong to the hub, which adds the
-// node's own.
+// devCertMaxDNS bounds the DNS names a node may get besides its own.
+const devCertMaxDNS = 4
+
+// hubLocalIPs lists the non-loopback addresses of the hub's own interfaces: a
+// node can not get a certificate for them (tests replace it).
+var hubLocalIPs = func() map[string]bool {
+	out := map[string]bool{}
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() {
+			out[ipn.IP.String()] = true
+		}
+	}
+	return out
+}
+
+var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+// devCertSANs keeps the addresses and names a node may get in its leaf: IPs of
+// the private ranges (RFC 1918, ULA, carrier-grade NAT) or loopback, never a
+// public address, a link-local one, or an address of the hub itself; DNS names
+// under private suffixes, at most [devCertMaxDNS], never the bare
+// edge.toki.local or a name under it (those belong to nodes, and the hub adds
+// the node's own).
 func devCertSANs(sans []string) []string {
+	hub := hubLocalIPs()
 	out := make([]string, 0, len(sans))
+	dns := 0
 	for _, s := range sans {
 		s = strings.ToLower(strings.TrimSpace(s))
 		if s == "" || len(out) >= devCertMaxSANs {
@@ -87,15 +111,19 @@ func devCertSANs(sans []string) []string {
 			if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 				continue
 			}
+			if !(ip.IsLoopback() || ip.IsPrivate() || cgnat.Contains(ip)) || hub[ip.String()] {
+				continue
+			}
 			out = append(out, ip.String())
 			continue
 		}
-		if strings.HasSuffix(s, devCertNodeSuffix) {
+		if s == strings.TrimPrefix(devCertNodeSuffix, ".") || strings.HasSuffix(s, devCertNodeSuffix) || dns >= devCertMaxDNS {
 			continue
 		}
 		for _, suf := range devCertDNSSuffixes {
 			if strings.HasSuffix(s, suf) && len(s) > len(suf) {
 				out = append(out, s)
+				dns++
 				break
 			}
 		}
@@ -142,6 +170,7 @@ func (m *Module) devCertLoop(ctx context.Context) {
 	t := time.NewTicker(client.DevCertPollInterval)
 	defer t.Stop()
 	var retryAt time.Time
+	failures := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -151,9 +180,27 @@ func (m *Module) devCertLoop(ctx context.Context) {
 		if time.Now().Before(retryAt) {
 			continue
 		}
-		if err := m.RenewDevCert(ctx); err != nil {
-			m.app.Logger().Warn("sync: failed to renew the edge certificate", "error", err)
-			retryAt = time.Now().Add(devCertRetry)
+		err := m.RenewDevCert(ctx)
+		switch {
+		case err == nil:
+			retryAt = time.Now().Add(devCertMinGap) // a skewed clock must not renew in a loop
+			failures = 0
+		case client.IsCode(err, proto.CodeNodeRevoked):
+			m.app.Logger().Warn("sync: this node is revoked, the edge certificate is no longer renewed")
+			return
+		case client.IsCode(err, CodeDevCertUnavailable):
+			if failures == 0 {
+				m.app.Logger().Warn("sync: the hub does not issue device certificates (TOKI_DEVICECERT=on on the hub), retrying hourly")
+			}
+			failures++
+			retryAt = time.Now().Add(time.Hour)
+		default:
+			failures++
+			wait := min(devCertRetry<<min(failures-1, 4), time.Hour)
+			if failures == 1 || failures%10 == 0 {
+				m.app.Logger().Warn("sync: failed to renew the edge certificate", "error", err, "retry_in", wait.String())
+			}
+			retryAt = time.Now().Add(wait)
 		}
 	}
 }

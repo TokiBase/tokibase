@@ -64,7 +64,7 @@ func (m *Module) bindRealtime() {
 
 func actorOf(e *core.RequestEvent) string {
 	if e.Auth == nil {
-		return ""
+		return edgeguard.DeviceActor(e)
 	}
 	return e.Auth.Collection().Name + "/" + e.Auth.Id
 }
@@ -139,7 +139,7 @@ func (m *Module) handleScan(e *core.RequestEvent) error {
 	if sc == nil {
 		return scanError(e, status, "scan_scanner", msg, "")
 	}
-	if !canPost(sc, e.Auth) {
+	if edgeguard.Device(e) == "" && !canPost(sc, e.Auth) {
 		return scanError(e, http.StatusForbidden, "scan_forbidden", "this account may not post scans to this scanner", "")
 	}
 	seq := seqString(req.ClientSeq)
@@ -165,7 +165,7 @@ func (m *Module) handleScan(e *core.RequestEvent) error {
 }
 
 func (m *Module) handleEvents(e *core.RequestEvent) error {
-	if !allowedAuth(e.Auth) {
+	if edgeguard.Device(e) == "" && !allowedAuth(e.Auth) {
 		return e.ForbiddenError("This account may not read scans (see TOKI_SCAN_TOPIC_AUTH and TOKI_SCAN_READ_AUTH).", nil)
 	}
 	limit, _ := strconv.Atoi(e.Request.URL.Query().Get("limit"))
@@ -177,7 +177,7 @@ func (m *Module) handleEvents(e *core.RequestEvent) error {
 }
 
 func (m *Module) handleScanners(e *core.RequestEvent) error {
-	if !allowedAuth(e.Auth) && !edgeguard.ParseAllow(os.Getenv("TOKI_SCAN_POST_COLLECTIONS")).Match(e.Auth) && postMode() != modeAuth {
+	if edgeguard.Device(e) == "" && !allowedAuth(e.Auth) && !edgeguard.ParseAllow(os.Getenv("TOKI_SCAN_POST_COLLECTIONS")).Match(e.Auth) && postMode() != modeAuth {
 		return e.ForbiddenError("This account may not list the scanners.", nil)
 	}
 	st := m.Status()
@@ -195,9 +195,9 @@ func (m *Module) bindRoutes() {
 		Func: func(se *core.ServeEvent) error {
 			g := se.Router
 			g.POST("/api/scan", m.handleScan).
-				Bind(apis.BodyLimit(8<<10), rateTag("scan"), apis.RequireAuth())
-			g.GET("/api/scan/events", m.handleEvents).Bind(apis.SkipSuccessActivityLog(), apis.RequireAuth())
-			g.GET("/api/scan/scanners", m.handleScanners).Bind(apis.SkipSuccessActivityLog(), apis.RequireAuth())
+				Bind(apis.BodyLimit(8<<10), rateTag("scan"), edgeguard.RequireAuthOrDevice())
+			g.GET("/api/scan/events", m.handleEvents).Bind(apis.SkipSuccessActivityLog(), edgeguard.RequireAuthOrDevice())
+			g.GET("/api/scan/scanners", m.handleScanners).Bind(apis.SkipSuccessActivityLog(), edgeguard.RequireAuthOrDevice())
 			g.GET("/scan/wedge.js", func(e *core.RequestEvent) error {
 				h := e.Response.Header()
 				h.Set("Content-Type", "application/javascript; charset=utf-8")

@@ -88,22 +88,19 @@ func TestTLSRequested(t *testing.T) {
 	}
 }
 
-// With the devicecert TLS listener on, strict mode no longer refuses a plain
-// listener on all interfaces; a stubbed devicecert module does not count.
-func TestEdgeTLSListenerSuppresses(t *testing.T) {
+// The devicecert TLS listener does not silence the check: the plain port stays
+// open, so strict mode keeps refusing (and the message points at loopback).
+func TestEdgeTLSListenerDoesNotSuppress(t *testing.T) {
 	t.Setenv("TOKI_TLS_CHECK", "strict")
 	kernel.RegisterModuleMarker("devicecert", nil, nil, false)
 	defer kernel.RegisterModuleMarker("devicecert", nil, nil, true)
 	t.Setenv("TOKI_DEVICECERT", "on")
-	if err := serve(t, "0.0.0.0:8090", nil); err == nil {
-		t.Fatal("no TOKI_DEVICECERT_LISTEN: strict must still refuse")
-	}
 	t.Setenv("TOKI_DEVICECERT_LISTEN", ":8443")
-	if err := serve(t, "0.0.0.0:8090", nil); err != nil {
-		t.Fatalf("edge TLS listener on: %v", err)
+	err := serve(t, "0.0.0.0:8090", nil)
+	if err == nil || !strings.Contains(err.Error(), "127.0.0.1") {
+		t.Fatalf("strict must still refuse and say why: %v", err)
 	}
-	kernel.RegisterModuleMarker("devicecert", nil, nil, true)
-	if err := serve(t, "0.0.0.0:8090", nil); err == nil {
-		t.Fatal("a stubbed devicecert must not silence the check")
+	if err := serve(t, "127.0.0.1:8090", nil); err != nil {
+		t.Fatalf("loopback is not exposed: %v", err)
 	}
 }
