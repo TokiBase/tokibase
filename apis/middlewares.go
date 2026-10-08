@@ -6,9 +6,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/spf13/cast"
@@ -374,6 +377,11 @@ func logRequest(event *core.RequestEvent, err error) {
 		return
 	}
 
+	// TOKI_LOGS_SAMPLE_OK: keep only 1 of N successful GET requests
+	if err == nil && !keepSampledSuccessLog(event) {
+		return
+	}
+
 	attrs := make([]any, 0, 15)
 
 	attrs = append(attrs, slog.String("type", "request"))
@@ -469,4 +477,26 @@ func cutStr(str string, max int) string {
 		return str[:max] + "..."
 	}
 	return str
+}
+
+// EnvLogsSampleOK keeps 1 of every N successful (status < 400) GET request
+// logs. 1 (default) logs all of them; errors and non-GET requests are always logged.
+const EnvLogsSampleOK = "TOKI_LOGS_SAMPLE_OK"
+
+var (
+	logSampleOKN       = sync.OnceValue(func() uint64 { return uint64(max(1, cast.ToInt(strings.TrimSpace(os.Getenv(EnvLogsSampleOK))))) })
+	logSampleOKCounter atomic.Uint64
+)
+
+func keepSampledSuccessLog(event *core.RequestEvent) bool {
+	n := logSampleOKN()
+	if n <= 1 || event.Request.Method != http.MethodGet {
+		return true
+	}
+
+	if status := event.Status(); status >= 400 {
+		return true
+	}
+
+	return logSampleOKCounter.Add(1)%n == 1
 }

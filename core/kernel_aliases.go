@@ -31,6 +31,8 @@ type (
 	DBConn                   = kernel.DBConn
 	DBConnectFunc            = kernel.DBConnectFunc
 	DBOpener                 = kernel.DBOpener
+	DBStatus                 = kernel.DBStatus
+	WALStatus                = kernel.WALStatus
 	DBExporter               = kernel.DBExporter
 	DateField                = kernel.DateField
 	DriverValuer             = kernel.DriverValuer
@@ -117,6 +119,7 @@ var (
 	DefaultFieldIdValidationRule   = kernel.DefaultFieldIdValidationRule
 	DefaultFieldNameValidationRule = kernel.DefaultFieldNameValidationRule
 	GenerateDefaultRandomId        = kernel.GenerateDefaultRandomId
+	GenerateBackupName             = kernel.GenerateBackupName
 	NewAuthCollection              = kernel.NewAuthCollection
 	NewAuthOrigin                  = kernel.NewAuthOrigin
 	NewBaseCollection              = kernel.NewBaseCollection

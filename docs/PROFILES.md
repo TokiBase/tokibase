@@ -60,6 +60,31 @@ Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.  darw
 
 **Tags are for fresh data dirs.** Tags are independent at build time (CI and `profiles_test.go` build every single tag and all tags together), but a binary built with `no_<module>` is NOT safe on a `pb_data` that was used by a build containing that module: the guards of the module (field encryption, field permissions, computed-field write protection, session revocation, lockout, ...) silently disappear while their data stays. Removing a module also removes its CLI commands (`toki passkey`, `toki audit`, ...); `toki backup` keeps `create` but loses `list`/`verify`/`verify-all` under `no_backupcheck`.
 
+## Sizing for a 1 GB VPS
+
+`solo` fits a 1 GB host only with a bounded SQLite pool. Measured on the FGR dataset (215 collections, 56k records, `data.db` 55 MB) under 200 concurrent list requests with `sort`, `filter` and `expand`: each pooled read connection adds about 12 MB of RSS (page cache plus the sort buffers of its running query), the idle process is about 80-130 MB. The queries are CPU bound, so a larger pool only queues work inside SQLite. Details and numbers: [CAPACITY.md](CAPACITY.md).
+
+| Env | Default | What it does | 1 GB VPS (1-2 vCPU) |
+| --- | --- | --- | --- |
+| `TOKI_DB_MAX_CONNS` | `2 x CPUs`, between 16 and 120 | size of the `data.db` read pool | `8` (about 100 MB at full load, extrapolated from 12 MB per connection, not measured on a 1 GB host) |
+| `TOKI_DB_CACHE_KB` | `8192` | `cache_size` of every connection, in KiB (was 32000) | `4096` |
+| `TOKI_DB_TEMP_STORE` | `memory` | `file` keeps big sorts out of RAM; needs a writable `SQLITE_TMPDIR`/`TMPDIR` or `/tmp` | `memory` |
+| `TOKI_DB_HEAP_MB` | `0` (off) | SQLite soft heap limit for the process | leave off (did not lower RSS in the read test) |
+| `TOKI_DB_MMAP_MB` | `0` (off) | `mmap_size` of every connection | leave off |
+| `TOKI_WAL_MAX_MB` | `256` | WAL size above which the minutely maintenance runs a truncating checkpoint (`0` = never) | `64` |
+| `TOKI_LOGS_MAX_MB` | `512` | cap of the live size of `auxiliary.db`; the oldest request logs are pruned above it (`0` = off) | `128` |
+| `TOKI_LOGS_SAMPLE_OK` | `1` | keep 1 of N successful `GET` request logs (errors and writes are always logged) | `10` |
+
+Also set `GOMEMLIMIT` (for example `GOMEMLIMIT=400MiB`) so the Go heap collects earlier. It does not count the memory the SQLite engine allocates (about 12 MB per busy connection), which is what `TOKI_DB_MAX_CONNS` bounds. Example systemd drop-in:
+
+```ini
+[Service]
+Environment=TOKI_DB_MAX_CONNS=8 TOKI_DB_CACHE_KB=4096 TOKI_WAL_MAX_MB=64 TOKI_LOGS_MAX_MB=128 TOKI_LOGS_SAMPLE_OK=10 GOMEMLIMIT=400MiB
+MemoryMax=900M
+```
+
+Every pooled query waits for a free connection, so a pool smaller than the number of long reads you run in parallel (exports, big lists) adds queueing; watch `data.db.data.pool.waitCount` in `GET /api/health` (superuser) and raise `TOKI_DB_MAX_CONNS` when it grows steadily.
+
 ## Library tags (not modules)
 
 Three more tags compile out library code in `tools/*`. They are not modules: no marker, no system collection, no boot guard, so data written with them stays valid (only the feature is missing at run time). nano uses all three; solo, team, cluster and edge use none.
