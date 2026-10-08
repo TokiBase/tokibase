@@ -39,6 +39,8 @@ jget() { python3 -c "import sys,json; d=json.load(sys.stdin); print($1)"; }
 fail() {
   log "FAIL: $*"
   for f in "$TMP"/*.log; do echo "--- $f" >&2; tail -30 "$f" >&2; done
+  echo "--- hub conflicts" >&2; hubtoki sync conflicts 2>&1 | tail -15 >&2 || true
+  echo "--- spoke conflicts" >&2; spoketoki sync conflicts 2>&1 | tail -15 >&2 || true
   echo "--- spoke sync status" >&2; spoketoki sync status 2>&1 | tail -15 >&2 || true
   exit 1
 }
