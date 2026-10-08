@@ -122,21 +122,41 @@ func (i *Identity) KX() []byte { return i.X.PublicKey().Bytes() }
 // NodeID is the id derived from the signing key.
 func (i *Identity) NodeID() string { return NodeID(i.Pub()) }
 
-// SigningDigest is sha256(method|path|ts|nonce|sha256(body)), the message of a
-// signed request (docs/SYNC_DESIGN.md §1.5). The body hash is hex.
-func SigningDigest(method, path, ts, nonce string, body []byte) []byte {
+// Headers of the hub answer that carry its signed time (docs/SYNC_DESIGN.md §3.7).
+const (
+	HeaderServerTime = "X-Toki-Server-Time"
+	HeaderServerSig  = "X-Toki-Server-Sig"
+)
+
+// NormalizeHost is the host form that enters the signed string: lower case,
+// the default ports :80 and :443 and a trailing dot removed.
+func NormalizeHost(host string) string {
+	h := strings.ToLower(strings.TrimSpace(host))
+	for _, p := range []string{":443", ":80"} {
+		h = strings.TrimSuffix(h, p)
+	}
+	return strings.TrimSuffix(h, ".")
+}
+
+// SigningDigest is sha256(METHOD|path|host|hub_id|ts|nonce|sha256(body)), the
+// message of a signed request (docs/SYNC_DESIGN.md §1.5). METHOD is upper
+// case, host is NormalizeHost of the hub host the request is addressed to,
+// hub_id is the id of the hub the node enrolled on, the body hash is hex.
+// Binding host and hub id means a captured request is useless against any
+// other hub or host.
+func SigningDigest(method, path, host, hubID, ts, nonce string, body []byte) []byte {
 	bh := sha256.Sum256(body)
-	h := sha256.Sum256([]byte(strings.ToUpper(method) + "|" + path + "|" + ts + "|" + nonce + "|" + hex.EncodeToString(bh[:])))
+	h := sha256.Sum256([]byte(strings.ToUpper(method) + "|" + path + "|" + NormalizeHost(host) + "|" + hubID + "|" + ts + "|" + nonce + "|" + hex.EncodeToString(bh[:])))
 	return h[:]
 }
 
 // SignRequest returns the base64 signature header value.
-func SignRequest(priv ed25519.PrivateKey, method, path, ts, nonce string, body []byte) string {
-	return base64.StdEncoding.EncodeToString(ed25519.Sign(priv, SigningDigest(method, path, ts, nonce, body)))
+func SignRequest(priv ed25519.PrivateKey, method, path, host, hubID, ts, nonce string, body []byte) string {
+	return base64.StdEncoding.EncodeToString(ed25519.Sign(priv, SigningDigest(method, path, host, hubID, ts, nonce, body)))
 }
 
 // VerifyRequest checks a signature header value.
-func VerifyRequest(pub ed25519.PublicKey, method, path, ts, nonce string, body []byte, sig string) bool {
+func VerifyRequest(pub ed25519.PublicKey, method, path, host, hubID, ts, nonce string, body []byte, sig string) bool {
 	if len(pub) != ed25519.PublicKeySize {
 		return false
 	}
@@ -144,7 +164,31 @@ func VerifyRequest(pub ed25519.PublicKey, method, path, ts, nonce string, body [
 	if err != nil || len(s) != ed25519.SignatureSize {
 		return false
 	}
-	return ed25519.Verify(pub, SigningDigest(method, path, ts, nonce, body), s)
+	return ed25519.Verify(pub, SigningDigest(method, path, host, hubID, ts, nonce, body), s)
+}
+
+func serverTimeDigest(node, ts, nonce, serverTime string) []byte {
+	h := sha256.Sum256([]byte("toki-sync-time|" + node + "|" + ts + "|" + nonce + "|" + serverTime))
+	return h[:]
+}
+
+// SignServerTime is the hub signature over its time, bound to the request it
+// answers (node, ts and nonce of the signed handshake), so that it can not be
+// replayed for another request.
+func SignServerTime(hubPriv ed25519.PrivateKey, node, ts, nonce, serverTime string) string {
+	return base64.StdEncoding.EncodeToString(ed25519.Sign(hubPriv, serverTimeDigest(node, ts, nonce, serverTime)))
+}
+
+// VerifyServerTime checks SignServerTime with the stored hub public key.
+func VerifyServerTime(hubPub ed25519.PublicKey, node, ts, nonce, serverTime, sig string) bool {
+	if len(hubPub) != ed25519.PublicKeySize {
+		return false
+	}
+	s, err := base64.StdEncoding.DecodeString(sig)
+	if err != nil || len(s) != ed25519.SignatureSize {
+		return false
+	}
+	return ed25519.Verify(hubPub, serverTimeDigest(node, ts, nonce, serverTime), s)
 }
 
 // NewNonce returns a random request nonce.
@@ -156,6 +200,10 @@ func NewNonce() string {
 
 // CertValidity is the lifetime of a device certificate.
 const CertValidity = 365 * 24 * time.Hour
+
+// CertRenewBefore is the remaining validity under which the hub returns a
+// fresh certificate in the handshake answer.
+const CertRenewBefore = 30 * 24 * time.Hour
 
 // CertClaims are the claims of a device certificate (§1.4): iss=hub id,
 // sub=node id, pub/kx=base64 public keys, params=partition params, ser=serial.

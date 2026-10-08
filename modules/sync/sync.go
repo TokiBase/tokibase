@@ -95,6 +95,8 @@ type Module struct {
 	spoke *proto.Identity
 	// nonces guards the signed handshake against replays (hub).
 	nonces nonceCache
+	// guards holds the per-IP throttles and counters of the hub routes.
+	guards hubGuards
 
 	// stash maps the record of a client request to its actor (see actor.go).
 	stash stdsync.Map // *core.Record -> string
@@ -208,7 +210,7 @@ func (m *Module) Init() error {
 		if err := EnsureNodesCollection(m.app); err != nil {
 			return err
 		}
-		h, err := loadHubIdentity(st)
+		h, err := loadHubIdentity(st, m.app.Logger().Warn)
 		if err != nil {
 			return err
 		}

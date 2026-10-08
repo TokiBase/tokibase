@@ -5,11 +5,13 @@ package sync
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -19,6 +21,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/modules/sync/client"
 	"github.com/tokibase/tokibase/modules/sync/proto"
 	"github.com/tokibase/tokibase/tests"
@@ -241,7 +244,7 @@ func TestEnrollSingleUseAndErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the row must carry the key-derived id: %v", err)
 	}
-	if node.GetString("status") != NodeActive || node.GetString("enroll_hash") != "" ||
+	if node.GetString("status") != NodeActive || node.GetString("enroll_hash") == "" ||
 		node.GetString("pubkey") != b64(s.m.Identity().Pub()) || node.GetString("cert_serial") == "" || node.GetString("name") != "gate-1" {
 		t.Fatalf("node row: %v", node.FieldsData())
 	}
@@ -253,7 +256,17 @@ func TestEnrollSingleUseAndErrors(t *testing.T) {
 		t.Fatalf("cursor: %+v", cur)
 	}
 
-	// used: same answer as for a bad code
+	// a lost answer: the same key and code are answered again until the first handshake
+	if st2, _, raw2 := post(code, s.m.Identity().Pub(), s.m.Identity().KX()); st2 != 200 {
+		t.Fatalf("idempotent retry: %d %s", st2, raw2)
+	}
+	if node2, _ := h.app.FindRecordById(NodesCollection, res.NodeID); node2.GetString("cert_serial") != node.GetString("cert_serial") {
+		t.Fatal("the reissued certificate keeps its serial")
+	}
+	if _, err := s.client(t, h).Handshake(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// used (first handshake done): same answer as for a bad code
 	st2, e2, raw2 := post(code, s.m.Identity().Pub(), s.m.Identity().KX())
 	if st2 != st1 || e2.Message != e1.Message || e2.Data["code"] != e1.Data["code"] {
 		t.Fatalf("used code must look like a bad code: %s vs %s", raw1, raw2)
@@ -402,13 +415,25 @@ type rawHS struct {
 
 func (r rawHS) send(t *testing.T, mut func(hdr http.Header, body *[]byte), ts time.Time, nonce string) (int, proto.ErrorBody) {
 	t.Helper()
+	st, eb, _, _ := r.sendFull(t, mut, ts, nonce)
+	return st, eb
+}
+
+// sign signs like the client: the host of the hub URL and the hub id are part of the string.
+func (r rawHS) sign(priv ed25519.PrivateKey, body []byte, ts, nonce string) string {
+	u, _ := url.Parse(r.h.srv.URL)
+	return proto.SignRequest(priv, "POST", proto.PathHandshake, u.Host, r.h.m.HubID(), ts, nonce, body)
+}
+
+func (r rawHS) sendFull(t *testing.T, mut func(hdr http.Header, body *[]byte), ts time.Time, nonce string) (int, proto.ErrorBody, []byte, http.Header) {
+	t.Helper()
 	body, _ := json.Marshal(proto.HandshakeRequest{NodeID: r.s.m.NodeID(), Cert: r.cert, ClientTime: ts.UTC().Format(proto.TimeLayout)})
 	tss := strconv.FormatInt(ts.UnixMilli(), 10)
 	hdr := http.Header{}
 	hdr.Set(proto.HeaderNode, r.s.m.NodeID())
 	hdr.Set(proto.HeaderSigTs, tss)
 	hdr.Set(proto.HeaderNonce, nonce)
-	hdr.Set(proto.HeaderSig, proto.SignRequest(r.s.m.Identity().Ed, "POST", proto.PathHandshake, tss, nonce, body))
+	hdr.Set(proto.HeaderSig, r.sign(r.s.m.Identity().Ed, body, tss, nonce))
 	if mut != nil {
 		mut(hdr, &body)
 	}
@@ -419,9 +444,18 @@ func (r rawHS) send(t *testing.T, mut func(hdr http.Header, body *[]byte), ts ti
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
 	var eb proto.ErrorBody
-	_ = json.NewDecoder(res.Body).Decode(&eb)
-	return res.StatusCode, eb
+	_ = json.Unmarshal(raw, &eb)
+	return res.StatusCode, eb, raw, res.Header
+}
+
+// resetFloor clears the persisted replay floor of the node (tests that use timestamps out of order).
+func resetFloor(t *testing.T, h *hubEnv, node string) {
+	t.Helper()
+	if _, err := h.app.NonconcurrentDB().NewQuery("UPDATE _sync_nodes SET sig_ts_floor=0 WHERE id={:i}").Bind(dbx.Params{"i": node}).Execute(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSignedHandshakeRules(t *testing.T) {
@@ -434,7 +468,7 @@ func TestSignedHandshakeRules(t *testing.T) {
 	if st, eb := r.send(t, nil, now, "nonce-ok-1"); st != 200 {
 		t.Fatalf("valid: %d %v", st, eb)
 	}
-	// replay of the same nonce
+	// replay of the same request (same nonce, same ts)
 	if st, eb := r.send(t, nil, now, "nonce-ok-1"); st != 401 || eb.Data["code"] != proto.CodeUnauthorized {
 		t.Fatalf("replay: %d %v", st, eb)
 	}
@@ -443,9 +477,10 @@ func TestSignedHandshakeRules(t *testing.T) {
 		d  time.Duration
 		ok bool
 	}{
-		"-4m": {-4 * time.Minute, true}, "+4m": {4 * time.Minute, true},
-		"-6m": {-6 * time.Minute, false}, "+6m": {6 * time.Minute, false},
+		"m4": {-4 * time.Minute, true}, "p4": {4 * time.Minute, true},
+		"m6": {-6 * time.Minute, false}, "p6": {6 * time.Minute, false},
 	} {
+		resetFloor(t, h, s.m.NodeID()) // the cases use timestamps out of order
 		st, eb := r.send(t, nil, now.Add(c.d), "nonce-"+name)
 		if c.ok && st != 200 || !c.ok && st != 401 {
 			t.Fatalf("%s: %d %v", name, st, eb)
@@ -455,7 +490,15 @@ func TestSignedHandshakeRules(t *testing.T) {
 				t.Fatalf("%s: the hub time must be returned so that the spoke can correct itself", name)
 			}
 		}
+		if c.ok {
+			continue
+		}
+		_, _, _, hh := r.sendFull(t, nil, now.Add(c.d), "nonce-sig-"+name)
+		if !proto.VerifyServerTime(h.m.HubPub(), s.m.NodeID(), strconv.FormatInt(now.Add(c.d).UnixMilli(), 10), "nonce-sig-"+name, hh.Get(proto.HeaderServerTime), hh.Get(proto.HeaderServerSig)) {
+			t.Fatalf("%s: the hub time must be signed", name)
+		}
 	}
+	resetFloor(t, h, s.m.NodeID())
 	// body tampered after signing
 	if st, _ := r.send(t, func(_ http.Header, b *[]byte) {
 		*b = bytes.Replace(*b, []byte("gate"), []byte("gatx"), 1)
@@ -466,7 +509,7 @@ func TestSignedHandshakeRules(t *testing.T) {
 	// signed by another key
 	other, _ := proto.GenerateIdentity()
 	if st, _ := r.send(t, func(hd http.Header, b *[]byte) {
-		hd.Set(proto.HeaderSig, proto.SignRequest(other.Ed, "POST", proto.PathHandshake, hd.Get(proto.HeaderSigTs), hd.Get(proto.HeaderNonce), *b))
+		hd.Set(proto.HeaderSig, r.sign(other.Ed, *b, hd.Get(proto.HeaderSigTs), hd.Get(proto.HeaderNonce)))
 	}, now, "nonce-k1"); st != 401 {
 		t.Fatalf("foreign key: %d", st)
 	}
@@ -489,6 +532,7 @@ func TestSignedHandshakeRules(t *testing.T) {
 		t.Fatalf("expired cert: %d", st)
 	}
 	h.m.now = time.Now
+	resetFloor(t, h, s.m.NodeID())
 	if st, _ := r.send(t, nil, time.Now(), "nonce-e2"); st != 200 {
 		t.Fatalf("back to a valid clock: %d", st)
 	}
@@ -670,6 +714,16 @@ func TestClientTransportRules(t *testing.T) {
 	t.Setenv(client.EnvInsecure, "1")
 	if _, err := client.New(client.Options{Identity: id, HubURL: "http://127.0.0.1:1"}); err != nil {
 		t.Fatalf("insecure env: %v", err)
+	}
+	for _, ok := range []string{"http://localhost:8090", "http://10.1.2.3", "http://192.168.0.7:80", "http://[::1]:8090"} {
+		if _, err := client.New(client.Options{Identity: id, HubURL: ok}); err != nil {
+			t.Fatalf("insecure must allow %s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"http://hub.example.com", "http://8.8.8.8", "http://172.32.0.1"} {
+		if _, err := client.New(client.Options{Identity: id, HubURL: bad}); err == nil {
+			t.Fatalf("insecure must refuse the public host %s", bad)
+		}
 	}
 	if _, err := client.New(client.Options{Identity: id, HubURL: "http://127.0.0.1:1", Pin: strings.Repeat("ab", 32)}); err == nil {
 		t.Fatal("a pin needs https")

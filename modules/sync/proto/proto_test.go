@@ -3,6 +3,8 @@ package proto
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -136,31 +138,70 @@ func TestCertSignVerify(t *testing.T) {
 func TestRequestSignature(t *testing.T) {
 	id, _ := GenerateIdentity()
 	body := []byte(`{"a":1}`)
-	sig := SignRequest(id.Ed, "POST", "/api/sync/handshake", "1700000000000", "n1", body)
-	ok := func(method, path, ts, nonce string, b []byte, s string) bool {
-		return VerifyRequest(id.Pub(), method, path, ts, nonce, b, s)
+	const host, hub = "hub.example.com", "habcdefghijklmn"
+	sig := SignRequest(id.Ed, "POST", "/api/sync/handshake", host, hub, "1700000000000", "n1", body)
+	ok := func(method, path, host, hub, ts, nonce string, b []byte, s string) bool {
+		return VerifyRequest(id.Pub(), method, path, host, hub, ts, nonce, b, s)
 	}
-	if !ok("POST", "/api/sync/handshake", "1700000000000", "n1", body, sig) {
+	if !ok("POST", "/api/sync/handshake", host, hub, "1700000000000", "n1", body, sig) {
 		t.Fatal("valid signature rejected")
 	}
+	// host is normalized: case, default ports and a trailing dot do not matter
+	for _, h := range []string{"HUB.example.com", "hub.example.com:443", "hub.example.com."} {
+		if !ok("POST", "/api/sync/handshake", h, hub, "1700000000000", "n1", body, sig) {
+			t.Fatalf("host %q must normalize to the signed one", h)
+		}
+	}
 	for name, v := range map[string]bool{
-		"method": ok("GET", "/api/sync/handshake", "1700000000000", "n1", body, sig),
-		"path":   ok("POST", "/api/sync/other", "1700000000000", "n1", body, sig),
-		"ts":     ok("POST", "/api/sync/handshake", "1700000000001", "n1", body, sig),
-		"nonce":  ok("POST", "/api/sync/handshake", "1700000000000", "n2", body, sig),
-		"body":   ok("POST", "/api/sync/handshake", "1700000000000", "n1", []byte(`{"a":2}`), sig),
-		"junk":   ok("POST", "/api/sync/handshake", "1700000000000", "n1", body, "###"),
+		"method": ok("GET", "/api/sync/handshake", host, hub, "1700000000000", "n1", body, sig),
+		"path":   ok("POST", "/api/sync/other", host, hub, "1700000000000", "n1", body, sig),
+		"host":   ok("POST", "/api/sync/handshake", "evil.example.com", hub, "1700000000000", "n1", body, sig),
+		"port":   ok("POST", "/api/sync/handshake", "hub.example.com:8443", hub, "1700000000000", "n1", body, sig),
+		"hub id": ok("POST", "/api/sync/handshake", host, "hzzzzzzzzzzzzzz", "1700000000000", "n1", body, sig),
+		"ts":     ok("POST", "/api/sync/handshake", host, hub, "1700000000001", "n1", body, sig),
+		"nonce":  ok("POST", "/api/sync/handshake", host, hub, "1700000000000", "n2", body, sig),
+		"body":   ok("POST", "/api/sync/handshake", host, hub, "1700000000000", "n1", []byte(`{"a":2}`), sig),
+		"junk":   ok("POST", "/api/sync/handshake", host, hub, "1700000000000", "n1", body, "###"),
 	} {
 		if v {
 			t.Fatalf("tampered %s accepted", name)
 		}
 	}
 	other, _ := GenerateIdentity()
-	if VerifyRequest(other.Pub(), "POST", "/api/sync/handshake", "1700000000000", "n1", body, sig) {
+	if VerifyRequest(other.Pub(), "POST", "/api/sync/handshake", host, hub, "1700000000000", "n1", body, sig) {
 		t.Fatal("wrong key accepted")
 	}
 	// the separator keeps fields apart: moving a byte between ts and nonce changes the digest
-	if string(SigningDigest("POST", "/p", "12", "3", nil)) == string(SigningDigest("POST", "/p", "1", "23", nil)) {
+	if string(SigningDigest("POST", "/p", "h", "i", "12", "3", nil)) == string(SigningDigest("POST", "/p", "h", "i", "1", "23", nil)) {
 		t.Fatal("field boundaries are ambiguous")
+	}
+	// the canonical form is exactly sha256(METHOD|path|host|hub_id|ts|nonce|hex(sha256(body)))
+	bh := sha256.Sum256(body)
+	want := sha256.Sum256([]byte("POST|/p|hub.example.com|hX|7|nn|" + hex.EncodeToString(bh[:])))
+	if string(SigningDigest("post", "/p", "HUB.example.com:443", "hX", "7", "nn", body)) != string(want[:]) {
+		t.Fatal("canonical form changed")
+	}
+}
+
+func TestServerTimeSignature(t *testing.T) {
+	hubPub, hub, _ := ed25519.GenerateKey(nil)
+	sig := SignServerTime(hub, "nnode", "100", "nonce1", "2030-01-01T00:00:00.000Z")
+	if !VerifyServerTime(hubPub, "nnode", "100", "nonce1", "2030-01-01T00:00:00.000Z", sig) {
+		t.Fatal("valid signature rejected")
+	}
+	for name, v := range map[string]bool{
+		"time":  VerifyServerTime(hubPub, "nnode", "100", "nonce1", "2031-01-01T00:00:00.000Z", sig),
+		"node":  VerifyServerTime(hubPub, "nother", "100", "nonce1", "2030-01-01T00:00:00.000Z", sig),
+		"ts":    VerifyServerTime(hubPub, "nnode", "101", "nonce1", "2030-01-01T00:00:00.000Z", sig),
+		"nonce": VerifyServerTime(hubPub, "nnode", "100", "nonce2", "2030-01-01T00:00:00.000Z", sig),
+		"junk":  VerifyServerTime(hubPub, "nnode", "100", "nonce1", "2030-01-01T00:00:00.000Z", "###"),
+	} {
+		if v {
+			t.Fatalf("tampered %s accepted", name)
+		}
+	}
+	otherPub, _, _ := ed25519.GenerateKey(nil)
+	if VerifyServerTime(otherPub, "nnode", "100", "nonce1", "2030-01-01T00:00:00.000Z", sig) {
+		t.Fatal("foreign hub key accepted")
 	}
 }

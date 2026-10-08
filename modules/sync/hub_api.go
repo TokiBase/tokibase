@@ -8,9 +8,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -116,8 +119,50 @@ func (m *Module) hubURL(e *core.RequestEvent) string {
 	return scheme + "://" + e.Request.Host
 }
 
+// throttle is the built-in per-IP limit of the unauthenticated routes. It does
+// not depend on Settings > Rate limits (off by default).
+func (m *Module) throttle(kind string) *hook.Handler[*core.RequestEvent] {
+	return &hook.Handler[*core.RequestEvent]{
+		Id: hookId + "throttle-" + kind, Priority: -950,
+		Func: func(e *core.RequestEvent) error {
+			t, max := &m.guards.handshake, m.guards.handshakeMax()
+			if kind == "enroll" {
+				t, max = &m.guards.enroll, m.guards.enrollMax()
+			}
+			if !t.allow(throttleKey(e.RealIP()), time.Now(), max) {
+				e.Response.Header().Set("Retry-After", throttleRetryAfterSc)
+				return syncErr(e, http.StatusTooManyRequests, proto.CodeRateLimited, "Too many requests, retry later.", nil)
+			}
+			return e.Next()
+		},
+	}
+}
+
+var (
+	nodeIDRe = regexp.MustCompile(`^n[a-z2-7]{14}$`)
+	nonceRe  = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
+)
+
+// issueCert signs a device certificate.
+func (m *Module) issueCert(nodeID string, edPub, kxPub []byte, ser string, params map[string]any, now time.Time) (string, error) {
+	claims := &proto.CertClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer: m.hub.id, Subject: nodeID,
+			IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(proto.CertValidity)),
+		},
+		Pub: b64(edPub), KX: b64(kxPub), Params: params, Ser: ser,
+	}
+	return proto.SignCert(m.hub.priv, claims)
+}
+
+func isConstraintErr(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "constraint")
+}
+
 // enrollHandler is POST /api/sync/enroll (no auth, the code is the secret).
-// Bad, expired and used codes all give the same answer.
+// Bad, expired and used codes all give the same answer. A retry with the same
+// key and code is answered again (a lost response must not burn the code)
+// until the node completed its first handshake.
 func (m *Module) enrollHandler(e *core.RequestEvent) error {
 	if !m.hubReady() {
 		return syncErr(e, http.StatusServiceUnavailable, proto.CodeHubUnavailable, "sync hub is not ready", nil)
@@ -128,7 +173,7 @@ func (m *Module) enrollHandler(e *core.RequestEvent) error {
 	}
 	edPub, ok1 := decodeKey(req.Ed25519Pub, ed25519.PublicKeySize)
 	kxPub, ok2 := decodeKey(req.X25519Pub, 32)
-	if !ok1 || !ok2 || req.Code == "" {
+	if !ok1 || !ok2 || req.Code == "" || len(req.Code) > 128 {
 		return syncErr(e, http.StatusBadRequest, proto.CodeBadRequest, "invalid request body", nil)
 	}
 	invalid := func() error {
@@ -136,13 +181,14 @@ func (m *Module) enrollHandler(e *core.RequestEvent) error {
 	}
 
 	hash := HashEnrollCode(req.Code)
-	pending, err := e.App.FindRecordsByFilter(NodesCollection, "status={:s} && enroll_hash!=''", "", 0, 0, dbx.Params{"s": NodePending})
+	cands, err := e.App.FindRecordsByFilter(NodesCollection, "(status={:p} || status={:a}) && enroll_hash!=''", "", 0, 0,
+		dbx.Params{"p": NodePending, "a": NodeActive})
 	if err != nil {
 		return err
 	}
-	// compare against every pending row, no early exit
+	// compare against every candidate row, no early exit
 	var match *core.Record
-	for _, r := range pending {
+	for _, r := range cands {
 		if constEq(hash, r.GetString("enroll_hash")) {
 			match = r
 		}
@@ -153,20 +199,53 @@ func (m *Module) enrollHandler(e *core.RequestEvent) error {
 		return invalid()
 	}
 	nodeID := proto.NodeID(edPub)
-	if ex, _ := e.App.FindRecordById(NodesCollection, nodeID); ex != nil {
-		return invalid()
+	now := time.Now().UTC()
+
+	if match.GetString("status") == NodeActive {
+		// idempotent retry: only the same key, before the first handshake
+		if match.Id != nodeID || match.GetString("pubkey") != b64(edPub) || match.GetString("kx_pubkey") != b64(kxPub) ||
+			!match.GetDateTime("last_seen").IsZero() || match.GetString("cert_serial") == "" {
+			return invalid()
+		}
+		var params map[string]any
+		_ = match.UnmarshalJSONField("params", &params)
+		cert, err := m.issueCert(nodeID, edPub, kxPub, match.GetString("cert_serial"), params, now)
+		if err != nil {
+			return err
+		}
+		res, err := e.App.NonconcurrentDB().NewQuery("UPDATE " + NodesCollection + " SET cert_expires={:ce} WHERE id={:id} AND status={:a} AND enroll_hash={:h}").
+			Bind(dbx.Params{"ce": now.Add(proto.CertValidity).Format(types.DefaultDateLayout), "id": nodeID, "a": NodeActive, "h": hash}).Execute()
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return invalid()
+		}
+		emit(AuditNodeEnroll, NodesCollection, nodeID, map[string]any{
+			"name": match.GetString("name"), "profile": match.GetString("profile"), "stage": "reissued", "ip": e.RealIP(),
+		})
+		return e.JSON(http.StatusOK, proto.EnrollResponse{
+			NodeID: nodeID, HubID: m.hub.id, HubURL: m.hubURL(e), Cert: cert, HubPub: b64(m.hub.pub),
+		})
 	}
 
-	now := time.Now().UTC()
 	var cert string
 	err = e.App.RunInTransaction(func(tx kernel.App) error {
 		// claim the code atomically: only one request can flip pending -> active
-		res, err := tx.DB().NewQuery("UPDATE " + NodesCollection + " SET status={:a}, enroll_hash='', enroll_expires='' WHERE id={:id} AND status={:p} AND enroll_hash={:h}").
+		// (the hash stays until the first handshake so that a lost answer can be repeated)
+		res, err := tx.DB().NewQuery("UPDATE " + NodesCollection + " SET status={:a} WHERE id={:id} AND status={:p} AND enroll_hash={:h}").
 			Bind(dbx.Params{"a": NodeActive, "p": NodePending, "id": match.Id, "h": hash}).Execute()
 		if err != nil {
 			return err
 		}
 		if n, _ := res.RowsAffected(); n != 1 {
+			return errEnrollUsed
+		}
+		var taken int
+		if err := tx.DB().NewQuery("SELECT COUNT(*) FROM " + NodesCollection + " WHERE id={:n}").Bind(dbx.Params{"n": nodeID}).Row(&taken); err != nil {
+			return err
+		}
+		if taken > 0 {
 			return errEnrollUsed
 		}
 		rec, err := tx.FindRecordById(NodesCollection, match.Id)
@@ -177,24 +256,18 @@ func (m *Module) enrollHandler(e *core.RequestEvent) error {
 		_ = rec.UnmarshalJSONField("params", &params)
 		var ser [8]byte
 		_, _ = rand.Read(ser[:])
-		claims := &proto.CertClaims{
-			RegisteredClaims: jwt.RegisteredClaims{
-				Issuer: m.hub.id, Subject: nodeID,
-				IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(proto.CertValidity)),
-			},
-			Pub: b64(edPub), KX: b64(kxPub), Params: params, Ser: hex.EncodeToString(ser[:]),
-		}
-		cert, err = proto.SignCert(m.hub.priv, claims)
-		if err != nil {
+		serHex := hex.EncodeToString(ser[:])
+		if cert, err = m.issueCert(nodeID, edPub, kxPub, serHex, params, now); err != nil {
 			return err
 		}
 		rec.Set("pubkey", b64(edPub))
 		rec.Set("kx_pubkey", b64(kxPub))
-		rec.Set("cert_serial", claims.Ser)
+		rec.Set("cert_serial", serHex)
 		rec.Set("cert_expires", now.Add(proto.CertValidity))
 		if req.AppVersion != "" {
 			rec.Set("app_version", truncate(req.AppVersion, 64))
 		}
+		// the profile is chosen by the admin; the spoke's value is ignored
 		if err := tx.Save(rec); err != nil {
 			return err
 		}
@@ -203,7 +276,7 @@ func (m *Module) enrollHandler(e *core.RequestEvent) error {
 			Bind(dbx.Params{"n": nodeID, "o": match.Id}).Execute()
 		return err
 	})
-	if err == errEnrollUsed {
+	if errors.Is(err, errEnrollUsed) || isConstraintErr(err) {
 		return invalid()
 	}
 	if err != nil {
@@ -211,7 +284,8 @@ func (m *Module) enrollHandler(e *core.RequestEvent) error {
 		return syncErr(e, http.StatusInternalServerError, "sync_internal", "enrollment failed", nil)
 	}
 	emit(AuditNodeEnroll, NodesCollection, nodeID, map[string]any{
-		"name": match.GetString("name"), "profile": match.GetString("profile"), "stage": "completed", "ip": e.RealIP(),
+		"name": match.GetString("name"), "profile": match.GetString("profile"), "stage": "completed",
+		"pending_id": match.Id, "ip": e.RealIP(),
 	})
 	return e.JSON(http.StatusOK, proto.EnrollResponse{
 		NodeID: nodeID, HubID: m.hub.id, HubURL: m.hubURL(e), Cert: cert, HubPub: b64(m.hub.pub),
@@ -231,12 +305,59 @@ func truncate(s string, n int) string {
 	return s
 }
 
+// failHandshake audits a failure of a KNOWN node and answers.
 func (m *Module) failHandshake(e *core.RequestEvent, node, reason string, status int, code, msg string, extra map[string]any) error {
 	emit(AuditHandshakeFailed, NodesCollection, node, map[string]any{"node": node, "reason": reason, "ip": e.RealIP()})
 	return syncErr(e, status, code, msg, extra)
 }
 
-// handshakeHandler is POST /api/sync/handshake (signed, see proto.SignRequest).
+// audienceHosts are the hosts a signed handshake may be addressed to: the host
+// of the request and the host of the configured app URL (a proxy may rewrite
+// the former).
+func (m *Module) audienceHosts(e *core.RequestEvent) []string {
+	hosts := []string{proto.NormalizeHost(e.Request.Host)}
+	if u, err := url.Parse(strings.TrimSpace(e.App.Settings().Meta.AppURL)); err == nil && u.Host != "" {
+		if h := proto.NormalizeHost(u.Host); h != hosts[0] {
+			hosts = append(hosts, h)
+		}
+	}
+	return hosts
+}
+
+// stampTime sets the signed hub time headers of the answer to a signed
+// handshake. The client only trusts a hub time that carries a valid signature.
+func (m *Module) stampTime(e *core.RequestEvent, node, ts, nonce string, now time.Time) string {
+	st := now.UTC().Format(proto.TimeLayout)
+	h := e.Response.Header()
+	h.Set(proto.HeaderServerTime, st)
+	h.Set(proto.HeaderServerSig, proto.SignServerTime(m.hub.priv, node, ts, nonce, st))
+	return st
+}
+
+// touchNode records a successful handshake with a targeted UPDATE of the
+// columns it owns. It never rewrites the whole row (a stale Save could undo a
+// concurrent revoke) and only matches a live node (not revoked, not pending)
+// whose replay floor is below ts. It reports whether a row was changed.
+func (m *Module) touchNode(id string, now time.Time, offset int64, schema int64, appVersion string, tsMs int64, certExpires time.Time) (bool, error) {
+	ce := ""
+	if !certExpires.IsZero() {
+		ce = certExpires.UTC().Format(types.DefaultDateLayout)
+	}
+	t := now.UTC().Format(types.DefaultDateLayout)
+	res, err := m.app.NonconcurrentDB().NewQuery("UPDATE " + NodesCollection + " SET last_seen={:t}, updated={:t}, clock_offset_ms={:o}, schema_version={:sv}, " +
+		"app_version=CASE WHEN {:av}!='' THEN {:av} ELSE app_version END, enroll_hash='', enroll_expires='', sig_ts_floor={:ts}, " +
+		"cert_expires=CASE WHEN {:ce}!='' THEN {:ce} ELSE cert_expires END " +
+		"WHERE id={:id} AND status IN ({:s1},{:s2},{:s3}) AND sig_ts_floor<{:ts}").
+		Bind(dbx.Params{"t": t, "o": offset, "sv": schema, "av": truncate(appVersion, 64), "ts": tsMs, "ce": ce, "id": id,
+			"s1": NodeActive, "s2": NodeStale, "s3": NodeRebootstrap}).Execute()
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// handshakeHandler is POST /api/sync/handshake (signed, see proto.SigningDigest).
 func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 	if !m.hubReady() {
 		return syncErr(e, http.StatusServiceUnavailable, proto.CodeHubUnavailable, "sync hub is not ready", nil)
@@ -245,8 +366,10 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 	ts := e.Request.Header.Get(proto.HeaderSigTs)
 	nonce := e.Request.Header.Get(proto.HeaderNonce)
 	sig := e.Request.Header.Get(proto.HeaderSig)
-	if nodeID == "" || ts == "" || nonce == "" || sig == "" || len(nonce) > 64 {
-		return syncErr(e, http.StatusBadRequest, proto.CodeBadRequest, "missing signature headers", nil)
+	// cheap shape checks first: nothing below runs for junk
+	if nodeID == "" || ts == "" || nonce == "" || sig == "" || len(nodeID) > maxNodeHeaderLen || len(ts) > 20 || len(sig) > 128 ||
+		!nodeIDRe.MatchString(nodeID) || !nonceRe.MatchString(nonce) {
+		return syncErr(e, http.StatusBadRequest, proto.CodeBadRequest, "missing or malformed signature headers", nil)
 	}
 	body, err := io.ReadAll(e.Request.Body)
 	if err != nil {
@@ -256,13 +379,19 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 	if err := json.Unmarshal(body, &req); err != nil || req.NodeID != nodeID {
 		return syncErr(e, http.StatusBadRequest, proto.CodeBadRequest, "invalid request body", nil)
 	}
-	unauth := func(reason string, extra map[string]any) error {
-		return m.failHandshake(e, nodeID, reason, http.StatusUnauthorized, proto.CodeUnauthorized, "The handshake was rejected.", extra)
-	}
 
 	node, err := e.App.FindRecordById(NodesCollection, nodeID)
 	if err != nil || node.GetString("pubkey") == "" {
-		return unauth("unknown_node", nil)
+		// unknown node: counted and logged at debug level, never audited
+		m.guards.unknownHS.Add(1)
+		e.App.Logger().Debug("sync: handshake for an unknown node", "node", nodeID, "ip", e.RealIP())
+		return syncErr(e, http.StatusUnauthorized, proto.CodeUnauthorized, "The handshake was rejected.", nil)
+	}
+	unauth := func(reason string, extra map[string]any) error {
+		return m.failHandshake(e, nodeID, reason, http.StatusUnauthorized, proto.CodeUnauthorized, "The handshake was rejected.", extra)
+	}
+	revoked := func() error {
+		return m.failHandshake(e, nodeID, "revoked", http.StatusForbidden, proto.CodeNodeRevoked, "This node was revoked.", nil)
 	}
 	nodePub, ok := decodeKey(node.GetString("pubkey"), ed25519.PublicKeySize)
 	if !ok {
@@ -274,7 +403,14 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 	if err != nil || claims.Subject != nodeID || claims.Pub != node.GetString("pubkey") || claims.Ser != node.GetString("cert_serial") {
 		return unauth("bad_cert", nil)
 	}
-	if !proto.VerifyRequest(nodePub, e.Request.Method, e.Request.URL.Path, ts, nonce, body, sig) {
+	sigOK := false
+	for _, host := range m.audienceHosts(e) {
+		if proto.VerifyRequest(nodePub, e.Request.Method, e.Request.URL.Path, host, m.hub.id, ts, nonce, body, sig) {
+			sigOK = true
+			break
+		}
+	}
+	if !sigOK {
 		return unauth("bad_signature", nil)
 	}
 	ms, err := strconv.ParseInt(ts, 10, 64)
@@ -282,42 +418,71 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 		return unauth("bad_ts", nil)
 	}
 	if d := now.Sub(time.UnixMilli(ms)); d > SigWindow || d < -SigWindow {
-		// the signature is valid, so the caller may learn the hub time and correct its clock
-		return unauth("ts_window", map[string]any{"server_time": now.UTC().Format(proto.TimeLayout)})
+		// the signature is valid, so the caller may learn the hub time (signed, so
+		// that the caller can tell that it really comes from this hub)
+		st := m.stampTime(e, nodeID, ts, nonce, now)
+		return unauth("ts_window", map[string]any{"server_time": st})
 	}
 	// the signature is genuine from here on: only now the status is revealed
-	if node.GetString("status") == NodeRevoked {
-		return m.failHandshake(e, nodeID, "revoked", http.StatusForbidden, proto.CodeNodeRevoked, "This node was revoked.", nil)
-	}
-	if node.GetString("status") == NodePending {
+	switch node.GetString("status") {
+	case NodeRevoked:
+		return revoked()
+	case NodePending:
 		return unauth("pending", nil)
+	}
+	if ms <= int64(node.GetFloat("sig_ts_floor")) {
+		return unauth("replay_floor", nil)
 	}
 	if !m.nonces.Use(nodeID, nonce, now) {
 		return unauth("nonce_replay", nil)
 	}
 
 	// clock offset as the hub sees it: server_time - client_time
-	var offset int64
-	if ct, err := time.Parse(time.RFC3339Nano, req.ClientTime); err == nil {
-		offset = now.Sub(ct).Milliseconds()
-	} else {
+	ct, err := time.Parse(time.RFC3339Nano, req.ClientTime)
+	if err != nil {
 		return syncErr(e, http.StatusBadRequest, proto.CodeBadRequest, "invalid client_time", nil)
 	}
+	offset := now.Sub(ct).Milliseconds()
 	drift := maxDrift()
 	clockOK := offset <= drift.Milliseconds() && offset >= -drift.Milliseconds()
 
-	node.Set("last_seen", types.NowDateTime())
-	node.Set("clock_offset_ms", offset)
-	if req.AppVersion != "" {
-		node.Set("app_version", truncate(req.AppVersion, 64))
+	var params map[string]any
+	_ = node.UnmarshalJSONField("params", &params)
+	if params == nil {
+		params = map[string]any{}
 	}
-	if validProfile(req.Profile) {
-		node.Set("profile", req.Profile)
+	// a certificate that expires within 30 days is renewed (same serial, so a
+	// lost answer leaves the old certificate usable until it expires)
+	var newCert string
+	var certExp time.Time
+	if claims.ExpiresAt != nil && claims.ExpiresAt.Sub(now) < proto.CertRenewBefore {
+		kx, _ := decodeKey(node.GetString("kx_pubkey"), 32)
+		if kx != nil {
+			if c, err := m.issueCert(nodeID, nodePub, kx, claims.Ser, params, now); err == nil {
+				newCert, certExp = c, now.Add(proto.CertValidity)
+			}
+		}
 	}
-	node.Set("schema_version", req.SchemaVersion)
-	if err := e.App.Save(node); err != nil {
+
+	// targeted update: never rewrites status/revoked_at (see touchNode)
+	touched, err := m.touchNode(nodeID, now, offset, req.SchemaVersion, req.AppVersion, ms, certExp)
+	if err != nil {
 		e.App.Logger().Error("sync: failed to update the node", "error", err)
 		return syncErr(e, http.StatusInternalServerError, "sync_internal", "handshake failed", nil)
+	}
+	// re-check the status after the write: a revoke that raced with it wins
+	cur, err := e.App.FindRecordById(NodesCollection, nodeID)
+	if err != nil {
+		return unauth("node_gone", nil)
+	}
+	switch cur.GetString("status") {
+	case NodeRevoked:
+		return revoked()
+	case NodePending:
+		return unauth("pending", nil)
+	}
+	if !touched {
+		return unauth("replay_floor", nil)
 	}
 
 	expires := now.Add(SessionTTL)
@@ -328,17 +493,14 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 	if err != nil {
 		return err
 	}
-	var params map[string]any
-	_ = node.UnmarshalJSONField("params", &params)
-	if params == nil {
-		params = map[string]any{}
-	}
+	serverTime := m.stampTime(e, nodeID, ts, nonce, now)
 	return e.JSON(http.StatusOK, proto.HandshakeResponse{
 		SessionToken: tok,
+		Cert:         newCert,
 		Expires:      expires.UTC().Format(proto.TimeLayout),
 		HubID:        m.hub.id,
 		HubEpoch:     m.hub.epoch,
-		ServerTime:   now.UTC().Format(proto.TimeLayout),
+		ServerTime:   serverTime,
 		// TODO(PR8): clock.ok is computed here but enforced (409 sync_clock_drift on push) only in PR8.
 		Clock:  proto.Clock{Ok: clockOK, OffsetMs: offset, MaxDriftMs: drift.Milliseconds()},
 		Schema: proto.Schema{Version: 0, Bundles: []any{}}, // TODO(PR8): schema versions and bundles
@@ -346,7 +508,7 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 		Policies:     m.handshakePolicies(),
 		Params:       params,
 		Keys:         []any{}, // TODO(PR9): wrapped collection keys
-		PushFrom:     int64(node.GetFloat("pushed_origin_seq")) + 1,
+		PushFrom:     int64(cur.GetFloat("pushed_origin_seq")) + 1,
 		LowWater:     0,       // TODO(PR6): lowest retained hub seq
 		Rebootstrap:  false,   // TODO(PR7): snapshot bootstrap decision
 		Reservations: []any{}, // TODO(PR8): sequence reservations

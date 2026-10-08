@@ -6,18 +6,12 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -40,6 +34,10 @@ const (
 
 	// RequestTimeout is the timeout of every request.
 	RequestTimeout = 30 * time.Second
+
+	// MaxClockOffset bounds the clock offset the client accepts from the hub
+	// (also from an authentic answer).
+	MaxClockOffset = 7 * 24 * time.Hour
 )
 
 // Error is a hub answer with a non-2xx status.
@@ -69,6 +67,11 @@ type Options struct {
 	Identity *proto.Identity
 	HubURL   string
 	Cert     string
+	// HubID and HubPub (base64) are the hub identity stored at enrollment
+	// (read from the cursor when App is set). The handshake signature is bound
+	// to HubID and a hub time is only trusted when HubPub signed it.
+	HubID  string
+	HubPub string
 	// Clock receives the measured offset (optional).
 	Clock *hlc.Clock
 	// Now is the raw local wall clock (default time.Now). Tests inject it.
@@ -87,87 +90,27 @@ type Options struct {
 
 // Client talks to one hub.
 type Client struct {
-	o      Options
-	base   string
-	http   *http.Client
-	now    func() time.Time
-	nodeID string
+	o       Options
+	base    string
+	http    *http.Client
+	now     func() time.Time
+	nodeID  string
+	host    string // NormalizeHost of the hub host, part of the signed string
+	wantHub string
+	hubPub  ed25519.PublicKey
 
 	mu       stdsync.Mutex
 	token    string
 	tokenExp time.Time
 	hubID    string
 	epoch    string
+	cert     string
 	offset   time.Duration
 }
 
 func envTrue(name string) bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
 	return v == "1" || v == "true" || v == "yes" || v == "on"
-}
-
-// checkURL enforces https unless insecure and returns the base URL.
-func checkURL(raw string, insecure bool, pin string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Host == "" {
-		return "", fmt.Errorf("sync: invalid hub url %q", raw)
-	}
-	switch u.Scheme {
-	case "https":
-	case "http":
-		if !insecure {
-			return "", errors.New("sync: the hub url must be https (TOKI_SYNC_INSECURE=1 allows http for tests)")
-		}
-		if pin != "" {
-			return "", errors.New("sync: a hub pin needs an https hub url")
-		}
-	default:
-		return "", fmt.Errorf("sync: unsupported hub url scheme %q", u.Scheme)
-	}
-	return strings.TrimRight(u.Scheme+"://"+u.Host+u.Path, "/"), nil
-}
-
-// parsePin accepts a sha256 as hex (64 chars) or base64.
-func parsePin(s string) ([]byte, error) {
-	s = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "sha256/"))
-	if b, err := hex.DecodeString(s); err == nil && len(b) == sha256.Size {
-		return b, nil
-	}
-	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
-		if b, err := enc.DecodeString(s); err == nil && len(b) == sha256.Size {
-			return b, nil
-		}
-	}
-	return nil, errors.New("sync: TOKI_SYNC_HUB_PIN must be the sha256 of the hub certificate public key (hex or base64)")
-}
-
-func newHTTP(pin string) (*http.Client, error) {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	if pin != "" {
-		want, err := parsePin(pin)
-		if err != nil {
-			return nil, err
-		}
-		tr.TLSClientConfig = &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			// the normal chain verification stays on; the pin is an addition
-			VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
-				if len(raw) == 0 {
-					return errors.New("sync: no hub certificate")
-				}
-				c, err := x509.ParseCertificate(raw[0])
-				if err != nil {
-					return err
-				}
-				got := sha256.Sum256(c.RawSubjectPublicKeyInfo)
-				if !bytes.Equal(got[:], want) {
-					return errors.New("sync: hub certificate does not match TOKI_SYNC_HUB_PIN")
-				}
-				return nil
-			},
-		}
-	}
-	return &http.Client{Timeout: RequestTimeout, Transport: tr}, nil
 }
 
 // New builds a client. The hub URL must be https unless TOKI_SYNC_INSECURE=1
@@ -179,19 +122,29 @@ func New(o Options) (*Client, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	if o.App != nil && (o.HubURL == "" || o.Cert == "") {
+	if o.App != nil && (o.HubURL == "" || o.Cert == "" || o.HubID == "" || o.HubPub == "") {
 		cur, err := LoadCursor(o.App)
 		if err != nil {
 			return nil, err
 		}
 		if cur == nil {
-			return nil, errors.New("sync: this node is not enrolled (run `toki sync join <hub-url> <code>`)")
+			if o.HubURL != "" && o.Cert != "" {
+				cur = &Cursor{}
+			} else {
+				return nil, errors.New("sync: this node is not enrolled (run `toki sync join <hub-url> <code>`)")
+			}
 		}
 		if o.HubURL == "" {
 			o.HubURL = cur.HubURL
 		}
 		if o.Cert == "" {
 			o.Cert = cur.Cert
+		}
+		if o.HubID == "" {
+			o.HubID = cur.HubID
+		}
+		if o.HubPub == "" {
+			o.HubPub = cur.HubPub
 		}
 	}
 	if o.HubURL == "" {
@@ -210,41 +163,26 @@ func New(o Options) (*Client, error) {
 		if hc, err = newHTTP(strings.TrimSpace(o.Pin)); err != nil {
 			return nil, err
 		}
+	} else {
+		hc = noRedirect(hc)
 	}
-	return &Client{o: o, base: base, http: hc, now: o.Now, nodeID: o.Identity.NodeID()}, nil
-}
-
-func (c *Client) do(ctx context.Context, method, path string, hdr map[string]string, body []byte) (*http.Response, []byte, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
-	if err != nil {
-		return nil, nil, err
+	u, _ := url.Parse(base)
+	c := &Client{o: o, base: base, http: hc, now: o.Now, nodeID: o.Identity.NodeID(), host: proto.NormalizeHost(u.Host), wantHub: o.HubID, cert: o.Cert}
+	if b, err := base64.StdEncoding.DecodeString(o.HubPub); err == nil && len(b) == ed25519.PublicKeySize {
+		c.hubPub = b
 	}
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	for k, v := range hdr {
-		req.Header.Set(k, v)
-	}
-	res, err := c.http.Do(req)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer res.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
-	if err != nil {
-		return nil, nil, err
-	}
-	if res.StatusCode/100 != 2 {
-		he := &Error{Status: res.StatusCode}
-		var eb proto.ErrorBody
-		if json.Unmarshal(b, &eb) == nil {
-			he.Message, he.Data = eb.Message, eb.Data
-			he.Code, _ = eb.Data["code"].(string)
+	if o.App != nil {
+		// start from the offset measured last time (a skewed device would take the correction path after every restart)
+		if cur, _ := LoadCursor(o.App); cur != nil && cur.ClockOffsetMs != 0 {
+			if d := time.Duration(cur.ClockOffsetMs) * time.Millisecond; d <= MaxClockOffset && d >= -MaxClockOffset {
+				c.offset = d
+				if o.Clock != nil {
+					o.Clock.SetOffset(d)
+				}
+			}
 		}
-		return res, b, he
 	}
-	return res, b, nil
+	return c, nil
 }
 
 // EnrollParams are the inputs of Enroll.
@@ -318,27 +256,38 @@ func Join(ctx context.Context, app core.App, p EnrollParams) (*proto.EnrollRespo
 
 // Handshake runs the signed handshake, measures the clock offset
 // (server_time - (t_send+t_recv)/2), applies it to the HLC clock, stores it in
-// `_sync_cursors` and keeps the session token for later requests. When the hub
-// reports a timestamp outside its window, the hub time it returns is used once
-// to correct the offset and the handshake is retried.
+// `_sync_cursors` and keeps the session token for later requests.
+//
+// When the hub reports a timestamp outside its window, the hub time of that 401
+// is used once to correct the offset and the handshake is retried, but only
+// when the answer carries the hub signature over its time (verified with the
+// stored hub key) and the offset is within MaxClockOffset. If the retry fails,
+// the previous offset is restored.
 func (c *Client) Handshake(ctx context.Context) (*proto.HandshakeResponse, error) {
+	prev := c.Offset()
+	corrected := false
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
-		res, err := c.handshakeOnce(ctx)
+		res, hubTime, err := c.handshakeOnce(ctx)
 		if err == nil {
 			return res, nil
 		}
 		lastErr = err
 		var he *Error
-		if attempt == 0 && errors.As(err, &he) && he.Status == http.StatusUnauthorized {
-			if st, _ := he.Data["server_time"].(string); st != "" {
-				if t, perr := time.Parse(time.RFC3339Nano, st); perr == nil {
-					c.setOffset(t.Sub(c.now()))
-					continue
-				}
+		if attempt == 0 && errors.As(err, &he) && he.Status == http.StatusUnauthorized && !hubTime.IsZero() {
+			d := hubTime.Sub(c.now())
+			if d > MaxClockOffset || d < -MaxClockOffset {
+				lastErr = fmt.Errorf("sync: the hub asks for a clock correction of %v, more than %v: refused", d, MaxClockOffset)
+				break
 			}
+			c.setOffset(d)
+			corrected = true
+			continue
 		}
 		break
+	}
+	if corrected {
+		c.setOffset(prev)
 	}
 	c.recordError(lastErr)
 	return nil, lastErr
@@ -359,9 +308,31 @@ func (c *Client) wallNow() time.Time {
 	return c.now().Add(c.offset)
 }
 
-func (c *Client) handshakeOnce(ctx context.Context) (*proto.HandshakeResponse, error) {
+// verifyHubTime checks the signed hub time headers of an answer to the request
+// (ts, nonce). It returns the hub time when the signature is valid.
+func (c *Client) verifyHubTime(h http.Header, ts, nonce string) (time.Time, bool) {
+	st, sig := h.Get(proto.HeaderServerTime), h.Get(proto.HeaderServerSig)
+	if st == "" || sig == "" || c.hubPub == nil {
+		return time.Time{}, false
+	}
+	if !proto.VerifyServerTime(c.hubPub, c.nodeID, ts, nonce, st, sig) {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339Nano, st)
+	return t, err == nil
+}
+
+// handshakeOnce sends one handshake. On a 401 it also returns the hub time
+// when (and only when) the answer proved to come from the enrolled hub.
+func (c *Client) handshakeOnce(ctx context.Context) (*proto.HandshakeResponse, time.Time, error) {
+	if c.wantHub == "" || c.hubPub == nil {
+		return nil, time.Time{}, errors.New("sync: the hub id and key are unknown: enroll first (`toki sync join`)")
+	}
+	c.mu.Lock()
+	cert := c.cert
+	c.mu.Unlock()
 	req := proto.HandshakeRequest{
-		NodeID: c.nodeID, Cert: c.o.Cert, Profile: c.o.Profile, AppVersion: c.o.AppVersion,
+		NodeID: c.nodeID, Cert: cert, Profile: c.o.Profile, AppVersion: c.o.AppVersion,
 		Caps: []string{"gzip"},
 	}
 	if c.o.App != nil {
@@ -378,35 +349,59 @@ func (c *Client) handshakeOnce(ctx context.Context) (*proto.HandshakeResponse, e
 	req.ClientTime = c.wallNow().UTC().Format(proto.TimeLayout)
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	ts := strconv.FormatInt(c.wallNow().UnixMilli(), 10)
 	nonce := proto.NewNonce()
 	hdr := map[string]string{
 		proto.HeaderNode: c.nodeID, proto.HeaderSigTs: ts, proto.HeaderNonce: nonce,
-		proto.HeaderSig: proto.SignRequest(c.o.Identity.Ed, http.MethodPost, proto.PathHandshake, ts, nonce, body),
+		proto.HeaderSig: proto.SignRequest(c.o.Identity.Ed, http.MethodPost, proto.PathHandshake, c.host, c.wantHub, ts, nonce, body),
 	}
-	_, b, err := c.do(ctx, http.MethodPost, proto.PathHandshake, hdr, body)
+	res, b, err := c.do(ctx, http.MethodPost, proto.PathHandshake, hdr, body)
 	tRecv := c.now()
 	if err != nil {
-		return nil, err
+		var hubTime time.Time
+		var he *Error
+		if res != nil && errors.As(err, &he) && he.Status == http.StatusUnauthorized {
+			if t, ok := c.verifyHubTime(res.Header, ts, nonce); ok && he.Data["server_time"] == res.Header.Get(proto.HeaderServerTime) {
+				hubTime = t
+			}
+		}
+		return nil, hubTime, err
+	}
+	// the answer must come from the enrolled hub: signed time and matching hub id
+	hubTime, ok := c.verifyHubTime(res.Header, ts, nonce)
+	if !ok {
+		return nil, time.Time{}, errors.New("sync: the handshake answer is not signed by the enrolled hub")
 	}
 	var out proto.HandshakeResponse
 	if err := json.Unmarshal(b, &out); err != nil {
-		return nil, fmt.Errorf("sync: invalid handshake answer: %w", err)
+		return nil, time.Time{}, fmt.Errorf("sync: invalid handshake answer: %w", err)
 	}
-	st, err := time.Parse(time.RFC3339Nano, out.ServerTime)
-	if err != nil {
-		return nil, fmt.Errorf("sync: invalid server_time: %w", err)
+	if out.HubID != c.wantHub || out.ServerTime != res.Header.Get(proto.HeaderServerTime) {
+		return nil, time.Time{}, errors.New("sync: the handshake answer does not match the enrolled hub")
 	}
-	offset := st.Sub(tSend.Add(tRecv.Sub(tSend) / 2))
+	offset := hubTime.Sub(tSend.Add(tRecv.Sub(tSend) / 2))
+	if offset > MaxClockOffset || offset < -MaxClockOffset {
+		return nil, time.Time{}, fmt.Errorf("sync: clock offset %v is out of range (max %v)", offset, MaxClockOffset)
+	}
+	if out.Cert != "" {
+		cl, err := proto.VerifyCert(c.hubPub, out.Cert, hubTime)
+		if err != nil || cl.Subject != c.nodeID || cl.Pub != base64.StdEncoding.EncodeToString(c.o.Identity.Pub()) {
+			return nil, time.Time{}, errors.New("sync: the renewed certificate is invalid")
+		}
+		c.mu.Lock()
+		c.cert = out.Cert
+		c.mu.Unlock()
+		c.storeCert(out.HubID, out.Cert)
+	}
 	c.setOffset(offset)
 	exp, _ := time.Parse(time.RFC3339Nano, out.Expires)
 	c.mu.Lock()
 	c.token, c.tokenExp, c.hubID, c.epoch = out.SessionToken, exp, out.HubID, out.HubEpoch
 	c.mu.Unlock()
 	c.recordOK(out.HubID, out.HubEpoch, offset)
-	return &out, nil
+	return &out, hubTime, nil
 }
 
 // Ping calls GET /api/sync/ping with the session token. It runs the handshake

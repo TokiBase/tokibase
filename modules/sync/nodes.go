@@ -43,6 +43,10 @@ var nodeNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
 // only, rules null). It is idempotent.
 func EnsureNodesCollection(app core.App) error {
 	if c, _ := app.FindCollectionByNameOrId(NodesCollection); c != nil {
+		if c.Fields.GetByName("sig_ts_floor") == nil { // created before the replay floor existed
+			c.Fields.Add(&core.NumberField{Name: "sig_ts_floor"})
+			return app.Save(c)
+		}
 		return nil
 	}
 	c := core.NewBaseCollection(NodesCollection)
@@ -64,6 +68,9 @@ func EnsureNodesCollection(app core.App) error {
 		&core.NumberField{Name: "pushed_origin_seq"},
 		&core.NumberField{Name: "schema_version"},
 		&core.NumberField{Name: "clock_offset_ms"},
+		// sig_ts_floor is the highest handshake ts accepted so far (unix ms);
+		// older or equal timestamps are refused, so a restart can not replay.
+		&core.NumberField{Name: "sig_ts_floor"},
 		&core.DateField{Name: "last_seen"},
 		&core.DateField{Name: "revoked_at"},
 		&core.TextField{Name: "app_version", Max: 64},
@@ -171,6 +178,12 @@ func FindNode(app core.App, ref string) (*core.Record, error) {
 
 // RevokeNode sets a node `revoked`. Every node request checks the status, so
 // session tokens stop working at once. Revoking twice is a no-op.
+//
+// The write is a targeted UPDATE keyed by the node NAME (unique and stable:
+// enrollment renames the row id from the pending id to the key-derived id, the
+// name never changes), never a Save of a previously loaded record, so it can
+// neither miss a renamed row nor overwrite a concurrent change. It fails when
+// no row was changed and the node is not revoked already.
 func RevokeNode(app core.App, ref string, cli bool) (*core.Record, error) {
 	rec, err := FindNode(app, ref)
 	if err != nil {
@@ -179,14 +192,26 @@ func RevokeNode(app core.App, ref string, cli bool) (*core.Record, error) {
 	if rec.GetString("status") == NodeRevoked {
 		return rec, nil
 	}
-	rec.Set("status", NodeRevoked)
-	rec.Set("revoked_at", types.NowDateTime())
-	rec.Set("enroll_hash", "")
-	if err := app.Save(rec); err != nil {
+	name := rec.GetString("name")
+	now := types.NowDateTime().String()
+	res, err := app.NonconcurrentDB().NewQuery("UPDATE " + NodesCollection + " SET status={:r}, revoked_at={:t}, updated={:t}, enroll_hash='' WHERE name={:n} AND status!={:r}").
+		Bind(dbx.Params{"r": NodeRevoked, "t": now, "n": name}).Execute()
+	if err != nil {
 		return nil, err
 	}
-	emit(AuditNodeRevoke, NodesCollection, rec.Id, map[string]any{"name": rec.GetString("name"), "cli": cli})
-	return rec, nil
+	n, _ := res.RowsAffected()
+	cur, ferr := FindNode(app, name)
+	if ferr != nil {
+		return nil, fmt.Errorf("node %q not found", ref)
+	}
+	if n == 0 {
+		if cur.GetString("status") == NodeRevoked {
+			return cur, nil // revoked by someone else in the meantime
+		}
+		return nil, fmt.Errorf("node %q was not revoked (no row changed), try again", ref)
+	}
+	emit(AuditNodeRevoke, NodesCollection, cur.Id, map[string]any{"name": name, "cli": cli})
+	return cur, nil
 }
 
 // constEq compares two strings in constant time.

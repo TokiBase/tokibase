@@ -96,6 +96,7 @@ type Policy struct {
 // HandshakeResponse is the 200 body of POST /api/sync/handshake.
 type HandshakeResponse struct {
 	SessionToken string         `json:"session_token"`
+	Cert         string         `json:"cert,omitempty"` // renewed device certificate (< CertRenewBefore left)
 	Expires      string         `json:"expires"`
 	HubID        string         `json:"hub_id"`
 	HubEpoch     string         `json:"hub_epoch"`
