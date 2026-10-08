@@ -76,6 +76,11 @@ func (m *Module) pullHandler(e *core.RequestEvent) error {
 	}
 	limit = min(limit, maxPage)
 	wait = min(wait, proto.MaxWait)
+	if head := m.headSeq(); after > head {
+		// a cursor beyond the head (hub restored to an older state, corrupt cursor)
+		// would skip the future changes with seq <= after (P3-7)
+		return syncErr(e, http.StatusGone, proto.CodeRebootstrap, "The cursor is ahead of the hub; re-bootstrap.", map[string]any{"head": head})
+	}
 	if low := m.lowWater(); after < low {
 		return syncErr(e, http.StatusGone, proto.CodeRebootstrap, "The cursor is older than the retained changes; re-bootstrap.", map[string]any{"low_water": low})
 	}
@@ -126,6 +131,7 @@ func (m *Module) buildPull(app kernel.App, nodeID string, after, head int64, lim
 	if head <= after {
 		return resp, nil
 	}
+	vw := newViewer(app, nodeID, serviceActor(app, nodeID))
 	var rows []pullRow
 	err := app.DB().NewQuery(`SELECT seq, node, origin_seq, hlc, collection, record, op, patch, hash, status FROM _changes
   WHERE seq > {:a} AND seq <= {:h}
@@ -143,7 +149,7 @@ func (m *Module) buildPull(app kernel.App, nodeID string, after, head int64, lim
 		resp.Next = head
 	}
 	for i := range rows {
-		pc, ok, err := m.pullChange(app, &rows[i])
+		pc, ok, err := m.pullChange(app, vw, &rows[i])
 		if err != nil {
 			return nil, err
 		}
@@ -157,7 +163,7 @@ func (m *Module) buildPull(app kernel.App, nodeID string, after, head int64, lim
 // pullChange converts a row to its wire form. Counter and set fields are sent
 // as ABSOLUTE values read from the current record; revert rows carry the
 // current full record and the current record clock.
-func (m *Module) pullChange(app kernel.App, r *pullRow) (proto.PullChange, bool, error) {
+func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullChange, bool, error) {
 	col, err := app.FindCachedCollectionByNameOrId(r.Collection)
 	if err != nil {
 		return proto.PullChange{}, false, nil // collection deleted since
@@ -183,6 +189,19 @@ func (m *Module) pullChange(app kernel.App, r *pullRow) (proto.PullChange, bool,
 		pc.Revert = true
 		mh, mn, hasMeta := readMeta(db, col.Id, r.Record) // meta first: a newer record only costs a spurious conflict
 		rec, _ := app.FindRecordById(col.Id, r.Record)
+		var hidden map[string]struct{}
+		if rec != nil {
+			// a revert carries only what the node may see (P3-2, P3-10): a record
+			// outside the view rule of the node's actor is reported as gone
+			vr, err := vw.view(rec, p, true)
+			if err != nil {
+				return pc, false, err
+			}
+			if !vr.visible {
+				rec = nil
+			}
+			hidden = vr.hidden
+		}
 		if rec == nil {
 			pc.Op, pc.Patch, pc.Hash = OpDelete, json.RawMessage(`{}`), ""
 			return pc, true, nil
@@ -190,6 +209,9 @@ func (m *Module) pullChange(app kernel.App, r *pullRow) (proto.PullChange, bool,
 		vals, err := fieldValues(rec, fields, p.Types)
 		if err != nil {
 			return pc, false, err
+		}
+		for name := range hidden {
+			delete(vals, name)
 		}
 		enc, err := encodePatch(vals)
 		if err != nil {
@@ -214,24 +236,42 @@ func (m *Module) pullChange(app kernel.App, r *pullRow) (proto.PullChange, bool,
 	if r.Op == OpUpdate && len(patch) == 0 {
 		return pc, false, nil // a push that changed nothing
 	}
-	var cur map[string]any
-	loaded := false
+	// only synced, readable fields travel (P3-10): fields that left the sync set
+	// since the row was written and fields fieldperm hides from the node's actor
+	// are dropped. A record that is gone cannot be checked: its row is skipped,
+	// the delete row that follows it is enough.
+	rec, _ := app.FindRecordById(col.Id, r.Record)
+	if rec == nil {
+		return pc, false, nil
+	}
+	vr, err := vw.view(rec, p, false)
+	if err != nil {
+		return pc, false, err
+	}
+	allowed := make(map[string]struct{}, len(fields))
+	for _, f := range fields {
+		allowed[f.GetName()] = struct{}{}
+	}
+	for name := range patch {
+		_, ok := allowed[name]
+		_, hid := vr.hidden[name]
+		if !ok || hid {
+			delete(patch, name)
+		}
+	}
+	if r.Op == OpUpdate && len(patch) == 0 {
+		return pc, false, nil
+	}
+	cur, err := fieldValues(rec, fields, p.Types)
+	if err != nil {
+		return pc, false, err
+	}
 	for name, v := range patch {
 		if _, typed := typedOp(v); !typed {
 			continue
 		}
-		if !loaded {
-			loaded = true
-			if rec, _ := app.FindRecordById(col.Id, r.Record); rec != nil {
-				if cur, err = fieldValues(rec, fields, p.Types); err != nil {
-					return pc, false, err
-				}
-			}
-		}
 		if abs, ok := cur[name]; ok {
 			patch[name] = abs
-		} else {
-			delete(patch, name) // the record is gone; a later delete row follows
 		}
 	}
 	enc, err := encodePatch(patch)

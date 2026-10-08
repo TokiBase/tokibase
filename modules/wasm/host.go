@@ -559,6 +559,10 @@ func (h *Host) bindRecordHooks() {
 }
 
 func (h *Host) runRecord(after bool, action string, e *core.RecordEvent) error {
+	if after && kernel.IsSyncReplica(e.Context) {
+		// sync pull/snapshot/bundle apply: the after-handlers ran once, on the hub
+		return nil
+	}
 	mods := h.matchRecord(after, action, e.Record.Collection().Name)
 	if len(mods) == 0 {
 		return nil

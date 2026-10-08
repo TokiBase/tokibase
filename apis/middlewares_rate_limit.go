@@ -192,6 +192,7 @@ func checkRateLimit(e *core.RequestEvent, rtId string, rule core.RateLimitRule) 
 func skipRateLimit(e *core.RequestEvent) bool {
 	return !e.App.Settings().RateLimits.Enabled ||
 		e.HasSuperuserAuth() ||
+		syncReplay(e) ||
 		isIPInList(e.App.Settings().RateLimits.ExcludedIPs, e.RealIP())
 }
 
@@ -373,4 +374,11 @@ func (l *rateClient) consume() bool {
 	}
 
 	return false
+}
+
+// syncReplay reports whether e is a sync replay sub-request (internal traffic
+// of modules/sync, not a client request).
+func syncReplay(e *core.RequestEvent) bool {
+	v, _ := e.Get(core.RequestEventKeyInfoContext).(string)
+	return v == core.RequestInfoContextSync
 }

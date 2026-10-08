@@ -2,6 +2,7 @@ package apis
 
 import (
 	"bytes"
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"io"
@@ -293,7 +294,14 @@ func processInternalRequest(
 		return nil, err
 	}
 
-	r, err := http.NewRequest(strings.ToUpper(ir.Method), ir.URL, buf)
+	reqCtx := context.Background()
+	if infoContext == core.RequestInfoContextSync {
+		// sync replay: context values (kernel.SyncOrigin) must reach the model
+		// hooks; cancellation is dropped like in recordCreate/Update/Delete
+		reqCtx = context.WithoutCancel(baseEvent.Request.Context())
+	}
+
+	r, err := http.NewRequestWithContext(reqCtx, strings.ToUpper(ir.Method), ir.URL, buf)
 	if err != nil {
 		return nil, err
 	}

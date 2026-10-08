@@ -58,7 +58,8 @@ func newSpoke(t *testing.T) *spokeEnv {
 
 func (h *hubEnv) enroll(t *testing.T, name string, params map[string]string) string {
 	t.Helper()
-	_, code, err := CreateEnrollment(h.app, EnrollOptions{Name: name, Profile: "edge", Params: params})
+	// the service actor of the test nodes is the test superuser: their rules are open anyway
+	_, code, err := CreateEnrollment(h.app, EnrollOptions{Name: name, Profile: "edge", Params: params, Actor: core.CollectionNameSuperusers + "/" + h.su.Id})
 	if err != nil {
 		t.Fatal(err)
 	}

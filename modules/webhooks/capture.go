@@ -75,6 +75,11 @@ func (m *Module) bindCapture() {
 			if err := e.Next(); err != nil {
 				return err
 			}
+			// a sync replica apply (pull/snapshot/bundle) replays a change that
+			// already fired its webhook once, on the hub
+			if kernel.IsSyncReplica(e.Context) {
+				return nil
+			}
 			name := e.Record.Collection().Name
 			if skipCollection(name) {
 				return nil

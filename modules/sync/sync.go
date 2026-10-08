@@ -218,6 +218,9 @@ func (m *Module) Init() error {
 		if err := EnsureNodesCollection(m.app); err != nil {
 			return err
 		}
+		if err := EnsureConflictsCollection(m.app); err != nil {
+			return err
+		}
 		h, err := loadHubIdentity(st, m.app.Logger().Warn)
 		if err != nil {
 			return err

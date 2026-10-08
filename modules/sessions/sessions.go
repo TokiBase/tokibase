@@ -183,6 +183,8 @@ func Register(app core.App) *Module {
 
 	// issue: add the sid claim and record the session
 	kernel.OnAuthTokenIssue = m.onIssue
+	// sync actor grants are validated against the session at apply time
+	kernel.SessionActive = sessionActive
 
 	// validate
 	app.OnServe().Bind(&hook.Handler[*core.ServeEvent]{
@@ -537,4 +539,25 @@ func (m *Module) stopSweeper() {
 		close(m.stop)
 		m.stop = nil
 	}
+}
+
+// sessionActive is the kernel.SessionActive seam: true only for a present,
+// non-revoked, non-expired session (an unknown sid is inactive).
+func sessionActive(app kernel.App, sid string) (bool, error) {
+	var s Session
+	err := app.DB().NewQuery("SELECT " + selectCols + " FROM {{_sessions}} WHERE [[token_id]]={:t}").
+		Bind(dbx.Params{"t": sid}).One(&s)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if s.Revoked != "" {
+		return false, nil
+	}
+	if t := ParseTime(s.Expires); !t.IsZero() && !t.After(time.Now()) {
+		return false, nil
+	}
+	return true, nil
 }

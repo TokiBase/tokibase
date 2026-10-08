@@ -101,6 +101,10 @@ func (m *Module) bindRoutes() {
 				Bind(apis.SkipSuccessActivityLog(), rateTag("sync:pull"), m.nodeAuth())
 			g.POST(proto.PathAck, m.ackHandler).
 				Bind(apis.SkipSuccessActivityLog(), apis.BodyLimit(1<<20), rateTag("sync:ack"), m.nodeAuth())
+			g.POST(proto.PathActor, m.actorHandler).
+				Bind(apis.SkipSuccessActivityLog(), apis.BodyLimit(16<<10), rateTag("sync:actor"), m.nodeAuth())
+			g.DELETE(proto.PathActor+"/{aid}", m.actorRevokeHandler).
+				Bind(apis.SkipSuccessActivityLog(), rateTag("sync:actor"), m.nodeAuth())
 			return se.Next()
 		},
 	})

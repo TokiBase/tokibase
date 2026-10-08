@@ -1,6 +1,7 @@
 package apis
 
 import (
+	"context"
 	cryptoRand "crypto/rand"
 	"errors"
 	"fmt"
@@ -346,6 +347,9 @@ func recordCreate(responseWriteAfterTx bool, optFinalizer func(data any) error) 
 		hookErr := e.App.OnRecordCreateRequest().Trigger(event, func(e *core.RecordRequestEvent) error {
 			form.SetApp(e.App)
 			form.SetRecord(e.Record)
+			// WithoutCancel keeps the upstream "never cancelled" semantics while
+			// letting context values (kernel.SyncOrigin) reach the model hooks
+			form.SetContext(context.WithoutCancel(e.Request.Context()))
 
 			err := form.Submit()
 			if err != nil {
@@ -485,6 +489,9 @@ func recordUpdate(responseWriteAfterTx bool, optFinalizer func(data any) error) 
 		hookErr := e.App.OnRecordUpdateRequest().Trigger(event, func(e *core.RecordRequestEvent) error {
 			form.SetApp(e.App)
 			form.SetRecord(e.Record)
+			// WithoutCancel keeps the upstream "never cancelled" semantics while
+			// letting context values (kernel.SyncOrigin) reach the model hooks
+			form.SetContext(context.WithoutCancel(e.Request.Context()))
 
 			err := form.Submit()
 			if err != nil {
@@ -590,7 +597,7 @@ func recordDelete(responseWriteAfterTx bool, optFinalizer func(data any) error) 
 		event.Record = record
 
 		hookErr := e.App.OnRecordDeleteRequest().Trigger(event, func(e *core.RecordRequestEvent) error {
-			if err := e.App.Delete(e.Record); err != nil {
+			if err := e.App.DeleteWithContext(context.WithoutCancel(e.Request.Context()), e.Record); err != nil {
 				return firstApiError(err, e.BadRequestError("Failed to delete record. Make sure that the record is not part of a required relation reference.", err))
 			}
 

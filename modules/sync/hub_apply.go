@@ -24,13 +24,9 @@ import (
 
 // The hub apply pipeline of PR3 (docs/SYNC_DESIGN.md §4.1).
 //
-// IMPORTANT (temporary): pushed changes are applied as SUPERUSER. They go
-// straight through SaveWithContext/DeleteWithContext with
-// kernel.WithSyncOrigin(Mode: Push), so collection rules, fieldperm,
-// batchguard and the actor grants of §1.6 are NOT evaluated yet. PR4 replaces
-// this with the rule-checked replay (apis.ReplayRecordRequests) and the actor
-// checks. Until then only enrolled, active nodes can reach this code, but an
-// enrolled node can write any collection whose policy direction is both|push.
+// Since PR4 a pushed change is REPLAYED as its original actor through
+// apis.ReplayRecordRequests (see hub_replay.go and actor.go): collection rules,
+// fieldperm, validation and batchguard apply as for a client.
 
 // rejection is returned by the apply functions when a change is refused. It is
 // not an internal error: the change is recorded as rejected and the node gets
@@ -38,6 +34,10 @@ import (
 type rejection struct {
 	code string
 	msg  string
+	// park parks the change for review (actor revoked) instead of reverting it.
+	park bool
+	// internal marks an infrastructure failure during validation (not a verdict).
+	internal bool
 }
 
 func (r *rejection) Error() string { return r.code + ": " + r.msg }
@@ -60,6 +60,7 @@ type outcome struct {
 	code   string
 	seq    int64
 	hash   []byte
+	actor  *actorCtx
 }
 
 func parseChange(nodeID string, c proto.PushChange) (*hubChange, error) {
@@ -173,7 +174,7 @@ func (m *Module) pushHandler(e *core.RequestEvent) error {
 				j++
 			}
 		}
-		res, err := m.processGroup(e.App, nodeID, chs[i:j])
+		res, err := m.processGroup(e.App, nodeID, e.RealIP(), pushed, chs[i:j])
 		if err != nil {
 			e.App.Logger().Error("sync: push failed", "node", nodeID, "error", err)
 			return syncErr(e, http.StatusInternalServerError, "sync_internal", "push failed", nil)
@@ -241,18 +242,25 @@ const (
 	StatusApplied  = "applied"
 	StatusRejected = "rejected"
 	StatusRevert   = "revert"
+	StatusParked   = "parked"
 )
 
 // processGroup applies a tx group (or one change). Every change is applied in
 // one transaction; if one is rejected the whole group is rolled back and
 // rejected with the first failure's code.
-func (m *Module) processGroup(app kernel.App, nodeID string, group []*hubChange) ([]proto.PushResult, error) {
+func (m *Module) processGroup(app kernel.App, nodeID, ip string, pushed int64, group []*hubChange) ([]proto.PushResult, error) {
 	out := make([]proto.PushResult, len(group))
 	var todo []*hubChange
 	var todoIdx []int
 	for k, c := range group {
 		if r, ok := m.storedResult(app, nodeID, c); ok {
 			out[k] = r
+			continue
+		}
+		if c.oseq <= pushed {
+			// pushed_origin_seq is authoritative: this sequence was processed and its
+			// row is gone (compaction, restore). Never apply it a second time.
+			out[k] = proto.PushResult{ID: c.ID, Status: proto.ResDuplicate, Was: proto.ResApplied}
 			continue
 		}
 		todo = append(todo, c)
@@ -263,37 +271,51 @@ func (m *Module) processGroup(app kernel.App, nodeID string, group []*hubChange)
 	}
 
 	var outs []*outcome
-	var applied bool
 	err := app.RunInTransaction(func(tx kernel.App) error {
-		outs = outs[:0]
-		for _, c := range todo {
-			o, err := m.applyOne(tx, nodeID, c)
-			if err != nil {
-				return err
-			}
-			outs = append(outs, o)
+		var err error
+		if outs, err = m.applyGroup(tx, nodeID, ip, todo); err != nil {
+			return err
 		}
-		applied = true
 		return m.advancePushed(tx, nodeID, todo[len(todo)-1].oseq)
 	})
-	if applied && err == nil {
+	if err == nil {
 		for k, o := range outs {
 			out[todoIdx[k]] = proto.PushResult{ID: todo[k].ID, Status: o.status, Code: o.code, HubSeq: o.seq, Hash: hex.EncodeToString(o.hash)}
+			m.auditApplied(nodeID, ip, todo[k], o)
 		}
 		return out, nil
 	}
 	var rj *rejection
 	if !errors.As(err, &rj) {
-		return nil, err
+		if isTransient(err) {
+			return nil, err // retriable: the node pushes again
+		}
+		// a permanent failure must not block the queue of the node for ever
+		app.Logger().Error("sync: change could not be applied, rejecting it", "node", nodeID, "change", todo[0].ID, "error", err)
+		rj = &rejection{code: CodeApplyError, msg: err.Error()}
 	}
 
 	// rejected: the transaction rolled back; record the verdict of every change
-	// plus a revert row per record, in a transaction of its own
+	// (plus a revert row per record, or a parked row and conflict), in a
+	// transaction of its own
 	var rejSeqs []int64
 	err = app.RunInTransaction(func(tx kernel.App) error {
 		rejSeqs = rejSeqs[:0]
+		var revertActor *core.Record
+		if !rj.park {
+			revertActor = m.revertActor(tx, nodeID, todo)
+		}
 		for _, c := range todo {
-			seq, err := m.recordRejected(tx, nodeID, c, rj.code, true)
+			var seq int64
+			var err error
+			if rj.park {
+				seq, err = m.recordParked(tx, nodeID, c, rj)
+			} else {
+				seq, err = m.recordRejected(tx, nodeID, c, rj.code, true, revertActor)
+				if err == nil && rj.code == CodeApplyError {
+					err = m.addConflict(tx, nodeID, c, rj, "reverted", "resolved")
+				}
+			}
 			if err != nil {
 				return err
 			}
@@ -304,10 +326,82 @@ func (m *Module) processGroup(app kernel.App, nodeID string, group []*hubChange)
 	if err != nil {
 		return nil, err
 	}
+	status := proto.ResRejected
+	if rj.park {
+		status = proto.ResParked
+	}
 	for k, c := range todo {
-		out[todoIdx[k]] = proto.PushResult{ID: c.ID, Status: proto.ResRejected, Code: rj.code, HubSeq: rejSeqs[k]}
+		out[todoIdx[k]] = proto.PushResult{ID: c.ID, Status: status, Code: rj.code, HubSeq: rejSeqs[k]}
+		emit(AuditReject, c.Collection, c.Record, m.auditDetails(nodeID, ip, c, nil, map[string]any{"code": rj.code, "message": truncate(rj.msg, 300), "parked": rj.park}))
 	}
 	return out, nil
+}
+
+// CodeApplyError is the code of a change that failed for a permanent
+// infrastructure reason (neither a rule, validation nor unique problem).
+const CodeApplyError = "apply_error"
+
+// revertActor is the record whose view rights decide what a revert row may
+// carry: the original actor of the rejected group when it still resolves, else
+// the service actor of the node (nil when there is none).
+func (m *Module) revertActor(tx kernel.App, nodeID string, group []*hubChange) *core.Record {
+	aid := ""
+	for _, c := range group {
+		if c.Actor != "" && c.Actor != ActorNode {
+			aid = c.Actor
+			break
+		}
+	}
+	if aid != "" {
+		if a, rj := m.resolveActor(tx, nodeID, aid, nil); rj == nil {
+			return a.rec
+		}
+	}
+	return serviceActor(tx, nodeID)
+}
+
+// recordParked stores a change as parked with an open conflict (no revert row:
+// the spoke keeps its state until an admin decides).
+func (m *Module) recordParked(tx kernel.App, nodeID string, c *hubChange, rj *rejection) (int64, error) {
+	patch := "{}"
+	if len(c.Patch) > 0 && string(c.Patch) != "null" {
+		patch = string(c.Patch)
+	}
+	seq, err := m.insertHubRow(tx.NonconcurrentDB(), &hubRow{
+		node: nodeID, oseq: c.oseq, hlc: int64(c.hlc), base: int64(c.base), col: c.Collection, rec: c.Record,
+		op: c.Op, patch: patch, hash: c.hash, actor: c.Actor, tx: c.Tx, status: StatusParked, code: rj.code,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return seq, m.addConflict(tx, nodeID, c, rj, "parked", "open")
+}
+
+// addConflict writes a `_sync_conflicts` row for a change that needs review.
+func (m *Module) addConflict(tx kernel.App, nodeID string, c *hubChange, rj *rejection, resolution, status string) error {
+	col, err := tx.FindCachedCollectionByNameOrId(ConflictsCollection)
+	if err != nil {
+		return nil // PR4 minimal schema missing: nothing to write to
+	}
+	r := core.NewRecord(col)
+	r.Set("collection", truncate(c.Collection, 255))
+	r.Set("record", truncate(c.Record, 255))
+	r.Set("change", c.ID)
+	r.Set("node", nodeID)
+	r.Set("actor", truncate(c.Actor, 255))
+	kind := rj.code
+	if kind != CodeApplyError && kind != proto.CodeActorRevoked {
+		kind = CodeApplyError
+	}
+	r.Set("kind", kind)
+	r.Set("strategy", "lww")
+	if len(c.Patch) > 0 && string(c.Patch) != "null" {
+		r.Set("incoming", c.Patch)
+	}
+	r.Set("resolution", resolution)
+	r.Set("status", status)
+	r.Set("note", truncate(rj.msg, 2000))
+	return tx.Save(r)
 }
 
 func (m *Module) advancePushed(tx kernel.App, nodeID string, oseq int64) error {
@@ -319,7 +413,7 @@ func (m *Module) advancePushed(tx kernel.App, nodeID string, oseq int64) error {
 // recordRejected stores the rejected row of c and, when revert is set, the
 // revert row (target = the pushing node) right after it. It returns the seq a
 // node should see for the result: the revert row when there is one.
-func (m *Module) recordRejected(tx kernel.App, nodeID string, c *hubChange, code string, revert bool) (int64, error) {
+func (m *Module) recordRejected(tx kernel.App, nodeID string, c *hubChange, code string, revert bool, actor *core.Record) (int64, error) {
 	db := tx.NonconcurrentDB()
 	patch := "{}"
 	if len(c.Patch) > 0 && string(c.Patch) != "null" {
@@ -335,7 +429,7 @@ func (m *Module) recordRejected(tx kernel.App, nodeID string, c *hubChange, code
 	if !revert || (c.Op == OpDelete && code == proto.CodeSuperseded) {
 		return seq, nil
 	}
-	rseq, err := m.insertRevert(tx, nodeID, c.Collection, c.Record)
+	rseq, err := m.insertRevert(tx, nodeID, c.Collection, c.Record, actor)
 	if err != nil {
 		return 0, err
 	}
@@ -348,7 +442,7 @@ func (m *Module) recordRejected(tx kernel.App, nodeID string, c *hubChange, code
 // insertRevert writes the revert row of a record: the full current hub state,
 // or op d when the record does not exist. It returns 0 when the collection is
 // unknown or not replicated (no row).
-func (m *Module) insertRevert(tx kernel.App, nodeID, colRef, recID string) (int64, error) {
+func (m *Module) insertRevert(tx kernel.App, nodeID, colRef, recID string, actor *core.Record) (int64, error) {
 	col, err := tx.FindCachedCollectionByNameOrId(colRef)
 	if err != nil {
 		return 0, nil
@@ -363,12 +457,28 @@ func (m *Module) insertRevert(tx kernel.App, nodeID, colRef, recID string) (int6
 	db := tx.NonconcurrentDB()
 	r := &hubRow{node: m.hub.id, col: col.Id, rec: recID, target: nodeID, status: StatusRevert, hlc: int64(m.Clock().Now())}
 	rec, _ := tx.FindRecordById(col.Id, recID)
+	var hidden map[string]struct{}
+	if rec != nil {
+		// a revert must not carry more than the actor may see (P3-2): a record
+		// outside the view rule is reported as gone, without data
+		vr, err := newViewer(tx, nodeID, actor).view(rec, p, true)
+		if err != nil {
+			return 0, err
+		}
+		if !vr.visible {
+			rec = nil
+		}
+		hidden = vr.hidden
+	}
 	if rec == nil {
 		r.op, r.patch = OpDelete, "{}"
 	} else {
 		vals, err := fieldValues(rec, syncedFields(col, p), p.Types)
 		if err != nil {
 			return 0, err
+		}
+		for name := range hidden {
+			delete(vals, name)
 		}
 		enc, err := encodePatch(vals)
 		if err != nil {
@@ -461,209 +571,16 @@ func typedOp(v any) (map[string]any, bool) {
 	return mp, inc || add || rm
 }
 
-// applyOne applies one change inside tx. A refusal comes back as *rejection.
-func (m *Module) applyOne(tx kernel.App, nodeID string, c *hubChange) (*outcome, error) {
-	col, err := tx.FindCachedCollectionByNameOrId(c.Collection)
-	if err != nil {
-		return nil, reject(proto.CodePolicyDirection, "unknown collection")
-	}
-	p, perr := m.pol.For(col)
-	if perr != nil {
-		return nil, perr
-	}
-	if p == nil || (p.Direction != DirBoth && p.Direction != DirPush) {
-		return nil, reject(proto.CodePolicyDirection, "the collection does not accept pushes")
-	}
-	if _, err := m.Clock().ObserveBounded(c.hlc, maxDrift()); err != nil {
-		return nil, reject(proto.CodeFutureHLC, "the change hlc is too far in the future")
-	}
-
-	db := tx.NonconcurrentDB()
-	origin := &kernel.SyncOrigin{Mode: kernel.SyncModePush, Node: nodeID, HLC: uint64(c.hlc), ChangeID: c.ID, Actor: c.Actor}
-	ctx := kernel.WithSyncOrigin(context.Background(), origin)
-	tomb := tombstoneKind(db, col.Id, c.Record)
-	metaH, metaNode, hasMeta := readMeta(db, col.Id, c.Record)
-	rec, _ := tx.FindRecordById(col.Id, c.Record)
-
-	switch c.Op {
-	case OpPurge:
-		return nil, reject(proto.CodeLegalTombstone, "purge is not accepted from nodes")
-	case OpDelete:
-		if rec == nil {
-			return m.superseded(tx, nodeID, c, false)
-		}
-		// deletes are final (§4.2): a delete older than a concurrent update still deletes
-		if err := tx.DeleteWithContext(ctx, rec); err != nil {
-			return nil, classify(err)
-		}
-		seq, err := m.insertHubRow(db, &hubRow{
-			node: nodeID, oseq: c.oseq, hlc: int64(c.hlc), base: int64(c.base), col: col.Id, rec: c.Record, op: OpDelete,
-			patch: "{}", actor: c.Actor, tx: c.Tx, status: StatusApplied,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if err := putTombstone(db, col.Id, c.Record, "delete", int64(c.hlc), nodeID, c.Actor, "", m.created()); err != nil {
-			return nil, err
-		}
-		_, err = db.NewQuery("DELETE FROM _sync_meta WHERE collection={:c} AND record={:r}").
-			Bind(dbx.Params{"c": col.Id, "r": c.Record}).Execute()
-		return &outcome{status: proto.ResApplied, seq: seq}, err
-	}
-
-	// create / update
-	if tomb == "legal" {
-		return nil, reject(proto.CodeLegalTombstone, "the record was purged")
-	}
-	if tomb != "" {
-		return nil, reject(proto.CodeTombstoned, "the record was deleted")
-	}
-	if rec == nil && c.Op == OpUpdate {
-		return nil, reject(proto.CodeOrphaned, "the record does not exist on the hub")
-	}
-
-	fields := syncedFields(col, p)
-	allowed := make(map[string]core.Field, len(fields))
-	for _, f := range fields {
-		allowed[f.GetName()] = f
-	}
-	patch := c.patch
-	merged := false
-	if rec != nil && int64(c.base) != metaH {
-		// concurrent: the writer did not see the latest hub version (lww, record level)
-		if hlc.Less(hlc.HLC(metaH), metaNode, c.hlc, nodeID) {
-			// the incoming change wins; fields not in the patch keep the hub values
-		} else {
-			// lost: nothing but counter/set operations is applied (they never conflict, §4.5)
-			typedOnly := map[string]any{}
-			for k, v := range patch {
-				if _, ok := typedOp(v); ok {
-					typedOnly[k] = v
-				}
-			}
-			if len(typedOnly) == 0 {
-				return m.superseded(tx, nodeID, c, true)
-			}
-			patch, merged = typedOnly, true
-		}
-	}
-
-	isNew := rec == nil
-	var pre map[string]any
-	if isNew {
-		rec = core.NewRecord(col)
-		rec.Set("id", c.Record)
-	} else {
-		if pre, err = fieldValues(rec, fields, p.Types); err != nil {
-			return nil, err
-		}
-	}
-	// autodate columns: the interceptor regenerates them on every save, so the
-	// origin value (or, without one in the patch, the current value) is put back
-	// after the save
-	wantAuto := map[string]string{}
-	if !isNew {
-		for _, f := range fields {
-			if f.Type() == kernel.FieldTypeAutodate {
-				wantAuto[f.GetName()] = rec.GetString(f.GetName())
-			}
-		}
-	}
-	for name, v := range patch {
-		f, ok := allowed[name]
-		if !ok {
-			continue // unknown, excluded or never-synced field (file, password, tokenKey, derived)
-		}
-		if op, typed := typedOp(v); typed {
-			applyTyped(rec, name, op)
-			continue
-		}
-		if f.Type() == kernel.FieldTypeAutodate {
-			if s, ok := v.(string); ok {
-				wantAuto[name] = s
-			}
-		}
-		rec.Set(name, v)
-	}
-	if err := tx.SaveWithContext(ctx, rec); err != nil {
-		return nil, classify(err)
-	}
-	if err := fixAutodates(tx, col, rec.Id, wantAuto); err != nil {
-		return nil, err
-	}
-	fresh, err := tx.FindRecordById(col.Id, c.Record)
-	if err != nil {
-		return nil, err
-	}
-	post, err := fieldValues(fresh, fields, p.Types)
-	if err != nil {
-		return nil, err
-	}
-	hash := canonicalHash(col.Id, c.Record, post)
-
-	eff := map[string]any{}
-	if isNew {
-		for k, v := range post {
-			eff[k] = v
-		}
-	} else {
-		eff, _ = diffPatch(fields, p, pre, post)
-	}
-	encEff, err := encodePatch(eff)
-	if err != nil {
-		return nil, err
-	}
-	seq, err := m.insertHubRow(db, &hubRow{
-		node: nodeID, oseq: c.oseq, hlc: int64(c.hlc), base: int64(c.base), col: col.Id, rec: c.Record, op: c.Op,
-		patch: encEff, hash: hash, actor: c.Actor, tx: c.Tx, status: StatusApplied,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// record clock: max(meta.hlc, change.hlc); a lost-lww merge keeps the winner's clock
-	nh, nn := int64(c.hlc), nodeID
-	if hasMeta && (merged || !hlc.Less(hlc.HLC(metaH), metaNode, c.hlc, nodeID)) {
-		nh, nn = metaH, metaNode
-	}
-	if err := upsertMeta(db, col.Id, c.Record, nh, nn, hash); err != nil {
-		return nil, err
-	}
-	st := proto.ResApplied
-	if merged {
-		st = proto.ResMerged
-		// the node keeps its lost plain fields and has not seen the hub's autodate
-		// values: send it the hub state so that it converges
-		if _, err := m.insertRevert(tx, nodeID, col.Id, c.Record); err != nil {
-			return nil, err
-		}
-	}
-	return &outcome{status: st, seq: seq, hash: hash}, nil
-}
-
 // superseded records a lost lww change: nothing is written to the record, the
 // row is stored as rejected/superseded for idempotency, and (withRevert) the
 // node gets the hub state so that it converges even if the winning change does
 // not touch the fields it edited.
-func (m *Module) superseded(tx kernel.App, nodeID string, c *hubChange, withRevert bool) (*outcome, error) {
-	seq, err := m.recordRejected(tx, nodeID, c, proto.CodeSuperseded, withRevert)
+func (m *Module) superseded(tx kernel.App, nodeID string, c *hubChange, withRevert bool, actor *core.Record) (*outcome, error) {
+	seq, err := m.recordRejected(tx, nodeID, c, proto.CodeSuperseded, withRevert, actor)
 	if err != nil {
 		return nil, err
 	}
 	return &outcome{status: proto.ResSuperseded, code: proto.CodeSuperseded, seq: seq}, nil
-}
-
-// applyTyped replays a counter/set operation through PocketBase's modifiers.
-func applyTyped(rec *core.Record, name string, op map[string]any) {
-	if d, ok := op["$inc"]; ok {
-		rec.Set(name+"+", d)
-	}
-	if add, ok := op["$add"]; ok {
-		rec.Set(name+"+", add)
-	}
-	if rm, ok := op["$rm"]; ok {
-		rec.Set(name+"-", rm)
-	}
 }
 
 // fixAutodates restores the origin value of autodate fields when the autodate
@@ -689,24 +606,3 @@ func fixAutodates(tx kernel.App, col *core.Collection, id string, want map[strin
 	return nil
 }
 
-// classify maps a save error to a rejection when it is a data problem, and
-// leaves it as an internal error otherwise.
-func classify(err error) error {
-	var ve validation.Errors
-	if strings.Contains(err.Error(), "UNIQUE constraint") {
-		return reject(proto.CodeUniqueViolation, err.Error())
-	}
-	if errors.As(err, &ve) {
-		return reject(proto.CodeValidationFailed, err.Error())
-	}
-	var ae *router.ApiError
-	if errors.As(err, &ae) {
-		if ae.Status == http.StatusForbidden || ae.Status == http.StatusUnauthorized {
-			return reject(proto.CodeRuleDenied, err.Error())
-		}
-		if ae.Status >= 400 && ae.Status < 500 {
-			return reject(proto.CodeValidationFailed, err.Error())
-		}
-	}
-	return err
-}
