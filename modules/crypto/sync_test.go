@@ -114,14 +114,11 @@ func TestSyncOriginKeepsIncomingCiphertext(t *testing.T) {
 	id := hub.create(t)
 	ctDiag, ctSSN := hub.raw(t, id, "diagnosis"), hub.raw(t, id, "ssn")
 
-	// the spoke has the same collection id under another name and its own master key
+	// the spoke has the same collection (ids derive from the name) and its own master key
 	spoke := setup(t, "")
-	c := core.NewBaseCollection("patients2")
-	c.Id = col.Id
-	c.Fields.Add(&core.TextField{Name: "name"}, &core.TextField{Name: "diagnosis"}, &core.TextField{Name: "ssn"},
-		&core.EmailField{Name: "email"}, &core.JSONField{Name: "notes"})
-	if err := spoke.app.Save(c); err != nil {
-		t.Fatal(err)
+	c := patients(t, spoke)
+	if c.Id != col.Id {
+		t.Fatal("collection ids must be identical across nodes")
 	}
 	node := x25519(t)
 	keys, _ := kernel.SyncKeyProviderOf(hub.app).ExportKeys([]string{col.Id}, node.PublicKey().Bytes())
@@ -129,7 +126,7 @@ func TestSyncOriginKeepsIncomingCiphertext(t *testing.T) {
 		t.Fatal(err)
 	}
 	for f, mode := range map[string]string{"diagnosis": ModeRandom, "ssn": ModeBlindIndex} {
-		if err := spoke.app.Save(configRow(t, spoke, "patients2", f, mode)); err != nil {
+		if err := spoke.app.Save(configRow(t, spoke, "patients", f, mode)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -146,7 +143,7 @@ func TestSyncOriginKeepsIncomingCiphertext(t *testing.T) {
 		t.Fatal(err)
 	}
 	var d, s string
-	_ = spoke.app.DB().NewQuery("SELECT diagnosis, ssn FROM patients2 WHERE id={:i}").Bind(map[string]any{"i": id}).Row(&d, &s)
+	_ = spoke.app.DB().NewQuery("SELECT diagnosis, ssn FROM patients WHERE id={:i}").Bind(map[string]any{"i": id}).Row(&d, &s)
 	if d != ctDiag || s != ctSSN {
 		t.Fatalf("stored ciphertext must be the incoming one:\n%q\n%q", d, s)
 	}
@@ -156,14 +153,14 @@ func TestSyncOriginKeepsIncomingCiphertext(t *testing.T) {
 	}
 
 	// validate path (hub push replay): plaintext for the validators, the same ciphertext stored
-	rec2, _ := spoke.app.FindRecordById("patients2", id)
+	rec2, _ := spoke.app.FindRecordById("patients", id)
 	rec2.Set("diagnosis", ctDiag)
 	rec2.Set("name", "Anna")
 	ctx = kernel.WithSyncOrigin(context.Background(), &kernel.SyncOrigin{Mode: kernel.SyncModePush, Node: "nspoke"})
 	if err := spoke.app.SaveWithContext(ctx, rec2); err != nil {
 		t.Fatal(err)
 	}
-	_ = spoke.app.DB().NewQuery("SELECT diagnosis FROM patients2 WHERE id={:i}").Bind(map[string]any{"i": id}).Row(&d)
+	_ = spoke.app.DB().NewQuery("SELECT diagnosis FROM patients WHERE id={:i}").Bind(map[string]any{"i": id}).Row(&d)
 	if d != ctDiag {
 		t.Fatal("a validated push must keep the ciphertext too")
 	}
