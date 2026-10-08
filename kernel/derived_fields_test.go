@@ -51,7 +51,8 @@ func TestSyncOrigin(t *testing.T) {
 			t.Fatalf("mode %d", mode)
 		}
 	}
-	if kernel.SyncOriginFrom(kernel.WithSyncOrigin(nil, &kernel.SyncOrigin{Mode: kernel.SyncModePull})) == nil {
+	var noCtx context.Context
+	if kernel.SyncOriginFrom(kernel.WithSyncOrigin(noCtx, &kernel.SyncOrigin{Mode: kernel.SyncModePull})) == nil {
 		t.Fatal("nil parent context")
 	}
 	if kernel.RequestInfoContextSync != "sync" {

@@ -798,9 +798,10 @@ func TestRoleFromEnv(t *testing.T) {
 
 func TestReplicaApplyWritesMetaOnly(t *testing.T) {
 	e := setup(t)
+	var noCtx context.Context
 	o := &kernel.SyncOrigin{Mode: kernel.SyncModePull, Node: "nhub", HLC: uint64(hlc.Make(1_700_000_000_000, 4)), ChangeID: "nhub:7", Actor: "rec:x:y"}
 	ctx := kernel.WithSyncOrigin(context.Background(), o)
-	if !kernel.IsSyncReplica(ctx) || kernel.SyncOriginFrom(ctx) != o || kernel.IsSyncReplica(context.Background()) || kernel.SyncOriginFrom(nil) != nil {
+	if !kernel.IsSyncReplica(ctx) || kernel.SyncOriginFrom(ctx) != o || kernel.IsSyncReplica(context.Background()) || kernel.SyncOriginFrom(noCtx) != nil {
 		t.Fatal("origin helpers")
 	}
 
