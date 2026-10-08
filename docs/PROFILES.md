@@ -47,6 +47,7 @@ Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.  darw
 | adminlock | `no_adminlock no_wasm` | yes | yes | no | no |
 | Admin UI | `no_ui` | yes | yes | no | no |
 | totp | `no_totp` | yes | yes | yes | no |
+| nativeauth | `no_nativeauth` | yes | yes | yes | yes |
 | geo | `no_geo` | yes | yes | yes | no |
 | jsvm plugin (pb_hooks, JS migrations) | `no_jsvm` | yes | yes | no | no |
 | migrate command | `no_migratecmd` | yes | yes | no | no |

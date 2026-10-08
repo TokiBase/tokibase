@@ -28,6 +28,7 @@ import (
 	"github.com/tokibase/tokibase/modules/jobs"
 	"github.com/tokibase/tokibase/modules/lockout"
 	"github.com/tokibase/tokibase/modules/mcp"
+	"github.com/tokibase/tokibase/modules/nativeauth"
 	"github.com/tokibase/tokibase/modules/passkey"
 	"github.com/tokibase/tokibase/modules/push"
 	"github.com/tokibase/tokibase/modules/ruleguard"
@@ -267,6 +268,25 @@ func NewWithConfig(config Config) *PocketBase {
 				pb.Logger().Warn("audit: failed to record "+action, "error", err)
 			}
 		})
+	}
+
+	// native Google/Apple ID token sign-in mapped to OAuth2 external auths (TOKI_NATIVEAUTH=off disables; see docs/modules/nativeauth.md)
+	if nativeauth.Enabled() {
+		nativeauth.Register(pb.App.(core.App))
+		nativeauth.SetFailureSink(lockout.RecordFailureFor)
+		nativeauth.SetLockedSink(lockout.IsLocked)
+		if auditLog != nil {
+			nativeauth.SetAuditSink(func(action, collection, record string, details map[string]any) {
+				after, _ := json.Marshal(details)
+				afterStr := string(after)
+				if err := auditLog.Append(&audit.Entry{
+					ActorKind: "system", Action: action, Collection: collection,
+					Record: record, After: &afterStr,
+				}); err != nil {
+					pb.Logger().Warn("audit: failed to record "+action, "error", err)
+				}
+			})
+		}
 	}
 
 	// durable job queue (TOKI_JOBS=off disables; TOKI_JOBS_WORKERS, TOKI_ROLE=worker)
