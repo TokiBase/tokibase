@@ -369,7 +369,7 @@ TOKI_SYNC_MIN_KEEP=1ms toki hub "$HUB" sync compact --json 2>/dev/null | grep '^
 jget 'd["changes_deleted"] > 0 and d["low_water"] > 0' <"$TMP/compact2.json" | grep -q True || fail "compaction did not raise low_water: $(cat "$TMP/compact2.json")"
 
 PORT_S3=$((PORT_HUB + 3000)); URL_S3="http://127.0.0.1:$PORT_S3"; S3="$TMP/s3"
-CODE3="$(toki hub "$HUB" sync enroll --name s3 --profile edge --actor "_superusers/$SU_ID" | awk '/^code:/ {print $2}')"
+CODE3="$(toki hub "$HUB" sync enroll --name s3 --profile edge --actor "_superusers/$SU_ID" --allow-superuser-actor | awk '/^code:/ {print $2}')"
 [ -n "$CODE3" ] || fail "no enrollment code for s3"
 toki spoke "$S3" superuser upsert "$EMAIL" "$PASS" >/dev/null
 toki spoke "$S3" sync join "$URL_HUB" "$CODE3" >/dev/null || fail "join s3"
