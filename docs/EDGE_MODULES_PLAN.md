@@ -341,7 +341,7 @@ Order matters. PRs 1 to 3 have no hardware dependency and can be built and teste
 | 5 (evdev reader and `devices` done in PR 3) | `scanner` PR2 | evdev reader with `EVIOCGRAB`, `toki scan devices`, 32/64-bit struct tests, udev docs. | 3 |
 | 6 (done) | `devicecert` PR1 | Hub CA with wrapped key, `_device_certs`, `/api/sync/devcert` and spoke renewal in `modules/sync`, leaf key, `:8443` listener, `toki devicecert ca|status|list`, `no_devicecert`. | 0 |
 | 7 (done) | `devicecert` PR2 | Client-cert issue/revoke, mTLS route allowlist, deny-list sync policy, `/api/device/identity` and `/api/device/attest`, rotate-ca. | 6 |
-| 8 | `edge` integration | `profiles.txt` (nano tags), size measurement and `docs/PROFILES.md`, `docs/EDGE_GATE.md`, parking e2e (`tests/e2e/edge-gate.sh`: hub, spoke, TCP printer stub, pty scanner, kiosk pair, 48 h offline compressed with `TOKI_SYNC_TEST_CLOCK_OFFSET`). Feeds SYNC_DESIGN PR10. | 2 to 7 |
+| 8 (done) | `edge` integration | `profiles.txt` (nano tags), size measurement and `docs/PROFILES.md`, `docs/EDGE_GATE.md`, parking e2e (`tests/e2e/edge-gate.sh`: hub, spoke, TCP printer stub, pty scanner, kiosk pair, 48 h offline compressed with `TOKI_SYNC_TEST_CLOCK_OFFSET`). Feeds SYNC_DESIGN PR10. | 2 to 7 |
 
 ### Status of PR 0 and PR 1 (done)
 
@@ -389,6 +389,17 @@ Order matters. PRs 1 to 3 have no hardware dependency and can be built and teste
 - Review fixes from the PR 6 review (D1 to D14) are part of this PR: server leaf is `serverAuth` only and a client certificate `clientAuth` only (D2), the deny check runs in `VerifyConnection` so resumed sessions are checked (D1), `tlscheck` strict keeps refusing plain HTTP (D4), a node pins the first root it receives (D6), stricter SAN policy on the hub (D5). See the table in the PR description and `docs/modules/devicecert.md`.
 - `GET /api/device/identity` and `POST /api/device/attest` live in `modules/devicecert` (public, throttled 30 per minute per address). Attest signs `toki-attest/v1|<node_id>|<nonce>|<ts>` with `NodeIdentity.Sign`.
 - Rotation: the new CA signs, the previous root stays in the pool (hub) and in the bundle sent to nodes with a `Toki-Retire-At` PEM header for `TOKI_DEVICECERT_CA_OVERLAP_DAYS` (default 30). Nodes learn the new root with their next leaf renewal.
+
+### Status of PR 8 (done)
+
+Integration, with these decisions:
+- `docs/EDGE_GATE.md`: the operator walkthrough (OS prep, udev, systemd units, env matrix, hub setup, enrollment, local rows, kiosk and root CA, client certificates, offline behaviour, troubleshooting, upgrade/rollback/backup).
+- `profiles.txt` and `docs/PROFILES.md`: one authoritative size table measured on the build VM (edge 27.44 MiB amd64, 25.63 arm64; nano 22.29; solo/team 45.70; cluster 53.91). Budgets are measured + about 5% rounded up: edge 30 (the rule gives 29; one more MiB for sync PR9/PR10), nano 24, solo/team 48, cluster 57, `no_ui` 45. The server profiles keep `printer`, `scanner`, `kiosk` and `devicecert` (hub-side `toki devicecert issue`, print/scan APIs on a solo host; opt-in at runtime, about 0.7 MiB).
+- `tests/e2e/edge-gate.sh` (+ `tests/e2e/edgegate/stubprinter.py`, CI job `e2e-edge-gate`, about 25 s): hub (solo tags) and an edge-tag spoke; kiosk pairing and session; pty scans visible on `GET /api/scan/events` for the kiosk session; ticket printed to a TCP stub (QR + cut); a gate controller calls `/api/scan` on the TLS port with its client certificate and no token; the hub revokes it and the call fails after the deny list arrives; the hub is stopped, 5 tickets get reserved numbers offline and converge (`toki sync verify`); the kiosk lock kills its token. The 48 h compressed offline run with `TOKI_SYNC_TEST_CLOCK_OFFSET` belongs to the sync PR10 parking scenario (`tests/e2e/parking.sh`) and is not repeated.
+- Finding: a write made with the kiosk session token (actor `gate_devices/...`) is captured as `rec:...` and PARKED by the hub unless the actor has a sync grant; the e2e writes tickets with the operator token of the spoke (captured as `node`). Documented in EDGE_GATE.md section 7; automatic mapping is devicecert/kiosk v1.1 work.
+- No code change in the binary; no COMPAT change.
+
+Still open: PR 5 (real-device checks of the evdev reader and the udev rules), devicecert v1.1 (actor mapping for a client certificate and for the kiosk, intermediate CA for offline issuing), pull-only provisioning of `_printers`/`_print_templates`/`_scanners` once `modules/sync/syscollections.go` admits them, a tested Chromium kiosk image.
 
 Parallelism: after PR 0 and 1, PRs 2, 3 and 6 are independent.
 
