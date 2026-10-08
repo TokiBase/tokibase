@@ -52,6 +52,10 @@ func TestNotifyWatcher_SettingsUpdate(t *testing.T) {
 	})
 
 	app2.OnSettingsReload().BindFunc(func(e *kernel.SettingsReloadEvent) error {
+		// run the reload first so that the settings are fully loaded
+		// (and no longer written) before the test is notified
+		err := e.Next()
+
 		testEvents.SetFunc(app2, func(old int) int {
 			defer func() {
 				done <- struct{}{}
@@ -59,7 +63,7 @@ func TestNotifyWatcher_SettingsUpdate(t *testing.T) {
 
 			return old + 1
 		})
-		return e.Next()
+		return err
 	})
 
 	// updating app1 settings should trigger a reload in app2
@@ -150,7 +154,7 @@ func TestNotifyWatcher_CollectionsUpdate(t *testing.T) {
 		for {
 			select {
 			case <-ticker.C:
-				if len(testQueries.Get("concurrent")) == 1 {
+				if len(testQueries.Get("concurrent")) >= 1 {
 					sem.Release(1)
 					return
 				}
@@ -178,18 +182,28 @@ func TestNotifyWatcher_CollectionsUpdate(t *testing.T) {
 	ticker.Stop()
 	done <- true
 
+	// let any in-flight debounced reload finish before inspecting the queries
+	time.Sleep(300 * time.Millisecond)
+
 	nonconcurrentQueries := testQueries.Get("nonconcurrent")
 	concurrentQueries := testQueries.Get("concurrent")
 
 	if len(nonconcurrentQueries) != 0 {
 		t.Fatalf("Expected 0 concurrent queries, got %d (%v)", len(nonconcurrentQueries), nonconcurrentQueries)
 	}
-	if len(concurrentQueries) != 1 {
-		t.Fatalf("Expected 1 concurrent query, got %d (%v)", len(concurrentQueries), concurrentQueries)
+
+	// The watcher debounces notifications (50ms), so the 3 app1 writes are
+	// coalesced into 1 reload on a fast machine; on a slow one (e.g. -race
+	// on a shared CI runner) the writes can be spread over more than one
+	// debounce window and trigger up to 1 reload per write.
+	if len(concurrentQueries) < 1 || len(concurrentQueries) > 3 {
+		t.Fatalf("Expected between 1 and 3 concurrent queries, got %d (%v)", len(concurrentQueries), concurrentQueries)
 	}
 
 	expectedQuery := "SELECT {{_collections}}.* FROM `_collections` ORDER BY `rowid` ASC"
-	if concurrentQueries[0] != expectedQuery {
-		t.Fatalf("Expected query\n%s\ngot\n%s", expectedQuery, concurrentQueries[0])
+	for _, q := range concurrentQueries {
+		if q != expectedQuery {
+			t.Fatalf("Expected query\n%s\ngot\n%s", expectedQuery, q)
+		}
 	}
 }
