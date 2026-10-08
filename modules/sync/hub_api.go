@@ -105,6 +105,12 @@ func (m *Module) bindRoutes() {
 				Bind(apis.SkipSuccessActivityLog(), apis.BodyLimit(16<<10), rateTag("sync:actor"), m.nodeAuth())
 			g.DELETE(proto.PathActor+"/{aid}", m.actorRevokeHandler).
 				Bind(apis.SkipSuccessActivityLog(), rateTag("sync:actor"), m.nodeAuth())
+			// parked changes nobody resolved are rejected after TOKI_SYNC_PARK_TTL
+			_ = se.App.Cron().Add("__tokiSyncParkTTL", "23 * * * *", func() {
+				if _, err := m.ExpireParked(); err != nil {
+					se.App.Logger().Error("sync: expiring parked changes failed", "error", err)
+				}
+			})
 			return se.Next()
 		},
 	})

@@ -24,6 +24,12 @@ type policy struct {
 	Direction string
 	Types     map[string]string
 	Exclude   map[string]struct{}
+	// SkipViewRule turns the view rule check of pulled rows off for this
+	// collection (default: enforced for the service actor of the node).
+	SkipViewRule bool
+	// EvictInvisible makes the revert of a record outside the view rule evict
+	// the local copy instead of only a notice (default: TOKI_SYNC_EVICT_INVISIBLE).
+	EvictInvisible bool
 }
 
 type policyCache struct {

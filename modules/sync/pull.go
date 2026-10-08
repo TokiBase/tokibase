@@ -120,6 +120,7 @@ type pullRow struct {
 	Patch      string `db:"patch"`
 	Hash       []byte `db:"hash"`
 	Status     string `db:"status"`
+	Code       string `db:"code"`
 }
 
 // buildPull reads one page of deliverable changes with seq in (after, head].
@@ -133,9 +134,9 @@ func (m *Module) buildPull(app kernel.App, nodeID string, after, head int64, lim
 	}
 	vw := newViewer(app, nodeID, serviceActor(app, nodeID))
 	var rows []pullRow
-	err := app.DB().NewQuery(`SELECT seq, node, origin_seq, hlc, collection, record, op, patch, hash, status FROM _changes
+	err := app.DB().NewQuery(`SELECT seq, node, origin_seq, hlc, collection, record, op, patch, hash, status, code FROM _changes
   WHERE seq > {:a} AND seq <= {:h}
-    AND ((status='applied') OR (status='revert' AND target={:n}) OR (status='local' AND node={:hub}))
+    AND ((status='applied') OR (status='revert' AND target={:n}) OR (status='parked' AND node={:n}) OR (status='local' AND node={:hub}))
   ORDER BY seq LIMIT {:lim}`).
 		Bind(dbx.Params{"a": after, "h": head, "n": nodeID, "hub": m.hub.id, "lim": limit + 1}).All(&rows)
 	if err != nil {
@@ -172,7 +173,8 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 	if perr != nil {
 		return proto.PullChange{}, false, perr
 	}
-	if p == nil || (p.Direction != DirBoth && p.Direction != DirPull) {
+	parkedNotice := r.Status == StatusParked
+	if p == nil || (!parkedNotice && p.Direction != DirBoth && p.Direction != DirPull) {
 		return proto.PullChange{}, false, nil
 	}
 	pc := proto.PullChange{
@@ -182,6 +184,13 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 	if len(r.Hash) > 0 {
 		pc.Hash = hex.EncodeToString(r.Hash)
 	}
+	if parkedNotice {
+		// informational: the node learns that its change waits for review and
+		// keeps serving its local value (no data travels)
+		pc.Notice, pc.Code, pc.Patch = proto.NoticeParked, r.Code, json.RawMessage(`{}`)
+		pc.Hash = ""
+		return pc, true, nil
+	}
 	fields := syncedFields(col, p)
 	db := app.DB()
 
@@ -189,16 +198,30 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 		pc.Revert = true
 		mh, mn, hasMeta := readMeta(db, col.Id, r.Record) // meta first: a newer record only costs a spurious conflict
 		rec, _ := app.FindRecordById(col.Id, r.Record)
+		if rec != nil && r.Code == revertInvisible {
+			// the verdict was taken when the revert was stored, for the actor of
+			// the rejected change: no data, and the node keeps (or evicts) its copy
+			return m.invisibleNotice(pc, p), true, nil
+		}
 		var hidden map[string]struct{}
-		if rec != nil {
-			// a revert carries only what the node may see (P3-2, P3-10): a record
-			// outside the view rule of the node's actor is reported as gone
+		var allowed map[string]struct{}
+		if rec != nil && r.Op == OpUpdate {
+			// the hidden set is the one stored with the row (fields missing from
+			// its patch), not a new evaluation for a different actor
+			var stored map[string]any
+			if json.Unmarshal([]byte(r.Patch), &stored) == nil {
+				allowed = make(map[string]struct{}, len(stored))
+				for k := range stored {
+					allowed[k] = struct{}{}
+				}
+			}
+		} else if rec != nil {
 			vr, err := vw.view(rec, p, true)
 			if err != nil {
 				return pc, false, err
 			}
 			if !vr.visible {
-				rec = nil
+				return m.invisibleNotice(pc, p), true, nil
 			}
 			hidden = vr.hidden
 		}
@@ -212,6 +235,13 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 		}
 		for name := range hidden {
 			delete(vals, name)
+		}
+		if allowed != nil {
+			for name := range vals {
+				if _, ok := allowed[name]; !ok {
+					delete(vals, name)
+				}
+			}
 		}
 		enc, err := encodePatch(vals)
 		if err != nil {
@@ -243,6 +273,11 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 	rec, _ := app.FindRecordById(col.Id, r.Record)
 	if rec == nil {
 		return pc, false, nil
+	}
+	if ok, err := m.visibleForNode(vw, rec, p); err != nil {
+		return pc, false, err
+	} else if !ok {
+		return pc, false, nil // outside the view rule of the node's actor
 	}
 	vr, err := vw.view(rec, p, false)
 	if err != nil {
@@ -280,4 +315,37 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 	}
 	pc.Patch = json.RawMessage(enc)
 	return pc, true, nil
+}
+
+// revertInvisible is the code of a revert row whose record the actor of the
+// rejected change may not view.
+const revertInvisible = "invisible"
+
+// visibleForNode tells whether a record may be delivered to the pulling node:
+// the collection view rule is evaluated for the service actor of the node
+// (default on; policy.SkipViewRule opts out). A node without service actor
+// has no identity to evaluate it for and is not filtered (documented).
+func (m *Module) visibleForNode(vw *viewer, rec *core.Record, p *policy) (bool, error) {
+	if p.SkipViewRule || vw.actor == nil {
+		return true, nil
+	}
+	vr, err := vw.view(rec, p, true)
+	if err != nil {
+		return false, err
+	}
+	return vr.visible, nil
+}
+
+// invisibleNotice turns pc into the answer for a record the node's actor may
+// not view: an eviction when the policy says so, else a notice without data.
+// It never deletes the local copy on its own (P4-6).
+func (m *Module) invisibleNotice(pc proto.PullChange, p *policy) proto.PullChange {
+	pc.Patch, pc.Hash = json.RawMessage(`{}`), ""
+	pc.Code = revertInvisible
+	if p.EvictInvisible || envFlag(EnvEvictInvisible) {
+		pc.Op, pc.Evict = OpDelete, true
+		return pc
+	}
+	pc.Notice = proto.NoticeInvisible
+	return pc
 }

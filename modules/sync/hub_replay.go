@@ -43,6 +43,12 @@ func newGroupState() *groupState {
 	return &groupState{exists: map[gkey]bool{}, meta: map[gkey]gmeta{}, tomb: map[gkey]string{}}
 }
 
+// replayRun is one request of the replay with the actor it runs as.
+type replayRun struct {
+	actor *actorCtx
+	req   *core.InternalRequest
+}
+
 // prepared is one change ready to be finished after the replay.
 type prepared struct {
 	c      *hubChange
@@ -60,6 +66,7 @@ type prepared struct {
 	merged     bool
 	nh         int64
 	nn         string
+	actor      *actorCtx // who the change replays as (the user, or the service actor for hook-written members)
 }
 
 // applyFault is a test seam: a non-nil error aborts the apply of a group like an
@@ -76,8 +83,9 @@ func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange
 			}
 		}
 	}
-	// ---- the actor of the group (a hook-written change of a user request has
-	// actor "node" but belongs to the user's request: the group runs as the user)
+	// ---- the actor of the group: the user of its changes (one grant). Members
+	// with actor "node" were written by hooks on the spoke; they replay as the
+	// service actor, not as the user (P4-10).
 	groupAID := ""
 	for _, c := range group {
 		a := c.Actor
@@ -108,6 +116,24 @@ func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange
 		}
 		return nil, rj
 	}
+	// Changes of the group written by hooks on the spoke (actor "node") are not
+	// the user's: they replay as the service actor of the node, or the group is
+	// refused when the node has none (P4-10).
+	svc := actor
+	if groupAID != "" {
+		for _, c := range group {
+			if c.Actor == "" || c.Actor == ActorNode {
+				var rj2 *rejection
+				if svc, rj2 = m.resolveActor(tx, nodeID, "", nil); rj2 != nil {
+					if rj2.internal {
+						return nil, errors.New(rj2.msg)
+					}
+					return nil, rj2
+				}
+				break
+			}
+		}
+	}
 
 	gs := newGroupState()
 	preps := make([]*prepared, 0, len(group))
@@ -115,6 +141,10 @@ func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange
 		p, err := m.prepare(tx, nodeID, c, gs)
 		if err != nil {
 			return nil, err
+		}
+		p.actor = actor
+		if groupAID != "" && (c.Actor == "" || c.Actor == ActorNode) {
+			p.actor = svc
 		}
 		preps = append(preps, p)
 	}
@@ -125,6 +155,7 @@ func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange
 	existedBefore := map[gkey]bool{}
 	last := map[gkey]int{}
 	var reqs []*core.InternalRequest
+	var runs []replayRun
 	fixAuto := map[gkey]map[string]string{}
 	origin := &kernel.SyncOrigin{Mode: kernel.SyncModePush, Node: nodeID, HLC: uint64(group[len(group)-1].hlc), ChangeID: group[0].ID, Actor: groupAID, Fields: map[string]any{}}
 	for i, p := range preps {
@@ -133,6 +164,7 @@ func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange
 			continue
 		}
 		reqs = append(reqs, p.req)
+		runs = append(runs, replayRun{actor: p.actor, req: p.req})
 		if _, seen := existedBefore[p.key]; !seen {
 			rec, _ := tx.FindRecordById(p.col.Id, p.key.rec)
 			existedBefore[p.key] = rec != nil
@@ -155,9 +187,22 @@ func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange
 
 	if len(reqs) > 0 {
 		ctx := kernel.WithSyncOrigin(context.Background(), origin)
-		_, err := apis.ReplayRecordRequestsFrom(ctx, core.AsApp(tx), actor.rec, ip, map[string]string{proto.HeaderSyncNode: nodeID}, reqs)
-		if err != nil {
-			return nil, classify(err)
+		// consecutive requests of the same actor replay together (one batch, so
+		// batchguard still sees them as a group); all runs share the transaction
+		for i := 0; i < len(runs); {
+			j := i + 1
+			for j < len(runs) && runs[j].actor == runs[i].actor {
+				j++
+			}
+			var part []*core.InternalRequest
+			for _, r := range runs[i:j] {
+				part = append(part, r.req)
+			}
+			_, err := apis.ReplayRecordRequestsFrom(ctx, core.AsApp(tx), runs[i].actor.rec, ip, map[string]string{proto.HeaderSyncNode: nodeID}, part)
+			if err != nil {
+				return nil, classify(err)
+			}
+			i = j
 		}
 	}
 	for k, want := range fixAuto {
@@ -176,11 +221,11 @@ func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange
 	// ---- finish: hub rows, record clocks, tombstones
 	outs := make([]*outcome, 0, len(preps))
 	for i, p := range preps {
-		o, err := m.finish(tx, db, nodeID, p, i == last[p.key], pre[p.key], existedBefore[p.key], actor.rec)
+		o, err := m.finish(tx, db, nodeID, p, i == last[p.key], pre[p.key], existedBefore[p.key], p.actor.rec)
 		if err != nil {
 			return nil, err
 		}
-		o.actor = actor
+		o.actor = p.actor
 		outs = append(outs, o)
 	}
 	return outs, nil
@@ -480,7 +525,7 @@ func isZeroValue(v any) bool {
 	case nil:
 		return true
 	case string:
-		return x == "" || x == "null"
+		return x == ""
 	case bool:
 		return !x
 	case float64:

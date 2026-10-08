@@ -4,6 +4,7 @@ package sync
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -28,11 +29,19 @@ const (
 	EnvAllowSuperuserActors = "TOKI_SYNC_ALLOW_SUPERUSER_ACTORS"
 	EnvAuditAll             = "TOKI_SYNC_AUDIT_ALL"
 	EnvRetention            = "TOKI_SYNC_RETENTION"
+	EnvGrace                = "TOKI_SYNC_GRACE"
+	EnvParkTTL              = "TOKI_SYNC_PARK_TTL"
+	EnvEvictInvisible       = "TOKI_SYNC_EVICT_INVISIBLE"
 
 	// DefaultActorTTL is the lifetime of a grant.
 	DefaultActorTTL = 30 * 24 * time.Hour
 	// DefaultRetention is the default of TOKI_SYNC_RETENTION; a grant never outlives it.
 	DefaultRetention = 90 * 24 * time.Hour
+	// DefaultGrace is how long after its exp a grant may still be used to
+	// push changes that were stamped before exp (offline devices).
+	DefaultGrace = 24 * time.Hour
+	// DefaultParkTTL is the age after which a parked change is rejected.
+	DefaultParkTTL = 30 * 24 * time.Hour
 	// ActorSkew is how far before its issue time a change HLC may lie.
 	ActorSkew = 5 * time.Minute
 )
@@ -75,6 +84,22 @@ func actorTTL() time.Duration {
 	return min(ttl, retention())
 }
 
+// grace is TOKI_SYNC_GRACE: the hub-time window after the exp of a grant.
+func grace() time.Duration {
+	if d, ok := parseDuration(os.Getenv(EnvGrace)); ok {
+		return d
+	}
+	return DefaultGrace
+}
+
+// parkTTL is TOKI_SYNC_PARK_TTL.
+func parkTTL() time.Duration {
+	if d, ok := parseDuration(os.Getenv(EnvParkTTL)); ok {
+		return d
+	}
+	return DefaultParkTTL
+}
+
 func allowSuperuserActors() bool { return envFlag(EnvAllowSuperuserActors) }
 
 func tokenKeyHash(rec *core.Record) string {
@@ -84,8 +109,17 @@ func tokenKeyHash(rec *core.Record) string {
 
 // ---- spoke side: the actor of a local write ----------------------------
 
+// ActorRecPrefix starts the actor of a change written by an authenticated
+// record that has no valid grant: "rec:<collectionId>:<id>". The hub never
+// knows such an actor and rejects the change (actor_unknown, with a revert).
+const ActorRecPrefix = "rec:"
+
 // actorIDFor is the `actor` of a change written by a request of auth: the aid
-// of the newest valid grant for that record on this node, else "node".
+// of the newest valid grant for that record on this node. A request without
+// auth (hooks, cron, direct app calls) is "node"; an authenticated record
+// WITHOUT a valid grant is never promoted to "node" (that would run its write
+// with the rights of the service actor): it is attributed to itself and the
+// hub rejects it.
 func (m *Module) actorIDFor(app core.App, auth *core.Record) string {
 	if auth == nil || m.role != RoleSpoke || m.Clock() == nil {
 		return ActorNode
@@ -94,7 +128,7 @@ func (m *Module) actorIDFor(app core.App, auth *core.Record) string {
 	err := app.DB().NewQuery("SELECT aid FROM _sync_actors WHERE collection={:c} AND record={:r} AND exp>{:now} ORDER BY rowid DESC LIMIT 1").
 		Bind(dbx.Params{"c": auth.Collection().Id, "r": auth.Id, "now": m.Clock().WallNow().UnixMilli()}).Row(&aid)
 	if err != nil || aid == "" {
-		return ActorNode
+		return ActorRecPrefix + auth.Collection().Id + ":" + auth.Id
 	}
 	return aid
 }
@@ -171,6 +205,12 @@ func (m *Module) resolveActor(tx kernel.App, nodeID, aid string, hlcs []hlc.HLC)
 	if g.Node != nodeID {
 		return nil, reject(proto.CodeActorNodeMismatch, "the grant belongs to another node")
 	}
+	// The HLC is chosen by the spoke, so it alone cannot prove that the grant was
+	// valid when the change was made: the hub clock bounds it as well (a node
+	// that stamps an old HLC after the expiry is refused once the grace is over).
+	if m.now().UnixMilli() > g.EXP+grace().Milliseconds() {
+		return nil, reject(proto.CodeActorExpired, "the grant expired and its grace period is over")
+	}
 	for _, h := range hlcs {
 		ms := h.PhysicalMs()
 		if ms < g.IAT-ActorSkew.Milliseconds() || ms > g.EXP {
@@ -193,7 +233,7 @@ func (m *Module) resolveActor(tx kernel.App, nodeID, aid string, hlcs []hlc.HLC)
 	if err != nil {
 		return nil, reject(proto.CodeActorUnknown, "the actor record no longer exists")
 	}
-	if g.TKH != "" && rec.Collection().IsAuth() && g.TKH != tokenKeyHash(rec) {
+	if g.TKH != "" && rec.Collection().IsAuth() && subtle.ConstantTimeCompare([]byte(g.TKH), []byte(tokenKeyHash(rec))) != 1 {
 		return nil, parked(proto.CodeActorRevoked, "the credentials of the user changed")
 	}
 	if kernel.AuthKindOf(rec) == kernel.AuthKindSuperuser && !allowSuperuserActors() {

@@ -58,6 +58,13 @@ func (m *Module) auditDetails(nodeID, ip string, c *hubChange, act *actorCtx, ex
 		d["service_actor"] = act.service
 	} else if c.Actor != "" {
 		d["actor_grant"] = c.Actor
+		// a rejection has no resolved actor: name the user of the grant anyway
+		if g, err := loadGrant(m.app.DB(), c.Actor); err == nil && g != nil {
+			d["actor_id"] = g.Record
+			if col, err := m.app.FindCachedCollectionByNameOrId(g.Collection); err == nil && col != nil {
+				d["actor_collection"] = col.Name
+			}
+		}
 	}
 	for k, v := range extra {
 		d[k] = v
