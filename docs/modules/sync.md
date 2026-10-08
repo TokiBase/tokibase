@@ -2,7 +2,7 @@
 
 Phase 3 hub/spoke replication (offline-first). The full design is `docs/SYNC_DESIGN.md`; this page describes what exists today. Package `modules/sync`, subpackage `modules/sync/hlc`.
 
-**Status: PR6 of 11 (policies, partitions, purge, compaction; conflict strategies since PR5; rule re-evaluation and actor grants since PR4).** A node with `TOKI_SYNC_ROLE=hub|spoke` records every write of the synced collections into a local change log (PR1). Since PR2 a hub can enroll devices and authenticate them (`/api/sync/{enroll,handshake,ping}`). Since PR3 a spoke pushes its changes to the hub, the hub applies them (record level `lww`), and the spoke pulls everything it is missing and applies it; hub and spokes converge. Since PR4 a pushed change is replayed as the user who made it, through the record API, so collection rules, fieldperm and batchguard apply on the hub. Since PR5 the hub resolves concurrent changes by the collection's strategy (`lww`, `hub-wins`, `field-merge`, `hook`) and records them in `_sync_conflicts`. Since PR6 the policies are complete (partitions, view rule on pull), records can be purged for good, and the hub compacts its change log.
+**Status: PR7 of 11 (snapshot bootstrap, hub epoch; policies, partitions, purge, compaction since PR6; conflict strategies since PR5; rule re-evaluation and actor grants since PR4).** A node with `TOKI_SYNC_ROLE=hub|spoke` records every write of the synced collections into a local change log (PR1). Since PR2 a hub can enroll devices and authenticate them (`/api/sync/{enroll,handshake,ping}`). Since PR3 a spoke pushes its changes to the hub, the hub applies them (record level `lww`), and the spoke pulls everything it is missing and applies it; hub and spokes converge. Since PR4 a pushed change is replayed as the user who made it, through the record API, so collection rules, fieldperm and batchguard apply on the hub. Since PR5 the hub resolves concurrent changes by the collection's strategy (`lww`, `hub-wins`, `field-merge`, `hook`) and records them in `_sync_conflicts`. Since PR6 the policies are complete (partitions, view rule on pull), records can be purged for good, and the hub compacts its change log. Since PR7 a node that is new, stale or behind the compaction fetches a snapshot of the hub by itself and a restored or promoted hub is noticed by its spokes.
 
 ## What exists now
 
@@ -245,7 +245,7 @@ Hourly cron entry `__tokiSyncCompact` -> job kind `sync.compact` through `kernel
 
 Spoke: step 3 and `status='acked'` rows older than `TOKI_SYNC_SPOKE_KEEP`.
 
-**Consequences.** `GET /pull?after=N` answers 410 `sync_rebootstrap_required` (with `low_water`) when `N < low_water` and always for a node with status `stale` or `rebootstrap`. The handshake returns `low_water` and `rebootstrap: true` for such nodes (and for a node whose `pull_after` is below `low_water`, which includes a new node that joins a compacted hub). The snapshot that fixes this is PR7: until then the spoke sets `_sync_cursors.state = 'rebootstrap_required'` (shown by `toki sync status` and `Status().State`), logs a warning and **stops its loop**. A `stale` node stays stale (nothing sets it back before PR7). Pending local changes stay in its `_changes`.
+**Consequences.** `GET /pull?after=N` answers 410 `sync_rebootstrap_required` (with `low_water`) when `N < low_water` and always for a node with status `stale` or `rebootstrap`. The handshake returns `low_water` and `rebootstrap: true` for such nodes (and for a node whose `pull_after` is below `low_water`, which includes a new node that joins a compacted hub). Since PR7 the spoke sets `_sync_cursors.state = 'rebootstrap_required'` and its loop runs the snapshot bootstrap (next section); a `stale` node is reactivated when the snapshot is complete. Pending local changes are kept and rebased.
 
 ### Health
 
@@ -260,6 +260,48 @@ Spoke: step 3 and `status='acked'` rows older than `TOKI_SYNC_SPOKE_KEEP`.
 | `TOKI_SYNC_SPOKE_KEEP` | `24h`: acked spoke rows are kept this long (re-push after a hub restore) |
 
 Durations accept Go syntax and a `d` suffix; zero or an invalid value falls back to the default.
+
+## Snapshot bootstrap and hub epoch (PR7)
+
+### Hub routes (node session token)
+
+| Route | Notes |
+| --- | --- |
+| `POST /api/sync/snapshot` | Starts a snapshot: `{snapshot_id, start_seq (hub head), expires, hub_epoch, schema [collection exports], policies, collections [{id,name,order}]}`. The id is an HMAC-signed token (node, start_seq, epoch, 24 h), the hub keeps no state; ids of other nodes, expired ones and ones from an older epoch answer 410 `sync_snapshot_expired` on the pages. Auth collection secrets are redacted in the schema. Collections: policy direction `both`/`pull`, ordered by `order`, then name. Rate-limit tag `sync:snapshot`. |
+| `GET /api/sync/snapshot?id&collection&after&limit` | One page (max 1000 records, about 4 MiB): records in id order after `after`, each with the DB export of the synced fields (hidden fields, fieldperm-hidden fields and email/verified rules as for pull), `hlc`/`node`/field clocks from `_sync_meta` and the canonical hash. Scope: partition and `pull_view_rule` are applied per record (`viewer.recordScope`). Tombstones travel on the same id axis: `legal` ones and `delete` ones newer than `TOKI_SYNC_RETENTION`; **collections with a partition or `pull_view_rule` send none** (a deleted record can not be checked against the node's scope, so its id/clock/origin must not leak). `next`/`more` as for pull. No long transaction: the snapshot is fuzzy and the log from `start_seq` fixes it. |
+| `POST /api/sync/ack` | Takes an optional `snapshot_id`: a finished snapshot makes a `stale`/`rebootstrap` node `active` and sets `pulled_seq = start_seq`. Digests of collections with a partition or `pull_view_rule` are not compared (the node holds a subset). |
+| `POST /api/sync/push` | Accepts op `n` (filler, see rebase) which only advances `pushed_origin_seq`. |
+
+### Spoke (`client/bootstrap.go`)
+
+Triggers: the handshake says `rebootstrap`, pull answers 410, `_sync_cursors.state` is `rebootstrap_required` (set by `toki sync rebootstrap` or the auto-heal), or a bootstrap was interrupted (`bootstrapping`). The loop (not `RunOnce`) then runs `Client.Bootstrap`:
+
+1. `POST /snapshot`, create the missing collections (`ImportCollections`, existing ones untouched).
+2. Unpushed local changes of the replaced collections are **parked** (`_changes.status = 'rebase'`, same row). Changes below `push_from` are already on the hub.
+3. Per collection, page by page, in one transaction per page: the first page empties the collection (rows, `_sync_meta`, `delete` tombstones, no capture), tombstones are inserted, records are applied through the pull apply path with sync origin `Snapshot` (ciphertext verbatim) so pending local changes, field clocks and the hash check behave as for pull. `_sync_cursors.snapshot_after = "<collection id>/<last id>"` moves in the same transaction: a SIGKILL or a lost connection resumes at the next page. After the last page `pull_after = start_seq`.
+4. Phase `!ack` (the hub reactivates the node), `!pull` (the log from `start_seq`), `!rebase`.
+5. **Rebase**: each parked change is replayed on the new data as a fresh local change (new HLC, base = the new record clock, original actor kept; counters and sets are re-applied as deltas). A change older than `TOKI_SYNC_RETENTION`, or whose record is gone or deleted on the hub, becomes an `orphaned` conflict (open, in the local `_sync_conflicts`). The parked row turns into a filler (`code = 'rebased'`, pushed as op `n`) so that the hub's contiguous `origin_seq` stays contiguous.
+6. `state = idle`, position cleared.
+
+`state` values: `idle`, `bootstrapping`, `rebootstrap_required`, `paused`. `toki sync status` shows `state` and, during a bootstrap, `snapshot` (the position or phase). Local writes during a bootstrap are captured normally; edits older than the parked ones are re-stamped newer than them (the fresh-HLC rule of the design).
+
+### Deviations from the design text
+
+- The collections are emptied lazily, with the first page of each collection (in the same transaction), not all before the first page: a bootstrap that never finishes leaves the not yet reached collections intact.
+- Unpushed local changes are parked in place (`_changes.status = 'rebase'`) instead of copied to a side table, and their rows become fillers instead of being deleted: the hub's `pushed_origin_seq` must stay contiguous.
+- The hub reactivates the node when the data pages are applied (ack with `snapshot_id`), before the log is pulled, because a pull of a node still flagged `stale` is refused with 410.
+- A restore is noticed through a marker file, because the restore replaces `data.db` (an epoch stored in it would be rolled back too). The handshake does not set `rebootstrap` on an epoch change; the spoke resets its cursor instead (design §3.9 over §3.3).
+
+### Triggers and CLI
+
+- `toki sync rebootstrap` (spoke): sets `rebootstrap_required`; the running loop starts at its next cycle. `--now` runs the bootstrap in the CLI process.
+- `toki sync rebootstrap <node>` (hub): status `rebootstrap`; the next handshake answers `rebootstrap: true`. Audit `sync.node.rebootstrap`.
+- `TOKI_SYNC_AUTO_HEAL=1`: two hash mismatches in a row, or two digest checks in a row (at most every `TOKI_SYNC_DIGEST_INTERVAL`, default 10 min, only without pending changes and only when the node is at the hub head) that the hub reports as different, schedule a re-bootstrap.
+- New env: `TOKI_SYNC_SNAPSHOT_PAGE` (default 1000, halved after a too-large response), `TOKI_SYNC_AUTO_HEAL`, `TOKI_SYNC_DIGEST_INTERVAL`, `TOKI_SYNC_TEST` + `TOKI_SYNC_TEST_CLOCK_OFFSET` (shifts the wall clock of the process, for tests).
+
+### Hub epoch (design §3.9)
+
+`_sync_state.epoch` is renewed (with `epoch_seq` = the head at that moment) when: `OnBackupRestore` ran (the hook writes `<dataDir>/.toki-sync-restored`, excluded from the directory swap, and the next boot consumes it), a new `.toki-promoted.json` (walreplica promote) is found, or the head is below `max_seq_seen` (kept at handshakes, compaction and boot). The handshake returns `hub_epoch` and `hub_epoch_seq`. A spoke that sees a different epoch sets `pull_after = min(pull_after, hub_epoch_seq)` and `reconcile` sends again the acked changes it still keeps (`TOKI_SYNC_SPOKE_KEEP`, 24 h); a 410 on pull first forces a handshake, so a restore is noticed even while the session token is still valid. Changes written on the hub itself after the restore point are lost on the hub (only spoke-origin changes come back); a spoke whose kept rows are older than `SPOKE_KEEP` can not re-send them.
 
 ## Env
 
@@ -338,6 +380,7 @@ toki sync conflicts --resolve <id> --take hub|incoming|<patch.json> [--note ...]
 toki sync policies list|set|rm|lint                                       # hub: the policy model (PR6)
 toki sync purge <collection> <id> --legal --reason "..."                  # hub: erase a record for good (PR6)
 toki sync compact [--vacuum] [--json]                                     # compaction now (PR6)
+toki sync rebootstrap [<node>] [--now]                                    # hub: flag a node; spoke: snapshot bootstrap (PR7)
 ```
 
 `enroll`, `revoke` and `peers` need `TOKI_SYNC_ROLE=hub`, `join` needs `TOKI_SYNC_ROLE=spoke`. `join` requires an https hub url unless `TOKI_SYNC_INSECURE=1`.
@@ -350,8 +393,7 @@ toki sync compact [--vacuum] [--json]                                     # comp
 
 - Raw SQL writes (`app.DB().NewQuery("UPDATE ...")`) are not captured.
 - Files are not synced; file fields are not in patches or hashes.
-- Compaction (PR6) needs the snapshot bootstrap of PR7 to be useful for nodes that fall behind: they stop with `rebootstrap_required`.
-- Snapshot bootstrap (PR7), schema bundles, reservations and clock-drift enforcement (PR8), keys (PR9) are not implemented; the handshake returns those fields empty. Spokes need the synced collections created by hand until PR8, and `sync.Client` has no snapshot fallback: a 410 or `rebootstrap` ends the cycle with `ErrRebootstrap`, sets the cursor state `rebootstrap_required` and stops the loop.
+- Schema bundles, reservations and clock-drift enforcement (PR8), keys (PR9) are not implemented; the handshake returns those fields empty. A snapshot creates the collections a spoke lacks (existing ones are left alone, schema changes are PR8). `Client.RunOnce` still returns `ErrRebootstrap` (the loop bootstraps; call `Client.Bootstrap` yourself otherwise or set `Options.NoAutoBootstrap`).
 - The hub key cannot be rotated yet (`toki sync rotate-hub-key`, design §7.9); a lost hub key means a new hub id and re-enrollment of every node. A node offline past its certificate expiry (365 d, renewed by the handshake within the last 30 d) must enroll again.
 - Several hub processes behind one URL do not share the in-memory nonce cache; the persisted `sig_ts_floor` still blocks replays of an older request.
 - A derived-only update (computed rollup) or a save without changes bumps the `updated` autodate locally without a change row, so `updated` and the stored hash can differ between nodes; `toki sync verify` reports it (see Push, pull and the client loop above).

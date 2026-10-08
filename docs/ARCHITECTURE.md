@@ -49,7 +49,7 @@ Exit gate: 100% SDK suite pass, kernel has no `net/http` import, all builds unde
 - [x] tlscheck: boot warning when serving plain HTTP without a trusted proxy header (`docs/modules/tlscheck.md`).
 - [x] timelint: warn about or reject date values without a timezone at the API boundary, `toki time lint` (`docs/modules/timelint.md`).
 - [x] denylog: every 401/403/429 carries a machine-readable reason, `toki deny tail` (`docs/modules/denylog.md`).
-- [ ] Production proof: run on the FGR replica node with real data for 7 days, then cut over.
+- [ ] Production proof: run on the FGR replica node with real data for 7 days, then cut over. 7-day solo soak (FGR data copy, replication, audit, hourly load) running since 2026-10-08 on the Proxmox VM: [`ops/soak/`](../ops/soak/README.md), criteria in [`ops/soak/CRITERIA.md`](../ops/soak/CRITERIA.md).
 
 Exit gate: all modules on by default in profile `solo`, failover drill RTO under 30 s in CI, no COMPAT deviation on the REST contract.
 
@@ -86,7 +86,7 @@ Exit gate: all modules on by default in profile `solo`, failover drill RTO under
 - [x] PR4 rule re-evaluation + actors + audit: `apis.ReplayRecordRequests`, actor grants (`/api/sync/actor`, `_sync_actor_grants`/`_sync_actors`), `kernel.SessionActive`, autodate preservation, audit sink, webhooks/wasm skip `IsSyncReplica`, revert/pull visibility filtering, minimal `_sync_conflicts`.
 - [x] PR5 conflict strategies + typed fields + hook: field clocks, `field-merge`, `hub-wins`, strict counter/set validation against `field_types`, `_sync_conflicts`, `toki sync conflicts [--resolve]`, `kernel.OnSyncConflictFor`, wasm `sync.conflict.*` (fail closed to park); PR3 review fixes: pull byte budget + truncation detection, per-change savepoint with stop-and-retry, reverts for push-only collections, discarded work kept in local conflict rows, `hash_mismatch` counting.
 - [x] PR6 policies, partitions, tombstones, compaction: full `_sync_policies` (validation on save, `toki sync policies list|set|rm|lint`), direction checks on push and pull, partition `part_old`/`part_new`, `evict` (op `x`) and `policy_partition`, `pull_view_rule` + `trusted`, `POST /api/sync/purge` + `toki sync purge` (legal tombstones, patch erasure, op `p`), compaction cron via `kernel.Jobs` + `toki sync compact`, `stale` nodes, `low_water`, 410, `/api/health` sync block (`apis.SetHealthExtra`).
-- [ ] PR7 snapshot bootstrap + re-bootstrap: `/snapshot`, resumable spoke bootstrap, local change export and rebase, hub epoch, `toki sync rebootstrap`.
+- [x] PR7 snapshot bootstrap + re-bootstrap: `/snapshot` (signed ids, fuzzy pages, partition/view-rule scope), resumable spoke bootstrap (`_sync_cursors.snapshot_after`), parked local changes rebased with fresh HLCs, orphaned conflicts, filler push op `n`, hub epoch (restore marker, promote marker, `max_seq_seen`), `toki sync rebootstrap`, auto-heal, e2e with 20k records, SIGKILL resume, fake-clock stale node, hub restore.
 - [ ] PR8 reservations, schema bundles, drift: `_sync_sequences`/`_sync_reservations`, `/reserve`, schema versioning and bundles, spoke schema lock, drift enforcement and re-stamp.
 - [ ] PR9 crypto ciphertext sync: `kernel.SyncKeyProvider`, wrapped DEK export/import, `crypto: strip`.
 - [ ] PR10 nano/edge integration + parking prototype: `embed.Sync`, `mobile` facade, conditions/backoff, size measurement, parking e2e (48 h offline, converge with zero loss).

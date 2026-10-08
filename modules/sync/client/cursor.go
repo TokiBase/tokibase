@@ -27,9 +27,13 @@ type Cursor struct {
 	LastOK        sql.NullString `db:"last_ok"`
 	LastError     string         `db:"last_error"`
 	State         string         `db:"state"`
+	// SnapshotID and SnapshotAfter are the resumable bootstrap position
+	// ("<collection id>/<last record id>", or a phase marker, see bootstrap.go).
+	SnapshotID    string `db:"snapshot_id"`
+	SnapshotAfter string `db:"snapshot_after"`
 }
 
-const cursorCols = "hub_id, hub_url, hub_pub, hub_epoch, node_id, cert, pull_after, acked_origin, schema_version, clock_offset_ms, last_ok, last_error, state"
+const cursorCols = "hub_id, hub_url, hub_pub, hub_epoch, node_id, cert, pull_after, acked_origin, schema_version, clock_offset_ms, last_ok, last_error, state, snapshot_id, snapshot_after"
 
 // LoadCursor returns the first cursor row, or nil when the node is not enrolled.
 func LoadCursor(app core.App) (*Cursor, error) {

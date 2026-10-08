@@ -107,6 +107,19 @@ type Options struct {
 	NoPoke bool
 	// Logger receives loop diagnostics (optional).
 	Logger *slog.Logger
+
+	// NoAutoBootstrap stops the loop with ErrRebootstrap instead of running the
+	// snapshot bootstrap itself (the state stays rebootstrap_required).
+	NoAutoBootstrap bool
+	// AutoHeal re-bootstraps after two digest or hash mismatches in a row
+	// (also TOKI_SYNC_AUTO_HEAL=1).
+	AutoHeal bool
+	// Retention is the age after which an unpushed local change is orphaned by a
+	// bootstrap (default TOKI_SYNC_RETENTION or 90 days).
+	Retention time.Duration
+	// DigestInterval is the minimum time between two digest checks of the
+	// auto-heal (default TOKI_SYNC_DIGEST_INTERVAL or 10 minutes).
+	DigestInterval time.Duration
 }
 
 // Client talks to one hub.

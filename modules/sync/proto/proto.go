@@ -95,11 +95,14 @@ type Policy struct {
 
 // HandshakeResponse is the 200 body of POST /api/sync/handshake.
 type HandshakeResponse struct {
-	SessionToken string         `json:"session_token"`
-	Cert         string         `json:"cert,omitempty"` // renewed device certificate (< CertRenewBefore left)
-	Expires      string         `json:"expires"`
-	HubID        string         `json:"hub_id"`
-	HubEpoch     string         `json:"hub_epoch"`
+	SessionToken string `json:"session_token"`
+	Cert         string `json:"cert,omitempty"` // renewed device certificate (< CertRenewBefore left)
+	Expires      string `json:"expires"`
+	HubID        string `json:"hub_id"`
+	HubEpoch     string `json:"hub_epoch"`
+	// HubEpochSeq is the hub head when the epoch began: after an epoch change a
+	// spoke never keeps a pull cursor above it (docs/SYNC_DESIGN.md §3.9).
+	HubEpochSeq  int64          `json:"hub_epoch_seq"`
 	ServerTime   string         `json:"server_time"`
 	Clock        Clock          `json:"clock"`
 	Schema       Schema         `json:"schema"`

@@ -1,0 +1,9 @@
+[Unit]
+Description=TokiBase soak: daily report (timer)
+
+[Timer]
+OnCalendar=*-*-* 00:05:00 UTC
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

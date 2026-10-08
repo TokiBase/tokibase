@@ -101,6 +101,12 @@ func (c *Client) applyPage(hubID string, pr *proto.PullResponse) (applied, faile
 // applyChange applies one pulled change in tx (docs/SYNC_DESIGN.md §4.7). It
 // reports whether anything was written.
 func (c *Client) applyChange(tx kernel.App, ch *proto.PullChange) (bool, error) {
+	return c.applyChangeMode(tx, ch, kernel.SyncModePull)
+}
+
+// applyChangeMode is applyChange with the sync origin mode of the write (a
+// snapshot page applies its records as Snapshot).
+func (c *Client) applyChangeMode(tx kernel.App, ch *proto.PullChange, mode kernel.SyncApplyMode) (bool, error) {
 	col, err := tx.FindCachedCollectionByNameOrId(ch.Collection)
 	if err != nil {
 		return false, fmt.Errorf("unknown collection %q", ch.Collection)
@@ -130,7 +136,7 @@ func (c *Client) applyChange(tx kernel.App, ch *proto.PullChange) (bool, error) 
 	// older foreign row that was pulled after our newer, already acked change is
 	// followed by that change again. Equal values are no-ops.
 	ctx := kernel.WithSyncOrigin(context.Background(), &kernel.SyncOrigin{
-		Mode: kernel.SyncModePull, Node: ch.Node, HLC: uint64(h), ChangeID: ch.ID,
+		Mode: mode, Node: ch.Node, HLC: uint64(h), ChangeID: ch.ID,
 	})
 	switch ch.Op {
 	case "d":

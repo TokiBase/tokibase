@@ -50,6 +50,15 @@ type loopState struct {
 	hashStreak int
 	mismatch   []string
 
+	// booting is set while a snapshot bootstrap runs (the handshake then does not
+	// stop the session with ErrRebootstrap); snapPage is the halved page size.
+	booting  bool
+	snapPage int
+	// digestAt is the time of the last auto-heal digest check, digestStreak the
+	// number of mismatching checks in a row.
+	digestAt     time.Time
+	digestStreak int
+
 	kick     chan struct{}
 	reqs     chan syncReq
 	events   chan Event
@@ -187,6 +196,16 @@ func (c *Client) Pause() {
 	c.loop.mu.Lock()
 	c.loop.paused = true
 	c.loop.mu.Unlock()
+	c.setCursorState(StatePaused, StateIdle)
+}
+
+// setCursorState moves `_sync_cursors.state` from one state to another (best effort).
+func (c *Client) setCursorState(to, from string) {
+	if c.o.App == nil {
+		return
+	}
+	_, _ = c.o.App.NonconcurrentDB().NewQuery("UPDATE _sync_cursors SET state={:t} WHERE state={:f}").
+		Bind(dbx.Params{"t": to, "f": from}).Execute()
 }
 
 // Resume undoes Pause and triggers a cycle.
@@ -194,6 +213,7 @@ func (c *Client) Resume() {
 	c.loop.mu.Lock()
 	c.loop.paused = false
 	c.loop.mu.Unlock()
+	c.setCursorState(StateIdle, StatePaused)
 	c.Kick()
 }
 
@@ -333,7 +353,7 @@ func (c *Client) run(ctx context.Context) {
 			continue
 		}
 
-		res := c.cycle(ctx)
+		res := c.cycleBoot(ctx)
 		deliver(res)
 		if ctx.Err() != nil {
 			return
@@ -422,4 +442,110 @@ func (c *Client) PullOnce(ctx context.Context) Result {
 	}
 	res.Err = c.pullAll(ctx, &res)
 	return res
+}
+
+// cycleBoot is one loop iteration: a cycle, preceded by the snapshot bootstrap
+// when one is in progress (crash, lost connection) or requested, and followed by
+// one when the hub, a 410 or the auto-heal asks for it.
+func (c *Client) cycleBoot(ctx context.Context) Result {
+	if c.o.NoAutoBootstrap || c.o.Backend == nil || c.o.App == nil {
+		return c.cycle(ctx)
+	}
+	if cur, _ := LoadCursor(c.o.App); cur != nil && (cur.State == StateBootstrapping || cur.State == StateRebootstrapRequired) {
+		if err := c.Bootstrap(ctx); err != nil {
+			c.recordError(err)
+			return Result{Err: err}
+		}
+	}
+	res := c.cycle(ctx)
+	for i := 0; i < 2 && errors.Is(res.Err, ErrRebootstrap) && ctx.Err() == nil; i++ {
+		if err := c.Bootstrap(ctx); err != nil {
+			c.recordError(err)
+			res.Err = err
+			return res
+		}
+		res = c.cycle(ctx)
+	}
+	if errors.Is(res.Err, ErrRebootstrap) {
+		res.Err = errors.New("sync: the hub still requires a re-bootstrap right after a snapshot")
+	}
+	if res.Err == nil && ctx.Err() == nil && c.healDue(ctx) {
+		c.Kick() // the next cycle starts with the bootstrap
+	}
+	return res
+}
+
+// healDue implements TOKI_SYNC_AUTO_HEAL: two hash mismatches in a row, or two
+// digest checks in a row that the hub reports as different, schedule a
+// re-bootstrap. The digest check runs at most every DigestInterval and only
+// without pending local changes (they would differ from the hub by definition).
+func (c *Client) healDue(ctx context.Context) bool {
+	if !c.autoHeal() {
+		return false
+	}
+	c.loop.mu.Lock()
+	hash := c.loop.hashStreak
+	c.loop.mu.Unlock()
+	if hash >= 2 {
+		return c.scheduleHeal("auto-heal: hash mismatch twice in a row")
+	}
+	db, ok := c.o.Backend.(DigestBackend)
+	if !ok {
+		return false
+	}
+	interval := c.o.DigestInterval
+	if interval <= 0 {
+		if d, ok := parseDur(os.Getenv(EnvDigestInterval)); ok {
+			interval = d
+		} else {
+			interval = DefaultDigestInterval
+		}
+	}
+	c.loop.mu.Lock()
+	due := time.Since(c.loop.digestAt) >= interval
+	c.loop.mu.Unlock()
+	if !due || c.Status().Pending > 0 {
+		return false
+	}
+	c.loop.mu.Lock()
+	c.loop.digestAt = time.Now()
+	c.loop.mu.Unlock()
+	digests, err := db.MetaDigests()
+	cur, _ := LoadCursor(c.o.App)
+	if err != nil || cur == nil {
+		return false
+	}
+	ar, err := c.Ack(ctx, cur.PullAfter, digests)
+	if err != nil || !ar.DigestChecked {
+		return false // the hub did not compare (the node was behind): nothing learned
+	}
+	c.loop.mu.Lock()
+	if len(ar.DigestMismatch) == 0 {
+		c.loop.digestStreak = 0
+		c.loop.mismatch = nil
+		c.loop.mu.Unlock()
+		return false
+	}
+	c.loop.digestStreak++
+	c.loop.mismatch = ar.DigestMismatch
+	streak := c.loop.digestStreak
+	c.loop.mu.Unlock()
+	c.emit(Event{Type: EventDigestMismatch, Message: strings.Join(ar.DigestMismatch, ",")})
+	if streak >= 2 {
+		return c.scheduleHeal("auto-heal: digest mismatch twice in a row (" + strings.Join(ar.DigestMismatch, ",") + ")")
+	}
+	return false
+}
+
+func (c *Client) scheduleHeal(reason string) bool {
+	if err := ScheduleRebootstrap(c.o.App, reason); err != nil {
+		return false
+	}
+	c.loop.mu.Lock()
+	c.loop.hashStreak, c.loop.digestStreak = 0, 0
+	c.loop.mu.Unlock()
+	if c.o.Logger != nil {
+		c.o.Logger.Warn("sync: " + reason + "; re-bootstrapping")
+	}
+	return true
 }

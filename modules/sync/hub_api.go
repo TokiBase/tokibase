@@ -99,6 +99,10 @@ func (m *Module) bindRoutes() {
 				Bind(apis.SkipSuccessActivityLog(), rateTag("sync:push"), m.nodeAuth())
 			g.GET(proto.PathPull, m.pullHandler).
 				Bind(apis.SkipSuccessActivityLog(), rateTag("sync:pull"), m.nodeAuth())
+			g.POST(proto.PathSnapshot, m.snapshotStartHandler).
+				Bind(apis.SkipSuccessActivityLog(), apis.BodyLimit(16<<10), rateTag("sync:snapshot"), m.nodeAuth())
+			g.GET(proto.PathSnapshot, m.snapshotPageHandler).
+				Bind(apis.SkipSuccessActivityLog(), rateTag("sync:snapshot"), m.nodeAuth())
 			g.POST(proto.PathAck, m.ackHandler).
 				Bind(apis.SkipSuccessActivityLog(), apis.BodyLimit(1<<20), rateTag("sync:ack"), m.nodeAuth())
 			g.POST(proto.PathActor, m.actorHandler).
@@ -506,6 +510,7 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 
 	// compaction (§3.6): a stale node, or a cursor older than the oldest kept
 	// change, has to re-bootstrap
+	m.noteHead()
 	low := m.lowWater()
 	rebootstrap := cur.GetString("status") == NodeStale || cur.GetString("status") == NodeRebootstrap || req.PullAfter < low
 
@@ -524,6 +529,7 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 		Expires:      expires.UTC().Format(proto.TimeLayout),
 		HubID:        m.hub.id,
 		HubEpoch:     m.hub.epoch,
+		HubEpochSeq:  m.hub.epochSeq,
 		ServerTime:   serverTime,
 		// TODO(PR8): clock.ok is computed here but enforced (409 sync_clock_drift on push) only in PR8.
 		Clock:        proto.Clock{Ok: clockOK, OffsetMs: offset, MaxDriftMs: drift.Milliseconds()},
@@ -533,8 +539,8 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 		Keys:         []any{}, // TODO(PR9): wrapped collection keys
 		PushFrom:     int64(cur.GetFloat("pushed_origin_seq")) + 1,
 		LowWater:     low,
-		Rebootstrap:  rebootstrap, // the snapshot itself is PR7: the spoke stops with state rebootstrap_required
-		Reservations: []any{},     // TODO(PR8): sequence reservations
+		Rebootstrap:  rebootstrap,
+		Reservations: []any{}, // TODO(PR8): sequence reservations
 		PollMs:       DefaultPollMs,
 	})
 }

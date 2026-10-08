@@ -1,0 +1,10 @@
+[Unit]
+Description=TokiBase soak: backup create+verify, replica status (timer)
+
+[Timer]
+OnActiveSec=3min
+OnUnitActiveSec=6h
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

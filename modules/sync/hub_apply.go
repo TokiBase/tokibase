@@ -86,7 +86,7 @@ func parseChange(nodeID string, c proto.PushChange) (*hubChange, error) {
 		}
 	}
 	switch c.Op {
-	case OpCreate, OpUpdate, OpDelete, OpPurge:
+	case OpCreate, OpUpdate, OpDelete, OpPurge, proto.OpFiller:
 	default:
 		return nil, errors.New("invalid op")
 	}
@@ -171,9 +171,21 @@ func (m *Module) pushHandler(e *core.RequestEvent) error {
 
 	results := make([]proto.PushResult, 0, len(chs))
 	for i := 0; i < len(chs); {
+		if chs[i].Op == proto.OpFiller {
+			// a change the node discarded (snapshot rebase): nothing to apply, the
+			// sequence only moves on so that it stays contiguous
+			if chs[i].oseq > pushed {
+				if err := m.advancePushed(e.App, nodeID, chs[i].oseq); err != nil {
+					return err
+				}
+			}
+			results = append(results, proto.PushResult{ID: chs[i].ID, Status: proto.ResApplied})
+			i++
+			continue
+		}
 		j := i + 1
 		if chs[i].Tx != "" {
-			for j < len(chs) && chs[j].Tx == chs[i].Tx {
+			for j < len(chs) && chs[j].Tx == chs[i].Tx && chs[j].Op != proto.OpFiller {
 				j++
 			}
 		}

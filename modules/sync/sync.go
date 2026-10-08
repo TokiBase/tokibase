@@ -140,7 +140,7 @@ func RegisterRole(app core.App, role Role) *Module {
 	if role != RoleHub && role != RoleSpoke {
 		return nil
 	}
-	m := &Module{app: app, role: role, now: time.Now}
+	m := &Module{app: app, role: role, now: testNow()}
 	m.pol.m = m
 	app.Store().Set(storeKey, m)
 
@@ -182,6 +182,7 @@ func RegisterRole(app core.App, role Role) *Module {
 	m.bindCompaction()
 	m.bindHealth()
 	m.bindRoutes()
+	m.bindEpoch()
 	m.bindHubNotify()
 	m.bindLoop()
 	return m
@@ -240,6 +241,9 @@ func (m *Module) Init() error {
 		m.hub = h
 		// the hub's own writes are attributed to the hub id
 		if err := m.adoptNodeID(h.id); err != nil {
+			return err
+		}
+		if err := m.initEpoch(st); err != nil {
 			return err
 		}
 	case RoleSpoke:
@@ -321,3 +325,26 @@ func isNoRows(err error) bool { return errors.Is(err, sql.ErrNoRows) }
 var _ hlc.Store = dbState{}
 
 func errf(format string, a ...any) error { return fmt.Errorf("sync: "+format, a...) }
+
+// Env of the test clock: with TOKI_SYNC_TEST=1 the wall clock of this process is
+// shifted by TOKI_SYNC_TEST_CLOCK_OFFSET (a Go duration, may be negative or use
+// the "d" suffix). The e2e tests use it to age nodes without waiting.
+const (
+	EnvTest            = "TOKI_SYNC_TEST"
+	EnvTestClockOffset = "TOKI_SYNC_TEST_CLOCK_OFFSET"
+)
+
+func testNow() func() time.Time {
+	if !envFlag(EnvTest) {
+		return time.Now
+	}
+	s := strings.TrimSpace(os.Getenv(EnvTestClockOffset))
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		var ok bool
+		if d, ok = parseDuration(s); !ok {
+			return time.Now
+		}
+	}
+	return func() time.Time { return time.Now().Add(d) }
+}
