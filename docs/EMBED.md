@@ -94,18 +94,56 @@ final pb = PocketBase(url!);
 
 ## What nano excludes
 
-Tags `no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_replica no_backupcheck no_audit no_wasm no_jsvm no_ghupdate no_migratecmd no_totp no_geo` (the nano line of `profiles.txt`): no admin UI, no MCP, passkeys, push, webhooks, audit log, WASM hooks, WAL replication, backup verification, JS hooks (`HooksDir` is refused), TOTP and geo. Kept: REST, realtime, auth (password/OAuth2/OTP), sessions, lockout, rules and ruleguard, fieldperm, crypto, computed, jobs, timelint. Both `no_jsvm` and `no_embed_jsvm` drop the JS engine from the embed package.
+Tags `no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_replica no_backupcheck no_audit no_wasm no_jsvm no_ghupdate no_migratecmd no_totp no_geo no_thumbs no_oauth2 no_s3fs` (the nano line of `profiles.txt`, plus `no_payments no_roles`): no admin UI, no MCP, passkeys, push, webhooks, audit log, WASM hooks, WAL replication, backup verification, JS hooks (`HooksDir` is refused), TOTP, geo, image thumbnails, the OAuth2 browser-flow providers (use `nativeauth`, Google/Apple id_token) and the S3 file system driver. Kept: REST, realtime, auth (password/OTP/native id_token), sessions, lockout, rules and ruleguard, fieldperm, crypto, computed, jobs, timelint. Both `no_jsvm` and `no_embed_jsvm` drop the JS engine from the embed package.
+
+## Android AAR on Linux
+
+Verified on Debian 12 x86_64 (8 cores): `mobile/build.sh android` builds the AAR in about 55 s cold (18 s with warm caches), Go 1.27, gomobile `golang.org/x/mobile@v0.0.0-20260908204917-8b95e45f8d3e`, NDK r27c.
+
+```sh
+# 1. JDK 17 (headless Temurin tarball is enough; javac is required)
+mkdir -p /root/jdk17 && curl -sL "https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jdk/hotspot/normal/eclipse" | tar xz -C /root/jdk17 --strip-components=1
+export JAVA_HOME=/root/jdk17 PATH=/root/jdk17/bin:$PATH
+
+# 2. Android SDK (command line tools: https://developer.android.com/studio#command-line-tools-only)
+mkdir -p /root/android-sdk/cmdline-tools
+unzip commandlinetools-linux-11076708_latest.zip -d /root/android-sdk/cmdline-tools
+mv /root/android-sdk/cmdline-tools/cmdline-tools /root/android-sdk/cmdline-tools/latest
+yes | /root/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=/root/android-sdk --licenses
+/root/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=/root/android-sdk \
+    "platforms;android-34" "build-tools;34.0.0" "ndk;27.2.12479018" "platform-tools"
+export ANDROID_HOME=/root/android-sdk ANDROID_NDK_HOME=/root/android-sdk/ndk/27.2.12479018   # NDK is auto-detected under $ANDROID_HOME/ndk when unset
+
+# 3. gomobile
+export PATH=/usr/local/go/bin:/root/go/bin:$PATH GOFLAGS=-mod=mod
+go install golang.org/x/mobile/cmd/gomobile@latest && go install golang.org/x/mobile/cmd/gobind@latest && gomobile init
+
+# 4. build (only the ABIs you ship; default is all four)
+ANDROID_TARGETS=android/arm64,android/amd64 make aar      # out/tokibase.aar
+```
+
+Notes: `/tmp` mounted `noexec` needs `export GOTMPDIR=$HOME/gotmp`. `GOFLAGS=-mod=mod` lets gomobile add `golang.org/x/mobile/bind` to `go.mod` for the build; `mobile/build.sh` restores `go.mod`/`go.sum` on exit. `make aar` has never been run without `ANDROID_TARGETS`, which also builds `arm` and `386` (about twice the time and size). Do not run an emulator for this; test the facade with `go test ./mobile/...` (the same code, host build) and finish on a real device or Play internal testing.
+
+Result with the nano tags (`-trimpath -ldflags "-s -w"`, androidapi 24, arm64 + amd64):
+
+| | before this change | now |
+| --- | --- | --- |
+| `tokibase.aar` | 18.0 MiB (18,912,662 B) | 17.2 MiB (18,076,060 B) |
+| `jni/arm64-v8a/libgojni.so` | 23.0 MiB (24,160,224 B) | 21.9 MiB (22,946,080 B) |
+| `jni/x86_64/libgojni.so` | 24.4 MiB (25,600,832 B) | 23.2 MiB (24,315,776 B) |
+| `classes.jar` | 13 KiB | 13 KiB |
+
+Java API (package `mobile`, from `classes.jar`): `Mobile.start(String dataDir, String listen, String envJSON) -> Handle`; `Handle.call(method, path, headersJSON, byte[] body) -> Response`, `url()`, `superuser(email, password)`, `stop()`, `subscribe(topic, EventCallback) -> long`, `subscribeAs(token, topic, cb) -> long`, `unsubscribe(long)`; `Response.getStatus()/getHeadersJSON()/getBody()` (plus setters); `interface EventCallback { void onEvent(byte[]) }`. All of them have their `Java_mobile_*` JNI symbols in `libgojni.so` (`readelf --dyn-syms`). Runtime proof needs a device; the host test `TestFacade` exercises Start, Superuser, Call, Subscribe and Stop of the same Go code.
+
+XCFramework (`make xcframework`) needs macOS with Xcode and is not verified yet (pending).
 
 ## Size
 
-Stripped (`-trimpath -s -w`, `CGO_ENABLED=0`), nano tags:
+Stripped (`-trimpath -s -w`, `CGO_ENABLED=0`), current nano tags (see [NANO_SIZE.md](NANO_SIZE.md)):
 
-| Binary | linux/amd64 | darwin/arm64 |
-| --- | --- | --- |
-| `examples/base` | 29.3 MiB | 28.4 MiB |
-| `examples/embed` (with JS hooks) | 29.3 MiB | 28.4 MiB |
-| `examples/embed` + `no_embed_jsvm` | 21.9 MiB | 21.2 MiB |
+| Binary | linux/amd64 | linux/arm64 | Android `libgojni.so` (arm64 / x86_64) |
+| --- | --- | --- | --- |
+| `examples/base` | 21.1 MiB | 19.9 MiB | n/a |
+| `mobile` (gomobile) | n/a | n/a | 21.9 / 23.2 MiB |
 
-Sizes above were measured before `no_jsvm no_ghupdate no_migratecmd no_totp no_geo` joined the nano tag set; with the current nano tags `examples/embed` is about as small as the `no_embed_jsvm` row or smaller (re-measure before quoting).
-
-gomobile output sizes (AAR/XCFramework, per ABI) were not measured here.
+The earlier table (29.3 MiB for `examples/base`) was measured before `no_jsvm no_ghupdate no_migratecmd no_totp no_geo`; `no_embed_jsvm` is only needed when you build `examples/embed` without the nano tag set. The 14 MiB goal is not reached: see NANO_SIZE.md.

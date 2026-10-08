@@ -94,10 +94,10 @@ Exit gate: all modules on by default in profile `solo`, failover drill RTO under
 
 | Profile | Design budget | Measured linux/amd64 (arm64) | CI budget |
 | --- | --- | --- | --- |
-| nano | 14 MB per arch | 21.7 MiB (20.4) | 24 MiB |
-| edge | 28 MB | 25.0 MiB (23.5) | 28 MiB |
+| nano | 14 MB per arch | 21.1 MiB (19.9) | 22 MiB |
+| edge | 28 MB | 25.5 MiB (24.0) | 28 MiB |
 | solo | 45 MB | 42.8 MiB (40.4) | 46 MiB |
 | team | 60 MB | 42.8 MiB (= solo) | 46 MiB |
 | cluster | 60 MB | 51.1 MiB (47.6) | 55 MiB |
 
-Edge and nano exclude the JS plugin set of `./examples/base` through `no_jsvm no_ghupdate no_migratecmd` (about 7 MiB); nano also drops `no_totp no_geo`. They meet the CI budgets (edge 28 MiB, nano 24 MiB) but not the original 28/14 MB design budgets. CI budgets are measured + 2 MiB, rounded up.
+Edge and nano exclude the JS plugin set of `./examples/base` through `no_jsvm no_ghupdate no_migratecmd` (about 7 MiB); nano also drops `no_totp no_geo no_thumbs no_oauth2 no_s3fs` (see NANO_SIZE.md). They meet the CI budgets (edge 28 MiB, nano 22 MiB) but not the original 28/14 MB design budgets. CI budgets are measured + 2 MiB, rounded up.
