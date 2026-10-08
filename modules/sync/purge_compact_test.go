@@ -210,14 +210,18 @@ func TestPurgeUpgradesDeleteTombstoneAndValidates(t *testing.T) {
 			t.Fatalf("purge %v must fail", bad)
 		}
 	}
-	// a collection without policy is not synced
+	// purge is hub-local: a collection without policy can be purged (old log rows
+	// may still hold patches); a system collection can not
 	c := core.NewBaseCollection("plain")
 	c.Fields.Add(&core.TextField{Name: "x"})
 	if err := h.app.Save(c); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.m.Purge("plain", "someid000000001", "x", "cli", true); err == nil {
-		t.Fatal("an unsynced collection can not be purged")
+	if _, err := h.m.Purge("plain", "someid000000001", "x", "cli", true); err != nil {
+		t.Fatalf("a collection without policy can be purged: %v", err)
+	}
+	if _, err := h.m.Purge(PoliciesCollection, "someid000000001", "x", "cli", true); err == nil {
+		t.Fatal("a system collection can not be purged")
 	}
 }
 
