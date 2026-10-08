@@ -65,7 +65,7 @@ byte offsets and the tokenizer was deliberately not rewritten, so offsets are no
 | Strings | `'a'`, `"a"` with escapes | `Literal{String}` |
 | Numbers | `1`, `-2.5`, `1e3` | `Literal{Number}` |
 | null/true/false | identifiers, case-insensitive | `Ident{Kind: KindKeyword}` |
-| Functions | `geoDistance(lonA, latA, lonB, latB)`, `strftime(fmt, [time, mods...])` | `Call` |
+| Functions | `geoDistance(lonA, latA, lonB, latB)`, `strftime(fmt, [time, mods...])`, `@role(name[, scope])`, `@member(scope)` (SQLite only, from `modules/roles`, compare with `= true`) | `Call` |
 | Comments | `// ...`, `/* ... */` | dropped by the scanner |
 
 Keywords stay identifiers (not literal nodes) because the resolver gets the first chance to
@@ -114,6 +114,9 @@ nested expressions the resolver builds itself (`:changed`, joined collection lis
 - Filter functions (`search.TokenFunctions`) still take `fexpr.Token` arguments; the emitter converts AST
   operands back with `rule.ToToken`. For SQLite the exported map is used (custom functions can be registered); other
   dialects get only `geoDistance` and `strftime`, a custom function is an error there.
+- `@role()` and `@member()` (from `modules/roles`) are registered in that map, so both compilers use the same code. They
+  expand to an `EXISTS` subquery on `_memberships` (bound parameters only); see `docs/modules/roles.md`. A function cannot
+  stand alone in a rule (fexpr needs a comparison), so write `@role("admin") = true`.
 - Random placeholder/alias names (`security.PseudorandomString`) are generated while resolving; the order of the
   calls is unchanged (the differential tests compare names too).
 
