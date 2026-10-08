@@ -43,11 +43,11 @@ HUB="$TMP/hub"; S1="$TMP/s1"
 
 toki() { # role dir tlsport args...
   local role="$1" dir="$2" tls="$3"; shift 3
-  TOKI_SYNC_ROLE="$role" TOKI_SYNC_INSECURE=1 TOKI_DEVICECERT=on TOKI_DEVICECERT_LISTEN="127.0.0.1:$tls" "$TOKI" "$@" --dir "$dir"
+  TOKI_SYNC_ROLE="$role" TOKI_SYNC_INSECURE=1 TOKI_DEVICECERT=on TOKI_DEVICECERT_LISTEN="127.0.0.1:$tls" "$TOKI" "$@" --dev=false --dir "$dir"
 }
 start() { # name role dir port tlsport
   TOKI_SYNC_ROLE="$2" TOKI_SYNC_INSECURE=1 TOKI_SYNC_INTERVAL=1s TOKI_DEVICECERT=on TOKI_DEVICECERT_LISTEN="127.0.0.1:$5" \
-    "$TOKI" serve --automigrate=false --dir "$3" --http "127.0.0.1:$4" >>"$TMP/$1.log" 2>&1 &
+    "$TOKI" serve --dev=false --automigrate=false --dir "$3" --http "127.0.0.1:$4" >>"$TMP/$1.log" 2>&1 &
   echo $! >"$TMP/$1.pid"
 }
 wait_health() { # url seconds [curl args...]
