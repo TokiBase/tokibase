@@ -931,10 +931,8 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 		result.Type = valueTypeOfField(field)
 	}
 
-	// equality on a blind-index field (modules/crypto)
-	if modifier == "" && ref.Kind == rule.RefColumn {
-		r.attachBlindIndex(collection, field.GetName(), result)
-	}
+	// encrypted fields (modules/crypto): equality rewrite and shape enforcement
+	r.attachBlindIndex(collection, field.GetName(), modifier, ref.Kind, result)
 
 	// allow querying only auth records with emails marked as public
 	if field.GetName() == FieldNameEmail && !r.resolver.allowHiddenFields && collection.IsAuth() {
