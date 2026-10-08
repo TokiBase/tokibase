@@ -16,3 +16,7 @@ Dart suite scenarios: health, superuser/user password auth, rules and CRUD,
 error shapes (400/401/403/404, validation), realtime create/update/delete,
 file upload, protected file token, auth refresh, impersonate, batch,
 expand/filter/sort/fields, `@request.auth` filters, `authStore` persistence callbacks.
+
+## Edge gate
+
+`edge-gate.sh` (Linux only, CI job `e2e-edge-gate`, about 25 s): a solo hub and a spoke built from the `edge` tags of `profiles.txt`, with a TCP stub printer (`edgegate/stubprinter.py`) and a pty scanner (`ptyscanner.py`). Covers kiosk pairing, scans, a printed ticket, a client certificate on the TLS port, its revocation, five offline tickets with reserved numbers, convergence and the kiosk lock. Walkthrough: `docs/EDGE_GATE.md`. `TOKI_BIN_HUB` / `TOKI_BIN_EDGE` reuse prebuilt binaries.

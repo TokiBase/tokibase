@@ -8,10 +8,10 @@ rebuilt around a small HTTP-free kernel plus removable modules, shipped as five 
 | Profile | Shape | For |
 | --- | --- | --- |
 | `nano` | Go library, Android AAR, iOS XCFramework | Embedded in apps, fully offline, two-way sync when online |
-| `edge` | Single binary on Pi / mini PC | Parking gates, kiosks, signage, POS |
+| `edge` | Single binary on Pi / mini PC | Parking gates, kiosks, signage, POS ([walkthrough](docs/EDGE_GATE.md)) |
 | `solo` | Single binary on a 1 GB VPS | Drop-in PocketBase replacement with real HA |
 
-`nano` target is under 14 MB per ABI; current: 21.1 MiB stripped (`examples/base`, linux/amd64; the Android `libgojni.so` is 21.9 MiB arm64). The reduction plan is in [docs/NANO_SIZE.md](docs/NANO_SIZE.md).
+`nano` target is under 14 MB per ABI; current: 22.25 MiB stripped (`examples/base`, linux/amd64; the Android `libgojni.so` is 21.9 MiB arm64). The reduction plan is in [docs/NANO_SIZE.md](docs/NANO_SIZE.md).
 | `team` | Primary + read nodes + workers | Production teams |
 | `cluster` | N stateless nodes + PostgreSQL + NATS | Multi-tenant SaaS |
 
