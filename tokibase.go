@@ -26,6 +26,7 @@ import (
 	"github.com/tokibase/tokibase/modules/fieldperm"
 	"github.com/tokibase/tokibase/modules/geo"
 	"github.com/tokibase/tokibase/modules/jobs"
+	"github.com/tokibase/tokibase/modules/kiosk"
 	"github.com/tokibase/tokibase/modules/lockout"
 	"github.com/tokibase/tokibase/modules/mcp"
 	"github.com/tokibase/tokibase/modules/nativeauth"
@@ -466,6 +467,23 @@ func NewWithConfig(config Config) *PocketBase {
 		scanner.Register(pb.App.(core.App))
 	}
 
+	// kiosk pairing, device sessions, status and PIN lock (opt in with TOKI_KIOSK=on)
+	if kiosk.Enabled() {
+		kiosk.Register(pb.App.(core.App))
+		if auditLog != nil {
+			kiosk.SetAuditSink(func(action, collection, record string, details map[string]any) {
+				after, _ := json.Marshal(details)
+				afterStr := string(after)
+				if err := auditLog.Append(&audit.Entry{
+					ActorKind: "system", Action: action, Collection: collection,
+					Record: record, After: &afterStr,
+				}); err != nil {
+					pb.Logger().Warn("audit: failed to record "+action, "error", err)
+				}
+			})
+		}
+	}
+
 	// provider-neutral payments: webhooks, intents, entitlements (TOKI_PAYMENTS=off disables)
 	if payments.Enabled() {
 		payments.Register(pb.App.(core.App))
@@ -601,6 +619,9 @@ func (pb *PocketBase) Start() error {
 	}
 	if printer.Enabled() {
 		pb.RootCmd.AddCommand(printer.NewCommand(pb))
+	}
+	if kiosk.Enabled() {
+		pb.RootCmd.AddCommand(kiosk.NewCommand(pb))
 	}
 	pb.RootCmd.AddCommand(cmd.NewLockoutCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewSessionsCommand(pb))

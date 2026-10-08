@@ -30,6 +30,17 @@ func SetHealthExtra(app core.App, name string, fn func(app core.App) any) {
 	app.Store().Set(healthExtrasKey, next)
 }
 
+// HealthExtra evaluates the block registered with [SetHealthExtra] under name,
+// for modules that read the status of another module without importing it.
+func HealthExtra(app core.App, name string) (any, bool) {
+	fn := healthExtras(app)[name]
+	if fn == nil {
+		return nil, false
+	}
+	v := fn(app)
+	return v, v != nil
+}
+
 func healthExtras(app core.App) map[string]func(core.App) any {
 	healthExtrasMu.Lock()
 	defer healthExtrasMu.Unlock()
