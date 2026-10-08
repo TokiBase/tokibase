@@ -229,6 +229,7 @@ const (
 	RateLimitRuleAudienceAuth         = kernel.RateLimitRuleAudienceAuth
 	RateLimitRuleAudienceGuest        = kernel.RateLimitRuleAudienceGuest
 	RequestInfoContextBatch           = kernel.RequestInfoContextBatch
+	RequestInfoContextSync            = kernel.RequestInfoContextSync
 	RequestInfoContextDefault         = kernel.RequestInfoContextDefault
 	RequestInfoContextExpand          = kernel.RequestInfoContextExpand
 	RequestInfoContextOAuth2          = kernel.RequestInfoContextOAuth2

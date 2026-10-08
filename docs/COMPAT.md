@@ -192,6 +192,12 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Migration: nothing needed; unset the variable to use the default path. See `docs/RULE_ENGINE.md`.
 - Rule engine PR 2 (`rule.Dialect`, `kernel/rule/pg`) changes nothing user-visible: the SQLite SQL, parameters and error texts are byte-identical (same differential corpus). Compat restore (QC round 5): PR 2 had changed the JSON path segment handling (a segment like `1é` gave `$.a[1]` instead of PocketBase's `$.a.1`); the PocketBase order (index check on the raw segment, then sanitizing) is back and pinned by `TestRecordFieldResolverJSONPathSegmentOrder` / `TestSegmentFromRawUpstreamOrder`.
 
+### `_changes`, `_sync_*` tables, `_sync_policies` collection and the reserved rule context `sync` (phase 3, `modules/sync`)
+
+- What: only when `TOKI_SYNC_ROLE` is `hub` or `spoke` (default `off`, then nothing below exists): plain tables in `data.db` `_changes`, `_sync_meta`, `_sync_tombstones`, `_sync_state`, and the system collection `_sync_policies` (rules `null`, superusers only). The design reserves the further names `_sync_nodes`, `_sync_cursors`, `_sync_conflicts`, `_sync_reservations`, `_sync_sequences`, `_sync_reserved`, `_sync_actor_grants`, `_sync_actors`, `_sync_schema` and the file `<dataDir>/sync_node.key`; user collections and tables must not use these names. Write hooks on every synced collection run the write inside a transaction together with a `_changes` insert, so a write also fails when the change log cannot be written; `OnRecord{Create,Update,Delete}Execute` handlers see a transaction `e.App`. Creating a record whose id has a delete tombstone fails with validation code `validation_sync_tombstoned`. `@request.context = "sync"` (`RequestInfoContextSync`) is reserved for sync applies; no PR1 code sets it yet. New CLI `toki sync status`. Raw SQL writes are not captured, files are not synced, and `created`/`updated` may later carry origin timestamps.
+- Why: offline-first hub/spoke replication (see `docs/SYNC_DESIGN.md`).
+- Migration: none needed with the role `off`. After use, a `no_sync` binary refuses to start on that data dir; drop the tables or set `TOKI_ALLOW_STUBBED_MODULES=1`. See `docs/modules/sync.md`.
+
 ## Not promised
 
 - Go package API (`core`, `apis`, ...) may change between TokiBase minor versions.
