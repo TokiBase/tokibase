@@ -301,7 +301,7 @@ func (m *Module) buildSnapshotPage(app kernel.App, nodeID string, col *core.Coll
 		tq += " AND record <= {:u}"
 		params["u"] = upper
 	}
-	scoped := p.PartField != "" || m.pullRuleOn(vw, p)
+	scoped := p.PartField != "" || m.sentTracked(vw, col, p) // an open or trusted-null view rule hides nothing
 	if scoped {
 		// a deleted record can not be checked against the partition or the view
 		// rule of the node: its id, clock and origin must not leak (review P56-3)
