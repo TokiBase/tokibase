@@ -88,3 +88,27 @@ func TestBadEnv(t *testing.T) {
 		t.Fatal("bad envJSON must error")
 	}
 }
+
+// The sync wrappers fail cleanly on an instance that is not a spoke.
+func TestSyncWrappersWithoutSpoke(t *testing.T) {
+	h, err := Start(t.TempDir(), "", `{"logLevel":"error"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Stop()
+	if _, err := h.SyncStatus(); err == nil {
+		t.Fatal("SyncStatus must fail on a node that is not a spoke")
+	}
+	if err := h.SyncEnroll("http://127.0.0.1:1", "x"); err == nil {
+		t.Fatal("SyncEnroll must fail on a node that is not a spoke")
+	}
+	if _, err := h.SyncNext("seq"); err == nil {
+		t.Fatal("SyncNext must fail")
+	}
+	h.SyncSetConditions(true, false, false, false)
+	id, err := h.SyncSubscribe(cb{make(chan []byte, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Unsubscribe(id)
+}

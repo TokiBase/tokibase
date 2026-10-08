@@ -3,6 +3,7 @@
 Phase 3 hub/spoke replication (offline-first). The full design is `docs/SYNC_DESIGN.md`; this page describes what exists today. Package `modules/sync`, subpackage `modules/sync/hlc`.
 
 **Status: PR9 of 11 (encrypted fields: ciphertext sync with wrapped DEKs since PR9; snapshot bootstrap and hub epoch since PR7; reservations, schema bundles and the spoke schema lock, clock drift enforcement; policies, partitions, purge, compaction since PR6; conflict strategies since PR5; rule re-evaluation and actor grants since PR4).** A node with `TOKI_SYNC_ROLE=hub|spoke` records every write of the synced collections into a local change log (PR1). Since PR2 a hub can enroll devices and authenticate them (`/api/sync/{enroll,handshake,ping}`). Since PR3 a spoke pushes its changes to the hub, the hub applies them (record level `lww`), and the spoke pulls everything it is missing and applies it; hub and spokes converge. Since PR4 a pushed change is replayed as the user who made it, through the record API, so collection rules, fieldperm and batchguard apply on the hub. Since PR5 the hub resolves concurrent changes by the collection's strategy (`lww`, `hub-wins`, `field-merge`, `hook`) and records them in `_sync_conflicts`. Since PR6 the policies are complete (partitions, view rule on pull), records can be purged for good, and the hub compacts its change log. Since PR8 the hub versions its schema and ships it to the spokes, the hub hands out number ranges for offline numbering, and a node whose clock is wrong is corrected.
+**Status: PR10 of 11 (nano/edge facade `embed.Instance.Sync()` and `mobile` wrappers, client conditions, parking exit gate; snapshot bootstrap and hub epoch since PR7; reservations, schema bundles and the spoke schema lock, clock drift enforcement; policies, partitions, purge, compaction since PR6; conflict strategies since PR5; rule re-evaluation and actor grants since PR4).** A node with `TOKI_SYNC_ROLE=hub|spoke` records every write of the synced collections into a local change log (PR1). Since PR2 a hub can enroll devices and authenticate them (`/api/sync/{enroll,handshake,ping}`). Since PR3 a spoke pushes its changes to the hub, the hub applies them (record level `lww`), and the spoke pulls everything it is missing and applies it; hub and spokes converge. Since PR4 a pushed change is replayed as the user who made it, through the record API, so collection rules, fieldperm and batchguard apply on the hub. Since PR5 the hub resolves concurrent changes by the collection's strategy (`lww`, `hub-wins`, `field-merge`, `hook`) and records them in `_sync_conflicts`. Since PR6 the policies are complete (partitions, view rule on pull), records can be purged for good, and the hub compacts its change log. Since PR8 the hub versions its schema and ships it to the spokes, the hub hands out number ranges for offline numbering, and a node whose clock is wrong is corrected.
 
 ## What exists now
 
@@ -97,7 +98,7 @@ A cycle is: session (handshake when there is no valid token) -> push pages from 
 - **Pull apply (design §4.7).** Per page in one transaction together with `pull_after`, with `kernel.WithSyncOrigin(Mode: Pull)` (no `_changes` row is captured, `_sync_meta` and tombstones are updated). `revert`/`c`/`u` set the fields that differ, unless a pending local change (`local`/`pushed`) on that field has a higher HLC; counters become `hub value + sum of pending $inc`, sets re-apply the pending `$add/$rm` on the hub list; `d` deletes (tombstone). Changes the node itself originated are applied too, in hub order: an older foreign row pulled after the node's own newer acked change is followed by that change again, which keeps all nodes on the hub's sequence. Equal values are not written. Every change is applied in its own savepoint. A change that cannot be applied (unique index, missing collection, ...) leaves no partial write, is written to the local `_sync_conflicts` (kind `apply_error`, once per change), counted (`Status().ApplyErrors`) and reported as an `error` event; the page STOPS there: the changes before it stay applied, `pull_after` stops just before it, and the cycle fails with `*client.ApplyError` (shown as the last error in `toki sync status`) so that it is retried with the normal backoff instead of being skipped. A poison change therefore blocks the pull until the cause is fixed. Deviation: pending local changes are not dropped on a revert (design §4.7 says to drop those with `hlc <=` the rejected one): rows must stay contiguous for `push_from`, and by construction no such row exists. A revert (or hub delete) to "deleted" does discard the newer pending local edits of that record: they are marked `acked` with code `discarded`, logged at WARN, and kept in a local conflict row (kind `orphaned`) with their patches. The `hash_mismatch` check of §4.7 runs after a change is applied to a record without pending local changes (collections without counter/set fields only, because the hub sends their CURRENT absolute value with a historic hash): mismatches are counted in `Status().HashMismatches` / `HashStreak` and logged; the auto-heal re-fetch is not implemented.
 - **Triggers.** `TOKI_SYNC_INTERVAL` (30 s; 5 min when `Metered` or `LowPower`), local writes (debounced 2 s, hooked on `OnRecordAfter*Success` of synced collections, not for pull applies), `@sync` pokes, `SyncNow`.
 - **Backoff.** After the n-th consecutive failure the next attempt waits `1 s * 2^(n-1)` up to 5 min with +-20% jitter; a `Retry-After` header is a floor. Pokes and local writes do not break a backoff; `SyncNow` does. 403 `sync_node_revoked` stops the loop (`ErrRevoked`, state `revoked`).
-- **Conditions.** `Online=false` makes no attempt at all (`SyncNow` answers `ErrOffline`). `Metered` limits the pull page to 100 and uses the long interval. `Background` and the bounded background cycle are PR10. `Pause`/`Resume` stop and resume attempts.
+- **Conditions.** `Online=false` makes no attempt at all (`SyncNow` answers `ErrOffline`). `Metered` pushes only in automatic cycles, pulls in pages of at most 100 on `SyncNow`, and uses the long interval; `Background` runs one cycle of at most 20 s and stops (PR10, see below). `Pause`/`Resume` stop and resume attempts.
 
 ### `toki sync verify [--against-hub] [--json]`
 
@@ -386,6 +387,38 @@ Limits of the encrypted fields:
 - `toki crypto enable|disable|rotate` rewrite rows with direct SQL (no hooks, no change row). Run `enable` before the collection is synced, or re-bootstrap the spokes afterwards (`toki sync rebootstrap`). After `rotate` the hub rows carry the new version while spokes keep the old ciphertext of existing rows until they are written again: the digest of the collection differs meanwhile, the spokes keep decrypting (both versions stay), and a retire on the hub is not applied on a spoke while its rows still use the version.
 - A push of a ciphertext of a retired or unknown key version is rejected by the hub (the spoke's change is reverted).
 - Per-device DEKs, per-tenant crypto-shredding and a master-key rotation that reaches the spokes are not done ("crypto full", a later phase).
+## Nano and edge integration, conditions, parking gate (PR10)
+
+### Conditions (`client/conditions.go`, design §6.2)
+
+`Conditions{Online, Metered, LowPower, Background}` are turned into a `Plan` (`Conditions.Plan(base, page, explicit)`), which the loop reads at every wake-up:
+
+| Conditions | Automatic cycle | `SyncNow` |
+| --- | --- | --- |
+| `Online=false` | no attempt, no timer wasted (`ErrOffline` to a waiting `SyncNow`) | `ErrOffline` |
+| `Metered` | push only (a pending snapshot bootstrap waits too), interval `max(TOKI_SYNC_INTERVAL, 5 min)` | push and pull, pull pages of at most 100 changes |
+| `LowPower` | interval `max(TOKI_SYNC_INTERVAL, 5 min)` | unchanged |
+| `Background` | one cycle bounded to 20 s (`BackgroundBudget`) per slot, then no timer until the conditions change or `SyncNow`; ignores a backoff; a cut-off cycle is `Result.Partial` (not a failure, pages already committed stay) | runs one more bounded cycle |
+
+Going online, entering or leaving a background slot, and leaving `Metered` kick the loop. `Status` gained `Conditions` and `BackgroundDone`. The debounce after a local write is 2 s; backoff is 1 s doubling to 5 min with +-20% jitter and a `Retry-After` floor. The loop reads time through `Options.Sched` (`Scheduler`: `Now`, `NewTimer`, `AfterFunc`), so the tests drive it with a fake clock (`client/conditions_test.go`: `Plan` table, jitter bounds, backoff steps at 1 s / 2 s, offline = zero requests, background = one cycle, 5 writes = one kick after 2 s; `modules/sync/loop_conditions_test.go`: metered push-only and background slot against a real hub). Decision: a metered link does not pull in automatic cycles at all, `SyncNow` pulls (design says "push-only plus a pull page limit of 100"; both are kept).
+
+### Facade (`client/facade.go`, `facade.go`)
+
+`Client.StatusJSON/StatusDoc`, `Event.JSON`, `Client.Subscribe(fn)` (any number of listeners next to `Events()`), `Client.Rebootstrap`; on the module `FromApp`, `Enroll(ctx, hubURL, code, profile)` (join, then start the loop), `Enrolled`, `SetConditions` (kept for a loop that starts later), `Now`, `StatusJSON`, `OnEvent` (listeners that outlive a loop restart), `Rebootstrap`, `LocalActorToken`; `ErrNotSpoke` / `ErrNotEnrolled`. `embed.Instance.Sync()` and `mobile.Handle.Sync*` wrap them, see [EMBED.md](../EMBED.md#sync-from-a-flutter-app-nano-as-a-spoke).
+
+### Test clock file
+
+`TOKI_SYNC_TEST=1` plus `TOKI_SYNC_TEST_CLOCK_FILE=<path>` shifts the wall clock of the process by the duration in the file (`48h`, `1h30m`, `2d`), re-read every 50 ms. A driver that writes one file read by the hub and all spokes advances them in lockstep, which `TOKI_SYNC_TEST_CLOCK_OFFSET` (fixed at start) cannot do. Test use only.
+
+### Parking exit gate (`tests/e2e/parking.sh`, CI job `e2e-parking`)
+
+Hub = the `solo` binary (`TOKI_SYNC_ROLE=hub`, the PR5 `syncconflict` wasm guest as `payments_conflict`, a webhook on `tickets` creates to a local sink), `gate-1` and `gate-2` = `edge`-tag binaries (service actors `gate_devices/*`, `branch=B1`), `phone` = the `embed` API with the nano tags inside the driver (`tests/e2e/parking/`), actor grant of an officer, service actor for the pull view rule. Each spoke reaches the hub through its own `tests/e2e/syncproxy` (TCP proxy with `/off`, `/on`, `/status`). Schema: `tickets` (`no` = `reserve:tickets`, unique; `fee` counter; `flags` set; policy `field-merge`, partition `branch = @node.branch`), `payments` (policy `hook`), `rates` (`hub-wins`, direction `pull`), `officers` (`pull`, so the phone can hold the actor). One shared fake clock file; 48 steps of 1 h; per hour each gate creates 20 tickets and closes 15 (`fee+`), the phone flags 5 tickets, takes 2 cash payments and issues 2 tickets; injected cases: gate-2 closes and gate-1 and the phone both edit the plate of one ticket (hours 10 and 11), gate-1 QR payment and phone cash payment of one invoice (hours 5 and 6, hook merge), rates change on the hub (hour 24), legal purge of a ticket on the hub (hour 30) that gate-1 then edits (hour 31). Then the network comes back (gates are restarted, as a reboot would: after minutes of failures their backoff is long; the phone gets `Now`) and the driver waits until pending is 0 and the digests are equal (bound 150 s).
+
+| | Assertion | Result |
+| --- | --- | --- |
+RESULTS_TABLE
+
+Deviations from the design text: gates and phone are all in branch `B1` (the shared-ticket conflict needs one partition; partitions are covered by `sync.sh`), the payment field is `provider_ref` (the PR5 guest's name), the phone also issues tickets (reserved numbers on nano), the phone needs a service actor to pull under an auth view rule, and the gates restart at reconnect.
 
 ## Env
 
@@ -404,6 +437,7 @@ Limits of the encrypted fields:
 | `TOKI_SYNC_INTERVAL` | spoke: idle sync interval (default `30s`) |
 | `TOKI_SYNC_PAGE` | spoke: changes per push/pull page (default `500`) |
 | `TOKI_SYNC_POKE` | spoke: `0` disables the realtime `@sync` subscription |
+| `TOKI_SYNC_TEST`, `TOKI_SYNC_TEST_CLOCK_OFFSET`, `TOKI_SYNC_TEST_CLOCK_FILE` | tests: shift the wall clock of the process (fixed offset, or a file that is re-read) |
 
 The remaining `TOKI_SYNC_*` variables of the design arrive with the PRs that use them.
 

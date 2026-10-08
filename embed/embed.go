@@ -93,6 +93,12 @@ type Options struct {
 	// MaxBodyBytes caps the request body for TCP requests and Call.
 	// 0 means DefaultMaxBodyBytes, negative means unlimited.
 	MaxBodyBytes int64
+
+	// Sync makes the instance a sync spoke (profile nano or edge only): it
+	// defaults TOKI_SYNC_ROLE=spoke and the hub URL, interval and node key.
+	// See Instance.Sync and docs/EMBED.md. Ignored (no error) when the binary
+	// is built with the no_sync tag.
+	Sync *SyncOptions
 }
 
 // profileEnv are the run time switches per profile.
@@ -191,6 +197,8 @@ type Instance struct {
 	envHeld bool
 	dir     string
 	url     string
+	profile string // Options.Profile after defaulting
+	syncHub string // Options.Sync.HubURL
 	handler http.Handler
 	ln      net.Listener
 
@@ -279,6 +287,24 @@ func Start(opts Options) (*Instance, error) {
 			set[k] = v
 		}
 	}
+	if opts.Sync != nil {
+		if profile != "nano" && profile != "edge" {
+			release()
+			return nil, fmt.Errorf("embed: Options.Sync needs Profile nano or edge (got %q); a hub is run with the toki binary", profile)
+		}
+		if !stubbedEnv["TOKI_SYNC_ROLE"] {
+			set["TOKI_SYNC_ROLE"] = "spoke"
+			if opts.Sync.HubURL != "" {
+				set["TOKI_SYNC_HUB_URL"] = opts.Sync.HubURL
+			}
+			if opts.Sync.Interval != "" {
+				set["TOKI_SYNC_INTERVAL"] = opts.Sync.Interval
+			}
+			if len(opts.Sync.NodeKey) > 0 {
+				set["TOKI_SYNC_NODE_KEY"] = strings.TrimSpace(string(opts.Sync.NodeKey))
+			}
+		}
+	}
 	for k, v := range opts.Env {
 		set[k] = v
 	}
@@ -303,7 +329,10 @@ func Start(opts Options) (*Instance, error) {
 		HideStartBanner:      true,
 		SkipFlagParse:        true,
 	})
-	inst := &Instance{envHeld: true, app: app, dir: dir, ln: ln, serveDone: make(chan struct{}), subs: map[string]subscriptions.Client{}}
+	inst := &Instance{envHeld: true, app: app, dir: dir, ln: ln, serveDone: make(chan struct{}), subs: map[string]subscriptions.Client{}, profile: profile}
+	if opts.Sync != nil {
+		inst.syncHub = opts.Sync.HubURL
+	}
 
 	fail := func(err error) (*Instance, error) {
 		if ln != nil {

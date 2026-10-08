@@ -122,6 +122,13 @@ type Module struct {
 	// txs holds the tx group state per open transaction.
 	txs stdsync.Map // *kernel.TxAppInfo -> *txState
 
+	// fac and cond are the facade state (facade.go): event listeners and the device
+	// conditions set before the loop existed.
+	fac     facade
+	condMu  stdsync.Mutex
+	cond    client.Conditions
+	condSet bool
+
 	// p8 is the state of schema bundles, reservations and clock drift (bundle.go).
 	p8 pr8State
 }
@@ -359,11 +366,44 @@ func errf(format string, a ...any) error { return fmt.Errorf("sync: "+format, a.
 const (
 	EnvTest            = "TOKI_SYNC_TEST"
 	EnvTestClockOffset = "TOKI_SYNC_TEST_CLOCK_OFFSET"
+	// EnvTestClockFile names a file holding the offset (same syntax); it is
+	// re-read while the process runs, so a test driver can advance the clock of
+	// several processes in lockstep (tests/e2e/parking).
+	EnvTestClockFile = "TOKI_SYNC_TEST_CLOCK_FILE"
 )
+
+// fileClock returns a clock shifted by the duration in the file (re-read at
+// most every 50 ms; an unreadable file means no shift).
+func fileClock(path string) func() time.Time {
+	var (
+		mu   stdsync.Mutex
+		last time.Time
+		off  time.Duration
+	)
+	return func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		if now := time.Now(); now.Sub(last) > 50*time.Millisecond {
+			last = now
+			if b, err := os.ReadFile(path); err == nil {
+				s := strings.TrimSpace(string(b))
+				if d, err := time.ParseDuration(s); err == nil {
+					off = d
+				} else if d, ok := parseDuration(s); ok {
+					off = d
+				}
+			}
+		}
+		return time.Now().Add(off)
+	}
+}
 
 func testNow() func() time.Time {
 	if !envFlag(EnvTest) {
 		return time.Now
+	}
+	if f := strings.TrimSpace(os.Getenv(EnvTestClockFile)); f != "" {
+		return fileClock(f)
 	}
 	s := strings.TrimSpace(os.Getenv(EnvTestClockOffset))
 	d, err := time.ParseDuration(s)

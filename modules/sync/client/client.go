@@ -107,6 +107,9 @@ type Options struct {
 	NoPoke bool
 	// Logger receives loop diagnostics (optional).
 	Logger *slog.Logger
+	// Sched is the clock of the loop (timers, backoff, debounce); tests inject a
+	// fake one. Default: the time package.
+	Sched Scheduler
 
 	// NoAutoBootstrap stops the loop with ErrRebootstrap instead of running the
 	// snapshot bootstrap itself (the state stays rebootstrap_required).
@@ -133,7 +136,12 @@ type Client struct {
 	wantHub string
 	hubPub  ed25519.PublicKey
 
-	loop loopState
+	loop  loopState
+	sched Scheduler
+	// lsn are the event listeners (facade.go).
+	lsnMu  stdsync.Mutex
+	lsnSeq int
+	lsn    map[int]func(Event)
 	// rsv is the reservation state (reserve.go).
 	rsv reserveState
 
@@ -221,6 +229,10 @@ func New(o Options) (*Client, error) {
 				}
 			}
 		}
+	}
+	c.sched = o.Sched
+	if c.sched == nil {
+		c.sched = realSched{}
 	}
 	c.initLoop()
 	return c, nil

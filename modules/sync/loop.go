@@ -75,6 +75,12 @@ func (m *Module) StartLoop(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	m.condMu.Lock()
+	if m.condSet {
+		c.SetConditions(m.cond)
+	}
+	m.condMu.Unlock()
+	c.Subscribe(m.dispatchEvent)
 	m.loop.Store(c)
 	c.Start(ctx)
 	return nil
