@@ -17,7 +17,7 @@ make edge GOOS=linux GOARCH=arm64   # cross-compile
 | --- | --- | --- | --- | --- |
 | solo | none | 42.8 MiB | 40.4 MiB | 47 MiB |
 | team | none (= solo) | 42.8 MiB | 40.4 MiB | 47 MiB |
-| cluster | `replica_s3` | 51.1 MiB | 47.6 MiB | 55 MiB |
+| cluster | `replica_s3` | 51.1 MiB | 47.6 MiB | 56 MiB (raised from 55 in edge PR 7: CI measured solo+s3 just over 55 MiB) |
 | edge | `no_payments no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd no_roles` | 25.5 MiB | 24.0 MiB | 28 MiB |
 | nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo no_thumbs no_oauth2 no_s3fs no_printer no_scanner no_kiosk no_devicecert` (edge already has `no_roles`) | 21.1 MiB | 19.9 MiB | 23 MiB |
 

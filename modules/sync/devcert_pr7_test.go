@@ -7,12 +7,12 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/kernel"
-	"github.com/tokibase/tokibase/modules/devicecert"
 	"github.com/tokibase/tokibase/modules/sync/client"
 	"github.com/tokibase/tokibase/modules/sync/proto"
 )
@@ -28,7 +28,7 @@ func TestAttestVerifiesWithHubCert(t *testing.T) {
 		t.Fatal("an enrolled spoke must have a cert")
 	}
 	now := time.Now()
-	msg := devicecert.AttestMessage(id.NodeID(), "0123456789abcdef-nonce", now.Unix())
+	msg := attestMessage(id.NodeID(), "0123456789abcdef-nonce", now.Unix())
 	sig, err := id.Sign(msg)
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestAttestVerifiesWithHubCert(t *testing.T) {
 	if !ed25519.Verify(ed25519.PublicKey(pub), msg, sig) {
 		t.Fatal("the attest signature must verify with the node cert public key")
 	}
-	if ed25519.Verify(ed25519.PublicKey(pub), devicecert.AttestMessage(id.NodeID(), "other-nonce-0123456", now.Unix()), sig) {
+	if ed25519.Verify(ed25519.PublicKey(pub), attestMessage(id.NodeID(), "other-nonce-0123456", now.Unix()), sig) {
 		t.Fatal("a signature for another nonce must not verify")
 	}
 }
@@ -118,4 +118,10 @@ func TestSystemCollectionAllowlist(t *testing.T) {
 	if eligible(u) && !u.System {
 		t.Fatal("a non-system collection with that name must not use the allowlist path")
 	}
+}
+
+// attestMessage is the message of POST /api/device/attest (modules/devicecert
+// AttestMessage; kept here because a no_devicecert build has no such symbol).
+func attestMessage(node, nonce string, ts int64) []byte {
+	return []byte("toki-attest/v1|" + node + "|" + nonce + "|" + strconv.FormatInt(ts, 10))
 }
