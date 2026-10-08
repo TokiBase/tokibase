@@ -15,15 +15,15 @@ make edge GOOS=linux GOARCH=arm64   # cross-compile
 
 | Profile | Tags | linux/amd64 | linux/arm64 | Budget | Headroom (amd64) |
 | --- | --- | --- | --- | --- | --- |
-| solo | none | 45.65 MiB | 43.00 MiB | 48 MiB | 5.1% |
-| team | none (= solo) | 45.65 MiB | 43.00 MiB | 48 MiB | 5.1% |
-| cluster | `replica_s3` | 53.85 MiB | 50.13 MiB | 57 MiB | 5.8% |
-| edge | `no_payments no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd no_roles` | 27.38 MiB | 25.63 MiB | 30 MiB | 9.6% |
-| nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo no_thumbs no_oauth2 no_s3fs no_printer no_scanner no_kiosk no_devicecert` (edge already has `no_roles`) | 22.25 MiB | 20.88 MiB | 24 MiB | 7.9% |
+| solo | none | 45.70 MiB | 43.00 MiB | 48 MiB | 5.0% |
+| team | none (= solo) | 45.70 MiB | 43.00 MiB | 48 MiB | 5.0% |
+| cluster | `replica_s3` | 53.91 MiB | 50.19 MiB | 57 MiB | 5.7% |
+| edge | `no_payments no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd no_roles` | 27.44 MiB | 25.63 MiB | 30 MiB | 9.3% |
+| nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo no_thumbs no_oauth2 no_s3fs no_printer no_scanner no_kiosk no_devicecert` (edge already has `no_roles`) | 22.29 MiB | 20.94 MiB | 24 MiB | 7.7% |
 
 This is the one authoritative table. The tags and budgets live in [`profiles.txt`](../profiles.txt); `ci.yml` (jobs `build`, `profiles`) reads the budgets from it, `docs/ARCHITECTURE.md` and the README only link here.
 
-**How it was measured** (edge PR 8, 2026-10-09, `origin/main` at 5d04b774, Go from `go.mod`, build VM `tokibuild`): `make <profile> [GOOS=linux GOARCH=<arch>]`, i.e. `CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" ./examples/base`; exact bytes amd64: edge 28,713,120, nano 23,330,976, solo/team 47,866,016, cluster 56,467,616 (arm64: 26,869,920, 21,889,184, 45,088,928, 52,560,032). `no_ui` (an extra CI check, not a profile) is 44,806,304 B (42.73 MiB) with a 45 MiB budget. The older numbers in this document (edge 25.5, nano 21.1, solo 42.8) were taken before sync PR1-PR8 and the four edge modules landed.
+**How it was measured** (edge PR 8, 2026-10-09, after rebase onto main with #86/#87; `origin/main` after sync PR9 and devicecert QC (#86, #87), Go from `go.mod`, build VM `tokibuild`): `make <profile> [GOOS=linux GOARCH=<arch>]`, i.e. `CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" ./examples/base`; exact bytes amd64: edge 28,770,464, nano 23,376,032, solo/team 47,915,168, cluster 56,524,960 (arm64: 26,869,920, 21,954,720, 45,088,928, 52,625,568). `no_ui` (an extra CI check, not a profile) is 44,859,552 B (42.78 MiB) with a 45 MiB budget. The older numbers in this document (edge 25.5, nano 21.1, solo 42.8) were taken before sync PR1-PR8 and the four edge modules landed.
 
 **Budget rule:** measured linux/amd64 + about 5%, rounded up to a whole MiB (the CI runners can differ from the VM by a few hundred KiB; cluster needed a raise once for that reason). Edge gets 30 MiB instead of the 29 MiB the rule gives: sync PR9 (crypto key export) and PR10 (embed/mobile facade, client conditions) are still to land and each costs 100-250 KiB, and the edge modules plan (`docs/EDGE_MODULES_PLAN.md` section 5) already accepted that edge does not meet the original 28 MB goal; 30 MiB keeps about 2.6 MiB for those and for one or two review fixes. If a later PR needs more than that, raise the budget in the PR and add its row to the size log below. nano gets 24 (rule: 23.4 rounded up), solo/team 48 (47.9), cluster 57 (56.5).
 
@@ -42,7 +42,7 @@ Each edge module PR recorded its measured cost here (linux/amd64, stripped, `mak
 | 4 | `modules/kiosk` (pairing, device sessions, `/api/kiosk*`, `kiosk.js` embedded, `toki kiosk`; plus the `sessions` revoke seam and `apis.HealthExtra`) | 28,131,488 B (26.83 MiB, origin/main 4db9ab73) | 28,225,696 B (26.92 MiB) | +94,208 B (92 KiB); budget 28 MiB leaves 1.08 MiB |
 | 6 | `modules/devicecert` (hub CA, `_device_certs`, `/api/sync/devcert`, leaf renewal, TLS listener, `toki devicecert`; stdlib crypto only) | 28,225,696 B (origin/main with kiosk) | 28,360,864 B (27.05 MiB) | +135,168 B (132 KiB); budget 28 MiB leaves 0.95 MiB |
 | 7 | `modules/devicecert` PR2 (client certs, mTLS route scope, deny list, `/api/device/*`, `rotate-ca`, EKU split, bundle file; stdlib only, `.p12` through the `openssl` binary) | 28,360,864 B (PR 6) | 28,487,840 B (27.17 MiB) | +126,976 B (124 KiB); budget 28 MiB leaves 0.83 MiB |
-| 8 | integration (no code in the binary; re-measured after sync PR1-PR8 and the other merges) | 28,487,840 B (PR 7) | 28,713,120 B (27.38 MiB) | +225,280 B from the other merged work; budget 30 MiB leaves 2.62 MiB |
+| 8 | integration (no code in the binary; re-measured after sync PR1-PR8 and the other merges) | 28,487,840 B (PR 7) | 28,770,464 B (27.44 MiB) | +225,280 B from the other merged work; budget 30 MiB leaves 2.56 MiB |
 
 `go-qrcode` (raster QR fallback) is already linked into edge through `modules/totp`, so it adds nothing; a hand written encoder was not needed. `x/text/encoding/charmap` is not linked in edge, so the codepages are hand tables (about 2 KiB). The measured baseline at PR 1 was 26.34 MiB; the current number is in the table at the top.
 

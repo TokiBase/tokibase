@@ -100,10 +100,10 @@ CI enforces the numbers in `profiles.txt`; the measured sizes, the budget rule (
 
 | Profile | Design budget | Measured linux/amd64 (arm64), 2026-10-09 | CI budget |
 | --- | --- | --- | --- |
-| nano | 14 MB per arch | 22.25 MiB (20.88) | 24 MiB |
-| edge | 28 MB | 27.38 MiB (25.63) | 30 MiB |
-| solo | 45 MB | 45.65 MiB (43.00) | 48 MiB |
-| team | 60 MB | 45.65 MiB (= solo) | 48 MiB |
-| cluster | 60 MB | 53.85 MiB (50.13) | 57 MiB |
+| nano | 14 MB per arch | 22.29 MiB (20.94) | 24 MiB |
+| edge | 28 MB | 27.44 MiB (25.63) | 30 MiB |
+| solo | 45 MB | 45.70 MiB (43.00) | 48 MiB |
+| team | 60 MB | 45.70 MiB (= solo) | 48 MiB |
+| cluster | 60 MB | 53.91 MiB (50.19) | 57 MiB |
 
 Edge and nano exclude the JS plugin set of `./examples/base` through `no_jsvm no_ghupdate no_migratecmd` (about 7 MiB); nano also drops `no_totp no_geo no_thumbs no_oauth2 no_s3fs` (see NANO_SIZE.md). They meet the CI budgets but not the original 28/14 MB design budgets (edge, 27.4 MiB = 28.7 MB, is just over its 28 MB goal; nano is not close).
