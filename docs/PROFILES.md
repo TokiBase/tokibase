@@ -23,6 +23,17 @@ make edge GOOS=linux GOARCH=arm64   # cross-compile
 
 Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.  darwin/arm64 solo measures 41.6 MiB.
 
+### Edge modules size log
+
+Each edge module PR records its measured cost here (linux/amd64, stripped, `make edge`; budget stays 28 MiB).
+
+| PR | What | Edge before | Edge after | Delta |
+| --- | --- | --- | --- | --- |
+| 0 | kernel providers (`NodeIdentity`, `SyncStatus`, `DeviceCerts`) | 27,623,584 B (26.34 MiB, includes PR 0) | same | small interfaces, not measurable |
+| 1 | `internal/devio` + `internal/escpos` (all entry points forced reachable with a temporary probe, nothing links them yet) | 27,623,584 B | 27,742,368 B (26.46 MiB) | +118,784 B (116 KiB); linux/arm64 with probe 25,886,880 B (24.69 MiB) |
+
+`go-qrcode` (raster QR fallback) is already linked into edge through `modules/totp`, so it adds nothing; a hand written encoder was not needed. `x/text/encoding/charmap` is not linked in edge, so the codepages are hand tables (about 2 KiB). The 25.5 MiB in the table above predates later PRs; the measured baseline at PR 1 is 26.34 MiB.
+
 ## Modules per profile
 
 | Module | tag | solo/team | cluster | edge | nano |
