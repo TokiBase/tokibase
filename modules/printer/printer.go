@@ -116,7 +116,11 @@ func Register(app core.App) *Module {
 	app.OnRecordUpdate(TemplatesCollection).Bind(&hook.Handler[*core.RecordEvent]{
 		Id: hookId + "tplu",
 		Func: func(e *core.RecordEvent) error {
-			e.Record.Set("version", e.Record.Original().GetInt("version")+1)
+			prev := 0
+			if old, err := e.App.FindRecordById(TemplatesCollection, e.Record.Id); err == nil {
+				prev = old.GetInt("version")
+			}
+			e.Record.Set("version", prev+1)
 			return e.Next()
 		},
 	})
