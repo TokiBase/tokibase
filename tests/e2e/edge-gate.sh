@@ -257,7 +257,7 @@ converged() { local h s; h="$(digest hub)"; s="$(digest spoke)"; CONV="hub[$h] s
 wait_for "convergence after the hub came back" 'converged'
 TH="$(su_token "$URL_HUB")"
 api "$TH" GET "$URL_HUB" "/api/collections/tickets/records?perPage=200&fields=no" >"$TMP/tk-hub.json"
-jget 'len(set(i["no"] for i in d["items"])) == len(d["items"]) >= 6' <"$TMP/tk-hub.json" | grep -q True || fail "ticket numbers on the hub: $(cat "$TMP/tk-hub.json")"
+jget 'len(set(i["no"] for i in d["items"])) == len(d["items"]) >= 6' <"$TMP/tk-hub.json" | grep -q True || fail "ticket numbers on the hub: $(cat "$TMP/tk-hub.json") conv=$CONV hub-verify=$(hubtoki sync verify --json 2>&1 | grep '^{' | tail -1)"
 spoketoki sync verify --against-hub --json 2>/dev/null | grep '^{' | tail -1 | jget 'd["against_hub"]["checked"] is True and d["against_hub"]["mismatch"] == []' | grep -q True || fail "verify --against-hub"
 log "(6) converged after the hub returned ($CONV)"
 
