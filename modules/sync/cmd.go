@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/spf13/cobra"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/modules/sync/client"
 	"github.com/tokibase/tokibase/modules/sync/hlc"
+	"github.com/tokibase/tokibase/modules/sync/proto"
 )
 
 // Status is the output of `toki sync status`.
@@ -20,6 +23,18 @@ type Status struct {
 	LastHLC string `json:"last_hlc"`
 	// Floor is the persisted clock floor ("" when none).
 	Floor string `json:"hlc_floor"`
+
+	// Hub fields.
+	HubID string `json:"hub_id,omitempty"`
+	Epoch string `json:"epoch,omitempty"`
+	Nodes int64  `json:"nodes,omitempty"`
+
+	// Spoke fields (from `_sync_cursors`).
+	HubURL        string `json:"hub_url,omitempty"`
+	CertExpires   string `json:"cert_expires,omitempty"`
+	ClockOffsetMs int64  `json:"clock_offset_ms"`
+	LastHandshake string `json:"last_handshake,omitempty"`
+	LastError     string `json:"last_error,omitempty"`
 }
 
 // GetStatus reads the status from the database. role is the configured role
@@ -50,6 +65,35 @@ func GetStatus(app core.App, role Role) (*Status, error) {
 	} else if f > 0 {
 		s.Floor = f.String()
 	}
+	if id, ok, err := st.Get(keyHubID); err == nil && ok && role == RoleHub {
+		s.HubID = id
+		s.Epoch, _, _ = st.Get(keyEpoch)
+	}
+	if role == RoleHub && app.HasTable(NodesCollection) {
+		if n, err := app.CountRecords(NodesCollection); err == nil {
+			s.Nodes = n
+		}
+	}
+	if app.HasTable("_sync_cursors") {
+		cur, err := client.LoadCursor(app)
+		if err != nil {
+			return nil, err
+		}
+		if cur != nil {
+			s.HubID, s.HubURL, s.ClockOffsetMs, s.LastError = cur.HubID, cur.HubURL, cur.ClockOffsetMs, cur.LastError
+			if cur.LastOK.Valid {
+				s.LastHandshake = cur.LastOK.String
+			}
+			if c, _, err := jwt.NewParser().ParseUnverified(cur.Cert, &proto.CertClaims{}); err == nil {
+				if cl, ok := c.Claims.(*proto.CertClaims); ok && cl.ExpiresAt != nil {
+					s.CertExpires = cl.ExpiresAt.UTC().Format(proto.TimeLayout)
+				}
+			}
+			if s.Epoch == "" {
+				s.Epoch = cur.HubEpoch
+			}
+		}
+	}
 	return s, nil
 }
 
@@ -77,11 +121,19 @@ func NewCommand(app core.App) *cobra.Command {
 			}
 			fmt.Fprintf(out, "role:     %s\nnode id:  %s\npending:  %d\nlast hlc: %s\nhlc floor: %s\n",
 				s.Role, dash(s.NodeID), s.Pending, dash(s.LastHLC), dash(s.Floor))
+			fmt.Fprintf(out, "hub id:   %s\nepoch:    %s\n", dash(s.HubID), dash(s.Epoch))
+			if s.Role == string(RoleHub) {
+				fmt.Fprintf(out, "nodes:    %d\n", s.Nodes)
+			} else {
+				fmt.Fprintf(out, "hub url:  %s\ncert expires: %s\nclock offset: %d ms\nlast handshake: %s\nlast error: %s\n",
+					dash(s.HubURL), dash(s.CertExpires), s.ClockOffsetMs, dash(s.LastHandshake), dash(s.LastError))
+			}
 			return nil
 		},
 	}
 	status.Flags().BoolVar(&asJSON, "json", false, "output JSON")
 	root.AddCommand(status)
+	root.AddCommand(enrollCommand(app), joinCommand(app), revokeCommand(app), peersCommand(app))
 	return root
 }
 

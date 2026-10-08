@@ -45,3 +45,6 @@ func NewCommand(app core.App) *cobra.Command {
 		RunE: func(*cobra.Command, []string) error { return errCompiledOut },
 	}
 }
+
+// SetAuditSink is a no-op in builds with the no_sync tag.
+func SetAuditSink(fn func(action, collection, record string, details map[string]any)) {}

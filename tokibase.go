@@ -358,6 +358,18 @@ func NewWithConfig(config Config) *PocketBase {
 
 	// hub/spoke change capture (TOKI_SYNC_ROLE=off|hub|spoke, default off, see docs/modules/sync.md)
 	toksync.Register(pb.App.(core.App))
+	if auditLog != nil {
+		toksync.SetAuditSink(func(action, collection, record string, details map[string]any) {
+			after, _ := json.Marshal(details)
+			afterStr := string(after)
+			en := &audit.Entry{
+				ActorKind: audit.ActorSystem, Action: action, Collection: collection, Record: record, After: &afterStr,
+			}
+			if err := auditLog.Append(en); err != nil {
+				pb.App.Logger().Warn("audit: failed to record "+action, "error", err)
+			}
+		})
+	}
 
 	// warn when serving plain HTTP on a reachable address without trusted proxy headers (TOKI_TLS_CHECK=warn|strict|off)
 	tlscheck.Register(pb.App.(core.App))
