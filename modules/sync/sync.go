@@ -196,6 +196,7 @@ func RegisterRole(app core.App, role Role) *Module {
 	m.bindHubNotify()
 	m.bindLoop()
 	m.registerProviders()
+	m.bindDevCert()
 	return m
 }
 

@@ -48,6 +48,28 @@ type DeviceCert struct {
 	CertPEM   []byte
 	// KeyPEM is set only by Issue when the provider generated the key.
 	KeyPEM []byte
+	// CAPEM is the root certificate that signed the certificate (set by Issue).
+	CAPEM []byte
+}
+
+// LeafRequest is what a node sends to the hub to get its edge server
+// certificate: the public key of its local leaf key and the addresses it wants
+// in the certificate. The private key never leaves the node.
+type LeafRequest struct {
+	SPKI []byte
+	SANs []string
+}
+
+// EdgeLeafProvider is implemented by the devicecert provider on a node. The
+// sync client loop calls it (through [EdgeLeafOf]) to renew the node's edge
+// server certificate without importing the module.
+type EdgeLeafProvider interface {
+	// LeafRequest returns the request to send to the hub, or nil when no
+	// renewal is due at now.
+	LeafRequest(now time.Time) (*LeafRequest, error)
+	// InstallLeaf stores the certificate the hub issued (and the root that
+	// signed it) and starts serving it.
+	InstallLeaf(certPEM, caPEM []byte) error
 }
 
 // DeviceCertProvider is implemented by modules/devicecert. modules/sync uses it
@@ -59,6 +81,13 @@ type DeviceCertProvider interface {
 	Lookup(ctx context.Context, serialOrName string) (*DeviceCert, error)
 	// Revoke marks a certificate by serial or name as revoked.
 	Revoke(ctx context.Context, serialOrName string) error
+}
+
+// EdgeLeafOf returns the node-side leaf renewal interface of the provider of
+// app, or nil when the devicecert module is off or compiled out.
+func EdgeLeafOf(app App) EdgeLeafProvider {
+	l, _ := DeviceCertsOf(app).(EdgeLeafProvider)
+	return l
 }
 
 var deviceCerts sync.Map // App -> DeviceCertProvider
