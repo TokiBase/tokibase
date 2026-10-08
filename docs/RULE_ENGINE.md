@@ -68,6 +68,8 @@ byte offsets and the tokenizer was deliberately not rewritten, so offsets are no
 | Functions | `geoDistance(lonA, latA, lonB, latB)`, `strftime(fmt, [time, mods...])`, `@role(name[, scope, "collection"])`, `@member(scope, "collection")` (SQLite only, from `modules/roles`, compare with `= true`), `entitled(key)` (module `payments`, SQLite only, compare with `= true`) | `Call` |
 | Comments | `// ...`, `/* ... */` | dropped by the scanner |
 
+`@request.context` values: `default`, `batch`, `realtime`, `protectedFile`, `oauth2`, `otp`, `password`, `expand`, and `sync` (a change replayed on a sync hub by `apis.ReplayRecordRequests`; there `@request.auth` is the original actor, `@request.headers.x_toki_sync_node` the node id and `@request.body` the effective patch). Example: `@request.context != "sync" || @request.auth.role = "gate"`.
+
 Keywords stay identifiers (not literal nodes) because the resolver gets the first chance to
 resolve a column named `null`, `true` or `false`; only if resolution fails does the emitter fall back
 to `NULL`, `1`, `0`. The `Kind`/`Path`/`Modifier` classification is informational: resolvers always

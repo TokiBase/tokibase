@@ -78,6 +78,10 @@ toki hub "$HUB" superuser upsert "$EMAIL" "$PASS" >/dev/null
 start hub hub "$HUB" "$PORT_HUB"
 wait_health "$URL_HUB" 30 || fail "hub did not start"
 TH="$(token "$URL_HUB")"
+# the service actor of the spokes: pushed changes are replayed as this hub record (docs/modules/sync.md)
+SU_ID="$(curl -fsS "$URL_HUB/api/collections/_superusers/auth-with-password" -H 'Content-Type: application/json' \
+  -d "{\"identity\":\"$EMAIL\",\"password\":\"$PASS\"}" | jget 'd["record"]["id"]')"
+[ -n "$SU_ID" ] || fail "no hub superuser id"
 
 COLL='{"id":"pbc_e2eitems","name":"e2eitems","type":"base","listRule":"","viewRule":"","createRule":"","updateRule":"","deleteRule":"","fields":[{"name":"title","type":"text"},{"name":"qty","type":"number"},{"name":"note","type":"text"},{"name":"created","type":"autodate","onCreate":true},{"name":"updated","type":"autodate","onCreate":true,"onUpdate":true}]}'
 api "$TH" POST "$URL_HUB" /api/collections "$COLL" >/dev/null
@@ -88,7 +92,7 @@ log "hub up on $PORT_HUB with collection e2eitems and policy direction=both"
 # ---- spokes: enroll, start, create the same collection (schema bundles are PR8) ----
 enroll_spoke() { # name dir port url
   local code
-  code="$(toki hub "$HUB" sync enroll --name "$1" --profile edge | awk '/^code:/ {print $2}')"
+  code="$(toki hub "$HUB" sync enroll --name "$1" --profile edge --actor "_superusers/$SU_ID" | awk '/^code:/ {print $2}')"
   [ -n "$code" ] || fail "no enrollment code for $1"
   toki spoke "$2" superuser upsert "$EMAIL" "$PASS" >/dev/null
   toki spoke "$2" sync join "$URL_HUB" "$code" >/dev/null || fail "join $1"

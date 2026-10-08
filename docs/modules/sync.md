@@ -2,7 +2,7 @@
 
 Phase 3 hub/spoke replication (offline-first). The full design is `docs/SYNC_DESIGN.md`; this page describes what exists today. Package `modules/sync`, subpackage `modules/sync/hlc`.
 
-**Status: PR3 of 11 (push/pull/ack, lww, revert rows, spoke client loop).** A node with `TOKI_SYNC_ROLE=hub|spoke` records every write of the synced collections into a local change log (PR1). Since PR2 a hub can enroll devices and authenticate them (`/api/sync/{enroll,handshake,ping}`). Since PR3 a spoke pushes its changes to the hub, the hub applies them (record level `lww`), and the spoke pulls everything it is missing and applies it; hub and spokes converge. **Pushed changes are applied as superuser in PR3: collection rules, fieldperm, batchguard and actor grants are not evaluated until PR4.**
+**Status: PR4 of 11 (rule re-evaluation, actor grants, audit; push/pull/ack, lww, revert rows, spoke client loop).** A node with `TOKI_SYNC_ROLE=hub|spoke` records every write of the synced collections into a local change log (PR1). Since PR2 a hub can enroll devices and authenticate them (`/api/sync/{enroll,handshake,ping}`). Since PR3 a spoke pushes its changes to the hub, the hub applies them (record level `lww`), and the spoke pulls everything it is missing and applies it; hub and spokes converge. Since PR4 a pushed change is replayed as the user who made it, through the record API, so collection rules, fieldperm and batchguard apply on the hub.
 
 ## What exists now
 
@@ -64,7 +64,7 @@ The answer carries `session_token` (HS256 JWT keyed by the hub `session_secret`,
 
 ## Push, pull, ack and the client loop (PR3)
 
-**Temporary: rules are NOT checked on push.** The hub applies a pushed change by calling `SaveWithContext`/`DeleteWithContext` directly with `kernel.WithSyncOrigin(Mode: Push)`, i.e. as superuser. Collection create/update/delete rules, `fieldperm`, `batchguard`, the actor grants of design §1.6 and the `actor_*` result codes do not exist yet; PR4 replaces this path with the rule-checked replay (`apis.ReplayRecordRequests`). Until then any enrolled, active node can write every collection whose policy direction is `both` or `push`. Do not enrol nodes you do not trust. Fields that are not synced (file, password, tokenKey, derived, policy `exclude`) are dropped from pushed patches. Model validation and unique indexes still apply (`validation_failed`, `unique_violation`). Hooks and webhooks of other modules run on the hub as for any save (the webhooks/wasm `IsSyncReplica` skip is PR4).
+Fields that are not synced (file, password, tokenKey, hidden, derived, policy `exclude`, and `email`/`emailVisibility`/`verified` of auth collections) are dropped from pushed patches. Model validation and unique indexes still apply (`validation_failed`, `unique_violation`).
 
 ### Hub routes (node session token required)
 
@@ -107,6 +107,31 @@ For every synced collection: record count, `digest` (sha256 over the sorted `(id
 
 - Saving a record without changing any synced field still bumps its `updated` column but writes no change row (PR1 capture). Such a node then differs from the hub in `updated` and `toki sync verify` reports a `hash` mismatch for it. Apps should not save unchanged records; a fix belongs in capture (PR1 hardening).
 - The hub applies pushes serially (one mutex); throughput is bounded by SQLite's single writer anyway.
+
+## Rule re-evaluation, actors and audit (PR4)
+
+**Replay as the original actor (design §5).** `apis.ReplayRecordRequests(ctx, app, auth, headers, reqs)` runs record create/update/delete requests as `auth` in ONE transaction through the batch processor, with RequestInfo context `sync`. A push group (one change, or the changes of a `tx` group) becomes `POST /api/collections/{c}/records` (id in the body), `PATCH .../{id}` (counters as `field+`, sets as `field+` / `field-`) or `DELETE`. A `tx` group goes through `OnBatchRequest`, so batchguard `assert`/`assert_post` run on the hub; a single change is not a batch and skips it. Zero values of a new record are not sent (a client create would not send them), so write rules of untouched fields do not fire. Rule failures map to `rule_denied` (403/404 and create/manage rule failures), validation errors to `validation_failed`, unique errors to `unique_violation`; each rejected change gets a revert row as before. `p` (purge) is never replayed: it stays hub-only.
+
+What the rules see: `@request.auth.*` is the actor record loaded on the hub, `@request.auth.kind`, `@request.context = "sync"`, `@request.headers.x_toki_sync_node` (node id), `@request.method`, `@request.body.*` is the effective patch. Example: `@request.context != "sync" || @request.auth.role = "gate"`. Rate limits do not apply to replay sub-requests.
+
+**Actor grants (design §1.6).**
+
+1. The user logs in to the hub normally and the app calls `inst.Sync().AddActor(hubToken)` (Go: `Module.AddActor` / `client.Client.AddActor`). The spoke sends `POST /api/sync/actor` with its node session and `X-Toki-Actor-Token`.
+2. The hub validates signature and `tokenKey` (`FindAuthRecordByToken`), the sessions `sid` through `kernel.SessionActive` (set by `modules/sessions`), refuses superusers (unless `TOKI_SYNC_ALLOW_SUPERUSER_ACTORS=1`), inserts `_sync_actor_grants{aid,node,collection,record,sid,tkh,iat,exp}` and answers `{aid, exp, assertion, record}`; `assertion` is an EdDSA JWS of the claims signed by the hub key, `record` is the user record without password/tokenKey/files. `TOKI_SYNC_ACTOR_TTL` (default `30d`, `d` suffix supported) is capped at `TOKI_SYNC_RETENTION` (default `90d`).
+3. The spoke verifies the assertion, stores the grant in `_sync_actors`, creates the local auth record when missing (no password, fresh local tokenKey) and `LocalToken(aid)` mints a LOCAL auth token, so local rules see the same `@request.auth.id` offline. `RemoveActor(aid)` revokes on the hub (`DELETE /api/sync/actor/{aid}`) and forgets the grant.
+4. Local writes made by a request of a granted user capture `actor = aid` (newest valid grant of that record on this node); everything else is `actor = "node"`.
+
+**Hub validation per change (at apply time).** `actor_unknown` (grant or actor record missing, or a node without service actor), `actor_node_mismatch`, `actor_expired` (`grant.iat - 5 min <= change.hlc <= grant.exp`), `actor_revoked` (grant revoked, sessions `sid` inactive, the user's `tokenKey` changed, or node revoked), `actor_forbidden` (superuser). Changes with `actor = "node"` run as the node's **service actor** (`toki sync enroll --actor <collection>/<id>`); a service actor may be a superuser, because the operator chose it. A tx group runs as ONE actor: the first non-`node` actor (hook-written changes of a user request belong to that user); two different grants in one group are rejected `actor_unknown`. **`actor_revoked` parks** the change: `_changes.status = parked`, no revert row, a `_sync_conflicts` row (`kind actor_revoked`, `resolution parked`, `status open`) for review; the push result is `parked` and counts as final for the ack. Every other code is `rejected` with a revert row. Because sessions rotation revokes the old `sid` on refresh, a deployment that rotates refresh tokens should keep grants short-lived or re-run `AddActor` after login.
+
+**What a node may receive (P3-2, P3-10).** Revert rows carry only what the actor may see: the collection view rule and fieldperm read rules are evaluated for the original actor (service actor at pull time) through the normal enrich path; a record outside the view rule is reverted as `d` without data. Pull rows drop fields that fieldperm hides from the node's service actor and fields no longer in the sync set. Hidden fields and the auth system fields `email`, `emailVisibility`, `verified` are not synced; opt in per field with policy `field_types {"email":"include"}`. Pull page rows of records that no longer exist are skipped (the delete row follows). `pull?after=N` with `N` above the hub head answers `410 sync_rebootstrap_required`.
+
+**Robustness (P3-5, P3-6).** A permanent infrastructure error while applying a change no longer returns 500 forever: it is stored as `rejected` with code `apply_error` (plus a resolved `_sync_conflicts` row and a revert) so the queue advances; transient errors (locked, busy, timeout) still return 500 and are retried. A sequence at or below `pushed_origin_seq` whose `_changes` row is gone is answered `duplicate` and never applied again.
+
+**Side effects.** Webhooks and WASM `record.after.*` handlers skip writes with `kernel.IsSyncReplica(ctx)` (pull, snapshot and bundle applies on a spoke); the hub replay fires them once. Origin `created`/`updated` are put into the record with `SetRaw` before the autodate interceptor (`kernel.SyncOrigin.Fields`, key `<collectionId>/<recordId>/<field>`) and verified after the replay.
+
+**Audit.** Sink entries: `sync.apply` (only for superuser or service actors, or every actor with `TOKI_SYNC_AUDIT_ALL=1`), `sync.reject`, `sync.actor.grant`, `sync.actor.revoke`. `actor_kind/actor_id/actor_collection` are the original actor and `request` is `{path, ip, node, change, hlc}`.
+
+**Env.** `TOKI_SYNC_ACTOR_TTL`, `TOKI_SYNC_RETENTION`, `TOKI_SYNC_ALLOW_SUPERUSER_ACTORS`, `TOKI_SYNC_AUDIT_ALL`. **Migration for PR3 users:** enroll nodes with `--actor`; a node without a service actor is rejected `actor_unknown`.
 
 ## Env
 
