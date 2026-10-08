@@ -39,7 +39,7 @@ func testPage(p *Printer, qr bool) ([]byte, error) {
 		}
 		b.Align(escpos.AlignLeft)
 	}
-	return finish(p, b.Feed(3).Cut().Bytes()), nil
+	return finish(p, b.Feed(3).Cut().Bytes(), escpos.Info{HasCut: true}), nil
 }
 
 // NewCommand returns the `print` cobra command.

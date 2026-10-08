@@ -268,7 +268,7 @@ func (m *Module) Retry(ctx context.Context, id string) (*Result, error) {
 		return nil, ErrSyncReplica
 	}
 	var rec *core.Record
-	err := m.app.RunInTransaction(func(tx core.App) error {
+	err := m.app.RunInTransaction(func(tx kernel.App) error {
 		r, err := tx.FindRecordById(JobsCollection, id)
 		if err != nil {
 			return &RequestError{404, "print job not found"}
