@@ -32,6 +32,7 @@ Each edge module PR records its measured cost here (linux/amd64, stripped, `make
 | 0 | kernel providers (`NodeIdentity`, `SyncStatus`, `DeviceCerts`) | 27,623,584 B (26.34 MiB, includes PR 0) | same | small interfaces, not measurable |
 | 1 | `internal/devio` + `internal/escpos` (all entry points forced reachable with a temporary probe, nothing links them yet) | 27,623,584 B | 27,742,368 B (26.46 MiB) | +118,784 B (116 KiB); linux/arm64 with probe 25,886,880 B (24.69 MiB) |
 | 2 | `modules/printer` (collections, `print.send`, `/api/print*`, `toki print`; compiled in, runtime opt-in) | 27,660,448 B (26.38 MiB, origin/main) | 27,914,400 B (26.62 MiB) | +253,952 B (248 KiB); budget 28 MiB leaves 1.38 MiB |
+| 3 | `modules/scanner` (serial, evdev, web wedge, `@scan`, `/api/scan*`, `toki scan`; `wedge.js` embedded) | 27,660,448 B (origin/main at PR 1 merge) | 27,828,384 B (26.54 MiB) | +167,936 B (164 KiB) |
 
 `go-qrcode` (raster QR fallback) is already linked into edge through `modules/totp`, so it adds nothing; a hand written encoder was not needed. `x/text/encoding/charmap` is not linked in edge, so the codepages are hand tables (about 2 KiB). The 25.5 MiB in the table above predates later PRs; the measured baseline at PR 1 is 26.34 MiB.
 
