@@ -3,8 +3,6 @@
 package sync
 
 import (
-	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 

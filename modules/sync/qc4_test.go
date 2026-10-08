@@ -288,9 +288,9 @@ func TestHookWrittenMembersReplayAsServiceActor(t *testing.T) { // P4-10
 	aid := grant(t, s, h.usr)
 	node := s.m.NodeID()
 	grp := func(oseq int64, userTitle, hookTitle string) []proto.PushChange {
-		c1 := pc(node, oseq, nowHLC(-5000, uint16(oseq)), 0, h.items.Id, "recordaaaaaaa"+itoa(oseq), "c", map[string]any{"title": userTitle})
+		c1 := pc(node, oseq, nowHLC(-5000, uint16(oseq)), 0, h.items.Id, "recordaaaaaaaa"+itoa(oseq), "c", map[string]any{"title": userTitle})
 		c1.Actor, c1.Tx = aid, "tx"+itoa(oseq)
-		c2 := pc(node, oseq+1, nowHLC(-4000, uint16(oseq)), 0, h.items.Id, "recordaaaaaaa"+itoa(oseq+1), "c", map[string]any{"title": hookTitle})
+		c2 := pc(node, oseq+1, nowHLC(-4000, uint16(oseq)), 0, h.items.Id, "recordaaaaaaaa"+itoa(oseq+1), "c", map[string]any{"title": hookTitle})
 		c2.Actor, c2.Tx = ActorNode, "tx"+itoa(oseq)
 		return []proto.PushChange{c1, c2}
 	}
