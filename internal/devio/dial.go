@@ -167,7 +167,7 @@ func (d *Dialer) openFile(pol *Policy, path string) (Conn, error) {
 	if err := pol.CheckFile(path); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_NONBLOCK, 0)
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil { // many printers are write-only
 		f, err = openFileWrite(path)
 		if err != nil {
