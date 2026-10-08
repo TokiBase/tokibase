@@ -1,0 +1,10 @@
+[Unit]
+Description=TokiBase soak: metrics.csv line (timer)
+
+[Timer]
+OnActiveSec=20s
+OnUnitActiveSec=5min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

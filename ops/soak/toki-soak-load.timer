@@ -1,0 +1,10 @@
+[Unit]
+Description=TokiBase soak: 10 min low-intensity mixed load (70/25/5) (timer)
+
+[Timer]
+OnActiveSec=1min
+OnUnitActiveSec=1h
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

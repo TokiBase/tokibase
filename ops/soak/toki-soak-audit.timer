@@ -1,0 +1,10 @@
+[Unit]
+Description=TokiBase soak: audit chain verify (timer)
+
+[Timer]
+OnActiveSec=10min
+OnUnitActiveSec=24h
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

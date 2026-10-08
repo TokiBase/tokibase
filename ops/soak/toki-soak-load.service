@@ -1,0 +1,14 @@
+[Unit]
+Description=TokiBase soak: 10 min low-intensity mixed load (70/25/5)
+After=toki-soak.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/soak
+ExecStart=/usr/bin/python3 /home/ubuntu/soak/load.py run --minutes 10 --clients 20 --think-ms 300
+Nice=10
+CPUQuota=100%
+StandardOutput=append:/home/ubuntu/soak/log/load.out
+StandardError=append:/home/ubuntu/soak/log/load.out
+TimeoutStartSec=20min

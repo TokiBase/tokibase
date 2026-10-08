@@ -1,0 +1,24 @@
+[Unit]
+Description=TokiBase 7-day solo soak (FGR data copy)
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/soak
+Environment=GOMEMLIMIT=700MiB
+Environment=TOKI_TLS_CHECK=off
+Environment=TOKI_REPLICA_URL=file:///home/ubuntu/soak/replica
+Environment=TOKI_WAL_MAX_MB=256
+Environment=TOKI_LOGS_MAX_MB=512
+# TOKI_AUDIT is deliberately not set: the soak runs the default (audit on)
+ExecStart=/home/ubuntu/soak/toki serve --dir /home/ubuntu/soak/pb_data --http 127.0.0.1:8099
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+KillSignal=SIGTERM
+TimeoutStopSec=90
+StandardOutput=append:/home/ubuntu/soak/log/serve.log
+StandardError=append:/home/ubuntu/soak/log/serve.log
+
+[Install]
+WantedBy=multi-user.target

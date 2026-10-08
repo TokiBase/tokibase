@@ -1,0 +1,9 @@
+[Unit]
+Description=TokiBase soak: daily report
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/soak
+ExecStart=/home/ubuntu/soak/report.sh
+StandardOutput=null

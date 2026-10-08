@@ -49,7 +49,7 @@ Exit gate: 100% SDK suite pass, kernel has no `net/http` import, all builds unde
 - [x] tlscheck: boot warning when serving plain HTTP without a trusted proxy header (`docs/modules/tlscheck.md`).
 - [x] timelint: warn about or reject date values without a timezone at the API boundary, `toki time lint` (`docs/modules/timelint.md`).
 - [x] denylog: every 401/403/429 carries a machine-readable reason, `toki deny tail` (`docs/modules/denylog.md`).
-- [ ] Production proof: run on the FGR replica node with real data for 7 days, then cut over.
+- [ ] Production proof: run on the FGR replica node with real data for 7 days, then cut over. 7-day solo soak (FGR data copy, replication, audit, hourly load) running since 2026-10-08 on the Proxmox VM: [`ops/soak/`](../ops/soak/README.md), criteria in [`ops/soak/CRITERIA.md`](../ops/soak/CRITERIA.md).
 
 Exit gate: all modules on by default in profile `solo`, failover drill RTO under 30 s in CI, no COMPAT deviation on the REST contract.
 

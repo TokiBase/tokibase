@@ -1,0 +1,11 @@
+[Unit]
+Description=TokiBase soak: audit chain verify
+After=toki-soak.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/soak
+ExecStart=/home/ubuntu/soak/audit.sh
+Nice=10
+TimeoutStartSec=30min
