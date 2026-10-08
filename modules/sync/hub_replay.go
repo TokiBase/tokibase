@@ -308,6 +308,12 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 			}
 			continue
 		}
+		if pr.isNew && isZeroValue(v) {
+			// a client create does not send zero values; a capture holds the whole
+			// state, and sending the zeros would trip write rules (fieldperm) of
+			// fields the user never touched
+			continue
+		}
 		body[name] = v
 	}
 	if pr.isNew {
@@ -464,6 +470,25 @@ func isTransient(err error) bool {
 		if strings.Contains(s, t) {
 			return true
 		}
+	}
+	return false
+}
+
+// isZeroValue reports whether v is what an absent field of a new record holds.
+func isZeroValue(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return true
+	case string:
+		return x == "" || x == "null"
+	case bool:
+		return !x
+	case float64:
+		return x == 0
+	case []any:
+		return len(x) == 0
+	case map[string]any:
+		return len(x) == 0
 	}
 	return false
 }
