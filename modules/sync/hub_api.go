@@ -89,9 +89,9 @@ func (m *Module) bindRoutes() {
 		Func: func(se *core.ServeEvent) error {
 			g := se.Router
 			g.POST(proto.PathEnroll, m.enrollHandler).
-				Bind(apis.SkipSuccessActivityLog(), apis.BodyLimit(16<<10), rateTag("sync:enroll"))
+				Bind(apis.SkipSuccessActivityLog(), m.throttle("enroll"), apis.BodyLimit(16<<10), rateTag("sync:enroll"))
 			g.POST(proto.PathHandshake, m.handshakeHandler).
-				Bind(apis.SkipSuccessActivityLog(), apis.BodyLimit(64<<10), rateTag("sync:handshake"))
+				Bind(apis.SkipSuccessActivityLog(), m.throttle("handshake"), apis.BodyLimit(64<<10), rateTag("sync:handshake"))
 			g.GET(proto.PathPing, m.pingHandler).
 				Bind(apis.SkipSuccessActivityLog(), rateTag("sync:ping"), m.nodeAuth())
 			return se.Next()
