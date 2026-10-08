@@ -27,6 +27,7 @@ func NewReplicaCommand(app core.App) *cobra.Command {
 	command.AddCommand(replicaRestoreCommand())
 	command.AddCommand(replicaSnapshotCommand(app))
 	command.AddCommand(replicaPromoteCommand())
+	command.AddCommand(replicaPruneCommand())
 	return command
 }
 
@@ -80,19 +81,37 @@ func replicaStatusCommand() *cobra.Command {
 				return nil
 			}
 
+			cfg, err := walreplica.FromEnv()
+			if err != nil {
+				return err
+			}
+
 			w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "DB\tLATEST TXID\tLATEST AGE\tSNAPSHOTS\tOLDEST RESTORE POINT\tFILES\tBYTES")
+			fmt.Fprintln(w, "DB\tLATEST TXID\tLATEST AGE\tSNAPSHOTS\tOLDEST RESTORE POINT\tOLDEST SEGMENT\tFILES\tSIZE")
+			var total int64
 			for _, i := range infos {
-				age, oldest := "-", "-"
+				age, oldest, oldestSeg := "-", "-", "-"
 				if i.LatestAt != nil {
 					age = time.Since(*i.LatestAt).Round(time.Second).String()
 				}
 				if i.OldestRestoreAt != nil {
 					oldest = i.OldestRestoreAt.Format(time.RFC3339)
 				}
-				fmt.Fprintf(w, "%s\t%d\t%s\t%d\t%s\t%d\t%d\n", i.Name, i.LatestTXID, age, i.Snapshots, oldest, i.Files, i.Bytes)
+				if i.OldestAt != nil {
+					oldestSeg = i.OldestAt.Format(time.RFC3339)
+				}
+				total += i.Bytes
+				fmt.Fprintf(w, "%s\t%d\t%s\t%d\t%s\t%s\t%d\t%s\n", i.Name, i.LatestTXID, age, i.Snapshots, oldest, oldestSeg, i.Files, humanMB(i.Bytes))
 			}
-			return w.Flush()
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			limit := "off"
+			if cfg.MaxMB > 0 {
+				limit = fmt.Sprintf("%d MiB", cfg.MaxMB)
+			}
+			fmt.Printf("total %s (limit %s), retention %s, snapshot interval %s\n", humanMB(total), limit, cfg.Retention, cfg.SnapshotInterval)
+			return nil
 		},
 	}
 
@@ -225,5 +244,57 @@ func replicaPromoteCommand() *cobra.Command {
 	command.Flags().StringVar(&urlFlag, "url", "", "replica url (default $"+walreplica.EnvURL+")")
 	command.Flags().StringVar(&timestamp, "timestamp", "", "promote the state as of this RFC3339 time (default latest)")
 	command.Flags().BoolVar(&force, "force", false, "move an existing --dir aside (<dir>.pre-promote-<unixts>) instead of refusing")
+	return command
+}
+
+func humanMB(b int64) string { return fmt.Sprintf("%.1f MiB", float64(b)/(1024*1024)) }
+
+func replicaPruneCommand() *cobra.Command {
+	var urlFlag, retention string
+	var dryRun bool
+
+	command := &cobra.Command{
+		Use:   "prune",
+		Short: "Delete expired restore points (snapshots and the files only they need) from the replica",
+		Long: "Deletes the snapshots older than --retention (default $" + walreplica.EnvRetention + ", else 24h) and the LTX files\n" +
+			"that only those snapshots needed. The newest snapshot is never deleted, so the latest state stays restorable.\n" +
+			"Safe next to a running server (it applies the same retention itself). Use --dry-run to see the effect first.",
+		Example:      "replica prune --retention 6h --dry-run",
+		SilenceUsage: true,
+		Annotations:  map[string]string{AnnotationSkipBootstrap: "true"},
+		RunE: func(command *cobra.Command, args []string) error {
+			url, err := replicaURL(urlFlag)
+			if err != nil {
+				return err
+			}
+			cfg, err := walreplica.FromEnv()
+			if err != nil {
+				return err
+			}
+			opts := walreplica.PruneOptions{Retention: cfg.Retention, DryRun: dryRun}
+			if retention != "" {
+				if opts.Retention, err = time.ParseDuration(retention); err != nil || opts.Retention < 0 {
+					return fmt.Errorf("invalid --retention %q (want a duration such as 6h)", retention)
+				}
+			}
+
+			ctx, cancel := context.WithTimeout(command.Context(), 10*time.Minute)
+			defer cancel()
+
+			res, err := walreplica.Prune(ctx, url, opts)
+			verb := "deleted"
+			if dryRun {
+				verb = "would delete"
+			}
+			for _, r := range res {
+				fmt.Printf("%s: %s %d snapshots, %d files, %s\n", r.Name, verb, r.Snapshots, r.Files, humanMB(r.Bytes))
+			}
+			return err
+		},
+	}
+
+	command.Flags().StringVar(&urlFlag, "url", "", "replica url (default $"+walreplica.EnvURL+")")
+	command.Flags().StringVar(&retention, "retention", "", "keep restore points newer than this (default $"+walreplica.EnvRetention+" or 24h)")
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "only report what would be deleted")
 	return command
 }

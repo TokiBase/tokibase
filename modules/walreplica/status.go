@@ -201,8 +201,17 @@ type ReplicaInfo struct {
 	Snapshots        int        `json:"snapshots"`
 	LatestSnapshotAt *time.Time `json:"latestSnapshotAt,omitempty"`
 	OldestRestoreAt  *time.Time `json:"oldestRestoreAt,omitempty"` // oldest snapshot
+	OldestAt         *time.Time `json:"oldestAt,omitempty"` // creation time of the oldest file (oldest segment)
 	Files            int        `json:"files"`
 	Bytes            int64      `json:"bytes"`
+	Levels           []LevelInfo `json:"levels"`
+}
+
+// LevelInfo is the size of one LTX level (9 = snapshots).
+type LevelInfo struct {
+	Level int   `json:"level"`
+	Files int   `json:"files"`
+	Bytes int64 `json:"bytes"`
 }
 
 // Inspect reads the replica at url (no running app needed) and summarizes
@@ -223,17 +232,23 @@ func Inspect(ctx context.Context, url string) ([]ReplicaInfo, error) {
 		}
 
 		info := ReplicaInfo{Name: name, URL: redactURL(sub)}
-		var newest time.Time
+		var newest, oldest time.Time
 
 		for _, level := range []int{0, 1, 2, 3, litestream.SnapshotLevel} {
 			itr, err := client.LTXFiles(ctx, level, 0, false)
 			if err != nil {
 				return nil, fmt.Errorf("walreplica: %s: list level %d: %w", name, level, err)
 			}
+			lv := LevelInfo{Level: level}
 			for itr.Next() {
 				f := itr.Item()
 				info.Files++
 				info.Bytes += f.Size
+				lv.Files++
+				lv.Bytes += f.Size
+				if oldest.IsZero() || f.CreatedAt.Before(oldest) {
+					oldest = f.CreatedAt
+				}
 				if uint64(f.MaxTXID) > info.LatestTXID {
 					info.LatestTXID = uint64(f.MaxTXID)
 				}
@@ -253,6 +268,7 @@ func Inspect(ctx context.Context, url string) ([]ReplicaInfo, error) {
 			}
 			err = itr.Err()
 			_ = itr.Close()
+			info.Levels = append(info.Levels, lv)
 			if err != nil {
 				return nil, fmt.Errorf("walreplica: %s: list level %d: %w", name, level, err)
 			}
@@ -260,6 +276,7 @@ func Inspect(ctx context.Context, url string) ([]ReplicaInfo, error) {
 
 		if !newest.IsZero() {
 			info.LatestAt = &newest
+			info.OldestAt = &oldest
 		}
 		out = append(out, info)
 	}

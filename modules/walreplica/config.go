@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,13 +22,18 @@ const (
 	EnvSyncInterval     = "TOKI_REPLICA_SYNC_INTERVAL"
 	EnvRetention        = "TOKI_REPLICA_RETENTION"
 	EnvSnapshotInterval = "TOKI_REPLICA_SNAPSHOT_INTERVAL"
+	EnvMaxMB            = "TOKI_REPLICA_MAX_MB"
 )
 
 // Defaults.
 const (
 	DefaultSyncInterval     = time.Second
 	DefaultRetention        = 24 * time.Hour
-	DefaultSnapshotInterval = time.Hour
+	DefaultSnapshotInterval = 6 * time.Hour
+
+	// DefaultMaxMB is the replica size (all databases, all LTX files) above
+	// which expired restore points are pruned early. 0 disables the guard.
+	DefaultMaxMB int64 = 4096
 )
 
 // Names (sub paths) of the replicated databases under the replica URL.
@@ -50,6 +56,10 @@ type Config struct {
 
 	// SnapshotInterval is how often a full snapshot is written.
 	SnapshotInterval time.Duration
+
+	// MaxMB is the replica size guard in MiB (0 = off). Above it the module
+	// logs a warning and prunes expired restore points early, oldest first.
+	MaxMB int64
 }
 
 // Enabled reports whether replication is configured.
@@ -62,6 +72,15 @@ func FromEnv() (Config, error) {
 		SyncInterval:     DefaultSyncInterval,
 		Retention:        DefaultRetention,
 		SnapshotInterval: DefaultSnapshotInterval,
+		MaxMB:            DefaultMaxMB,
+	}
+
+	if raw := strings.TrimSpace(os.Getenv(EnvMaxMB)); raw != "" {
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || n < 0 {
+			return cfg, fmt.Errorf("walreplica: invalid %s %q (expected a size in MiB, 0 disables the guard)", EnvMaxMB, raw)
+		}
+		cfg.MaxMB = n
 	}
 
 	for _, item := range []struct {

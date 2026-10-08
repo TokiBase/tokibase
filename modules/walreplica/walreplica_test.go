@@ -97,7 +97,7 @@ func TestInactiveWithoutEnv(t *testing.T) {
 func TestFromEnv(t *testing.T) {
 	t.Setenv(walreplica.EnvURL, "")
 	cfg, err := walreplica.FromEnv()
-	if err != nil || cfg.Enabled() || cfg.SyncInterval != time.Second || cfg.Retention != 24*time.Hour || cfg.SnapshotInterval != time.Hour {
+	if err != nil || cfg.Enabled() || cfg.SyncInterval != time.Second || cfg.Retention != 24*time.Hour || cfg.SnapshotInterval != 6*time.Hour || cfg.MaxMB != walreplica.DefaultMaxMB {
 		t.Fatalf("defaults: %+v %v", cfg, err)
 	}
 
@@ -105,10 +105,17 @@ func TestFromEnv(t *testing.T) {
 	t.Setenv(walreplica.EnvSyncInterval, "250ms")
 	t.Setenv(walreplica.EnvRetention, "48h")
 	t.Setenv(walreplica.EnvSnapshotInterval, "30m")
+	t.Setenv(walreplica.EnvMaxMB, "512")
 	cfg, err = walreplica.FromEnv()
-	if err != nil || !cfg.Enabled() || cfg.SyncInterval != 250*time.Millisecond || cfg.Retention != 48*time.Hour || cfg.SnapshotInterval != 30*time.Minute {
+	if err != nil || !cfg.Enabled() || cfg.MaxMB != 512 || cfg.SyncInterval != 250*time.Millisecond || cfg.Retention != 48*time.Hour || cfg.SnapshotInterval != 30*time.Minute {
 		t.Fatalf("custom: %+v %v", cfg, err)
 	}
+
+	t.Setenv(walreplica.EnvMaxMB, "-1")
+	if _, err := walreplica.FromEnv(); err == nil || !strings.Contains(err.Error(), walreplica.EnvMaxMB) {
+		t.Fatalf("expected invalid max mb error, got %v", err)
+	}
+	t.Setenv(walreplica.EnvMaxMB, "0")
 
 	t.Setenv(walreplica.EnvSyncInterval, "soon")
 	if _, err := walreplica.FromEnv(); err == nil || !strings.Contains(err.Error(), walreplica.EnvSyncInterval) {
@@ -428,5 +435,90 @@ func TestLeaseStaleIsIgnored(t *testing.T) {
 	defer stop(t, app)
 	if ok, reason := walreplica.Healthy(app); !ok || walreplica.LeaseInfo(app) == nil || !walreplica.LeaseInfo(app).Held {
 		t.Fatalf("stale lease must not block: %v %q", ok, reason)
+	}
+}
+
+func TestPruneKeepsLatestRestorable(t *testing.T) {
+	dataDir := t.TempDir()
+	replicaDir := t.TempDir()
+	ctx := context.Background()
+
+	app := newApp(t, dataDir, &walreplica.Config{URL: fileURL(replicaDir), SyncInterval: 100 * time.Millisecond})
+	col := core.NewBaseCollection("notes")
+	col.Fields.Add(&core.TextField{Name: "title"})
+	if err := app.Save(col); err != nil {
+		t.Fatal(err)
+	}
+
+	const rounds, per = 3, 5
+	for round := 0; round < rounds; round++ {
+		for i := 0; i < per; i++ {
+			r := core.NewRecord(col)
+			r.Set("title", fmt.Sprintf("note %d.%d", round, i))
+			if err := app.Save(r); err != nil {
+				t.Fatal(err)
+			}
+		}
+		waitFor(t, ciDeadline, "replica to catch up", func() bool { return caughtUp(app) })
+		if _, err := walreplica.Snapshot(ctx, app); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stop(t, app)
+
+	url := fileURL(replicaDir)
+	before, err := walreplica.Inspect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before[0].Snapshots < 2 || before[0].OldestAt == nil || len(before[0].Levels) == 0 {
+		t.Fatalf("expected several snapshots and level info, got %+v", before[0])
+	}
+
+	// dry run changes nothing
+	dry, err := walreplica.Prune(ctx, url, walreplica.PruneOptions{DryRun: true})
+	if err != nil || dry[0].Snapshots != before[0].Snapshots-1 || dry[0].Bytes <= 0 {
+		t.Fatalf("dry run: %+v %v (snapshots before %d)", dry, err, before[0].Snapshots)
+	}
+	same, _ := walreplica.Inspect(ctx, url)
+	if same[0].Files != before[0].Files {
+		t.Fatal("dry run deleted files")
+	}
+
+	// a window that still covers every snapshot deletes nothing
+	none, err := walreplica.Prune(ctx, url, walreplica.PruneOptions{Retention: time.Hour})
+	if err != nil || none[0].Files != 0 || none[1].Files != 0 {
+		t.Fatalf("window prune: %+v %v", none, err)
+	}
+
+	// retention 0 keeps only the newest snapshot
+	res, err := walreplica.Prune(ctx, url, walreplica.PruneOptions{})
+	if err != nil || res[0].Files == 0 {
+		t.Fatalf("prune: %+v %v", res, err)
+	}
+	after, err := walreplica.Inspect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after[0].Snapshots != 1 || after[0].Bytes >= before[0].Bytes || after[0].LatestTXID != before[0].LatestTXID {
+		t.Fatalf("after prune: %+v (before %+v)", after[0], before[0])
+	}
+
+	// the pruned replica still restores the latest state
+	restored := t.TempDir()
+	if err := walreplica.Restore(ctx, url, restored, walreplica.RestoreOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sqlite.DefaultConnect(filepath.Join(restored, "data.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.NewQuery("SELECT COUNT(*) FROM notes").Row(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != rounds*per {
+		t.Fatalf("restored %d records, want %d", count, rounds*per)
 	}
 }
