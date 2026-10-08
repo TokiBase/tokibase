@@ -64,3 +64,11 @@ func (m *Module) markSent(nodeID, colID, recID string) {
 		m.app.Logger().Warn("sync: sent tracking write failed", "node", nodeID, "error", err)
 	}
 }
+
+// viewScoped reports whether a restrictive view rule can make a node hold a
+// subset of the collection (the digest of such a node can not equal the hub's).
+// pull_view_rule is on by default, so it only counts together with a rule.
+func (m *Module) viewScoped(col *core.Collection, p *policy) bool {
+	on := p.PullViewRule || (envFlag(EnvPullViewRule) && !p.SkipViewRule)
+	return on && col.ViewRule != nil && *col.ViewRule != ""
+}
