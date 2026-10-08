@@ -53,6 +53,7 @@ Only strings, integers, arrays, inline tables and a `[env]` table are supported 
 | `route:<METHOD> <path>` | custom route, registered on `OnServe` (`{name}` path params allowed) |
 | `job:<name>` | job enqueued by the module itself via `jobs_enqueue` |
 | `batch.before`, `batch.after`, `batch.*` | atomic `/api/batch` calls, see [Batch events](#batch-events) |
+| `sync.conflict.<collection\|*>` | a concurrent sync change on the hub in a collection with sync strategy `hook`, see [Sync conflict events](#sync-conflict-events) |
 
 A wildcard collection (`*`) never matches system collections whose name starts with `_`; name them explicitly if you need them. Record hooks fire for writes through the REST API and for writes made by Go/JS code (`app.Save`), because they sit on the model hooks. Writes made by a guest through `records_save`/`records_delete` do not re-trigger WASM hooks for that record (loop guard); other hooks still fire, and the call depth travels in the context of the write: a guest call nested more than 2 levels deep (a hook of another record that a guest write triggered, cascades) fails with "hook call depth exceeded".
 
@@ -120,6 +121,32 @@ toki.Run(func(ev *toki.Event) (*toki.Result, error) {
 
 Use `batch.after` for money, stock and quota checks. The body in `batch.before` is the raw submission: modifier keys such as `qty+` are not resolved there (`Batch.Sum` adds `qty+`/`+qty` and subtracts `qty-`, but cannot know the stored value a modifier applies to).
 
+### Sync conflict events
+
+A module that lists `sync.conflict.<collection>` or `sync.conflict.*` in `events` is asked by [`modules/sync`](sync.md) (through `kernel.OnSyncConflictFor(app)`) when a pushed change is concurrent with the hub state of a collection whose sync strategy is `hook`. The `hook` field of the sync policy names one module; empty means every subscribed module is asked in name order until one decides. Additive to `toki/1`: the ABI string is unchanged, old guests never see the new `kind`. A wildcard never matches `_` collections.
+
+Event (`kind: "sync"`, `phase: "before"`, `actor` is `system`):
+
+```json
+{"abi":"toki/1","module":"payments_conflict","event":"sync.conflict.payments","kind":"sync","phase":"before",
+ "collection":"payments",
+ "sync":{"record_id":"pay_7h2","current":{"id":"pay_7h2","status":"paid","provider_ref":"QR-111"},
+         "current_hlc":"0192a3b4c5d60001","current_node":"nGate1",
+         "incoming":{"op":"u","node":"nPhone","hlc":"0192a3b4c5e70000","base_hlc":"0192a3b4c5000000",
+                     "patch":{"status":"paid","provider_ref":"CASH-9"},
+                     "actor":{"kind":"auth","id":"u_12","collection":"officers"}},
+         "field_clocks":{"status":"0192a3b4c5d60001"}},
+ "time":"..."}
+```
+
+Counters in `patch` are `{"$inc": n}`, sets `{"$add": [...], "$rm": [...]}`; fields registered as sensitive are `"[encrypted]"` in `current` and `patch` (and echoed markers in a returned patch are ignored). Answer (stdout):
+
+```json
+{"ok":true,"resolution":"merge","patch":{"status":"paid","provider_ref":"QR-111","note":"double payment CASH-9, refund"},"message":"double payment"}
+```
+
+`resolution` is `accept` (apply the pushed patch), `reject` (revert the node), `merge` (apply `patch` instead; still saved through the normal record path, pushed counter/set operations that `patch` does not mention are kept) or `park` (leave the conflict open for `toki sync conflicts --resolve`). `message` is stored in the conflict note. Anything else fails closed: no module, `ok:false`, a trap, a timeout, invalid output or an unknown resolution make the hub park the change with code `hook_failed`. The guest runs inside the hub's apply transaction (host calls use it, so `records_save` side records such as a refund task commit or roll back with the change; the module needs `needs = ["records"]`); all modules share a 10 s budget per conflict while the hub holds its apply lock, so keep these guests fast. Go SDK: `ev.Sync`, `toki.ConflictAccept/ConflictReject/ConflictMerge/ConflictPark`. The handler is bound only while a loaded module declares such an event.
+
 ### Result (stdout)
 
 ```json
@@ -133,6 +160,7 @@ Use `batch.after` for money, stock and quota checks. The body in `batch.before` 
 | `ok` | all | `false` rejects a before-hook (default status 400) or answers a route with an error |
 | `record` | before create/update | fields to change (merged with `Set`). `id`, `collectionId`, `collectionName`, `expand`, `tokenKey`, `passwordHash` are ignored; the normal validation still runs on the result |
 | `status`, `message`, `data` | rejections | HTTP status 400-599, message, field errors. `data` values may be `{"code","message"}` objects or plain strings |
+| `resolution`, `patch` | `sync.conflict.*` | the decision (`accept`, `reject`, `merge`, `park`) and the patch of `merge` |
 | `status`, `headers`, `body` | routes | response (status default 200). `body` is a JSON string = written raw, any other JSON value = encoded as JSON (`Content-Type: application/json` unless you set one) |
 
 A guest failure never leaks internals: before-hooks and routes answer `500 {"message":"Hook failed."}` (the write is aborted), details go to the log with the module and stderr. After-hook, cron and job failures are logged (jobs are retried by the queue).

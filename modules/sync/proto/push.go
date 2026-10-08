@@ -20,6 +20,9 @@ const (
 	CodeRebootstrap   = "sync_rebootstrap_required"
 	CodeSchemaBehind  = "sync_schema_behind"
 	CodeClockDrift    = "sync_clock_drift"
+	// CodeResponseTooLarge is raised by the client when a response is cut at
+	// its read limit; the pull page is then halved.
+	CodeResponseTooLarge = "sync_response_too_large"
 )
 
 // Limits of one push request.
@@ -51,6 +54,9 @@ const (
 	CodeFutureHLC        = "future_hlc"
 	CodeSuperseded       = "superseded"
 	CodeOrphaned         = "orphaned"
+	CodeHubWins          = "hub_wins"
+	CodeHookRejected     = "hook_rejected"
+	CodeHookFailed       = "hook_failed"
 )
 
 // PushChange is one change of a push request.

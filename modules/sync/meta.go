@@ -4,9 +4,11 @@ package sync
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 
 	"github.com/pocketbase/dbx"
+	"github.com/tokibase/tokibase/modules/sync/hlc"
 )
 
 // metaHLC returns the record clock the writer saw (0 when the record has no
@@ -46,5 +48,72 @@ func refreshMetaHash(db dbx.Builder, colId, id string, hash []byte) error {
 func deleteMeta(db dbx.Builder, colId, id string) error {
 	_, err := db.NewQuery("DELETE FROM _sync_meta WHERE collection={:c} AND record={:r}").
 		Bind(dbx.Params{"c": colId, "r": id}).Execute()
+	return err
+}
+
+// Field clocks (docs/SYNC_DESIGN.md §2.2, §4.4). `_sync_meta.fields` holds
+// {"field": "<hlc hex>"} for the plain fields of field-merge collections: the
+// HLC of the change that last wrote the field. Counter and set fields never
+// have a clock.
+
+// readFieldClocks returns the field clocks of a record (empty without a row).
+func readFieldClocks(db dbx.Builder, colId, id string) (map[string]hlc.HLC, error) {
+	var raw string
+	err := db.NewQuery("SELECT fields FROM _sync_meta WHERE collection={:c} AND record={:r}").
+		Bind(dbx.Params{"c": colId, "r": id}).Row(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return map[string]hlc.HLC{}, nil
+		}
+		return nil, err
+	}
+	return parseFieldClocks(raw), nil
+}
+
+// parseFieldClocks decodes the stored JSON; unreadable entries are skipped
+// (a clock of 0 means "never written", the safe direction).
+func parseFieldClocks(raw string) map[string]hlc.HLC {
+	out := map[string]hlc.HLC{}
+	if raw == "" || raw == "{}" {
+		return out
+	}
+	var m map[string]string
+	if json.Unmarshal([]byte(raw), &m) != nil {
+		return out
+	}
+	for f, s := range m {
+		if h, err := hlc.Parse(s); err == nil {
+			out[f] = h
+		}
+	}
+	return out
+}
+
+func encodeFieldClocks(m map[string]hlc.HLC) string {
+	s := make(map[string]string, len(m))
+	for f, h := range m {
+		s[f] = h.String()
+	}
+	b, _ := json.Marshal(s) // sorted keys
+	return string(b)
+}
+
+// bumpFieldClocks raises the clock of every field in fields to h (never
+// lowers it). The `_sync_meta` row must exist.
+func bumpFieldClocks(db dbx.Builder, colId, id string, fields []string, h hlc.HLC) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	cur, err := readFieldClocks(db, colId, id)
+	if err != nil {
+		return err
+	}
+	for _, f := range fields {
+		if cur[f] < h {
+			cur[f] = h
+		}
+	}
+	_, err = db.NewQuery("UPDATE _sync_meta SET fields={:f} WHERE collection={:c} AND record={:r}").
+		Bind(dbx.Params{"f": encodeFieldClocks(cur), "c": colId, "r": id}).Execute()
 	return err
 }

@@ -79,6 +79,7 @@ type Host struct {
 	stash      sync.Map // *core.Record -> *core.RequestEvent
 	inlineCron sync.Map
 	batchBound bool // guarded by mu
+	syncBound  bool // guarded by mu
 	stopOnce   sync.Once
 	stop       chan struct{}
 }
@@ -303,6 +304,7 @@ func (h *Host) Reload() {
 	}
 	h.syncCron(next)
 	h.syncBatch(next)
+	h.syncSyncConflict(next)
 	if len(next.mods) > 0 {
 		h.app.Logger().Info("wasm: hooks loaded", "dir", h.Dir(), "modules", len(next.mods))
 	}

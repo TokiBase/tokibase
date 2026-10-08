@@ -21,6 +21,7 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/modules/sync/client"
 	"github.com/tokibase/tokibase/modules/sync/hlc"
 	"github.com/tokibase/tokibase/modules/sync/proto"
@@ -139,6 +140,7 @@ func RegisterRole(app core.App, role Role) *Module {
 	}
 	m := &Module{app: app, role: role, now: time.Now}
 	m.pol.m = m
+	app.Store().Set(storeKey, m)
 
 	init := func() error {
 		err := m.Init()
@@ -166,6 +168,7 @@ func RegisterRole(app core.App, role Role) *Module {
 	app.OnTerminate().Bind(&hook.Handler[*core.TerminateEvent]{
 		Id: hookId,
 		Func: func(e *core.TerminateEvent) error {
+			kernel.ReleaseSyncHooks(app)
 			m.persistFloorOnStop()
 			return e.Next()
 		},
@@ -197,6 +200,9 @@ func (m *Module) Init() error {
 		return err
 	}
 	if err := EnsurePolicyCollection(m.app); err != nil {
+		return err
+	}
+	if err := EnsureConflictsCollection(m.app); err != nil {
 		return err
 	}
 	st := dbState{db: m.app.NonconcurrentDB()}

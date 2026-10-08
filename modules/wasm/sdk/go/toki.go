@@ -123,12 +123,43 @@ func (b *Batch) Sum(collection, field string) float64 {
 	return total
 }
 
+// SyncActor is who made the conflicting change: "auth", "superuser" or "system".
+type SyncActor struct {
+	Kind       string `json:"kind"`
+	ID         string `json:"id,omitempty"`
+	Collection string `json:"collection,omitempty"`
+}
+
+// SyncIncoming is the pushed change of a sync conflict. HLCs are 16 hex chars.
+type SyncIncoming struct {
+	Op      string         `json:"op"`
+	Node    string         `json:"node"`
+	HLC     string         `json:"hlc"`
+	BaseHLC string         `json:"base_hlc"`
+	Patch   map[string]any `json:"patch"` // counters as {"$inc": n}, sets as {"$add": [...], "$rm": [...]}
+	Actor   SyncActor      `json:"actor"`
+}
+
+// Sync is delivered for `sync.conflict.<collection>` / `sync.conflict.*`
+// events (kind "sync"): a change pushed from a spoke that is concurrent with
+// the hub state of a collection whose sync strategy is `hook`. Answer with
+// ConflictAccept, ConflictReject, ConflictMerge or ConflictPark. Sensitive
+// fields are "[encrypted]" in Current and in the patch.
+type Sync struct {
+	RecordID    string            `json:"record_id"`
+	Current     map[string]any    `json:"current"`
+	CurrentHLC  string            `json:"current_hlc"`
+	CurrentNode string            `json:"current_node"`
+	Incoming    SyncIncoming      `json:"incoming"`
+	FieldClocks map[string]string `json:"field_clocks"`
+}
+
 // Event is the JSON document the host writes to stdin.
 type Event struct {
 	ABI         string         `json:"abi"`
 	Module      string         `json:"module"`
 	Event       string         `json:"event"`
-	Kind        string         `json:"kind"` // record | cron | route | job | batch
+	Kind        string         `json:"kind"` // record | cron | route | job | batch | sync
 	Phase       string         `json:"phase,omitempty"`
 	Action      string         `json:"action,omitempty"`
 	Collection  string         `json:"collection,omitempty"`
@@ -138,6 +169,7 @@ type Event struct {
 	RequestInfo *RequestInfo   `json:"request_info,omitempty"`
 	Route       *Route         `json:"route,omitempty"`
 	Batch       *Batch         `json:"batch,omitempty"`
+	Sync        *Sync          `json:"sync,omitempty"`
 	Cron        *struct {
 		Expr string `json:"expr"`
 	} `json:"cron,omitempty"`
@@ -157,6 +189,32 @@ type Result struct {
 	Data    map[string]any    `json:"data,omitempty"`    // rejections: field errors
 	Headers map[string]string `json:"headers,omitempty"` // routes
 	Body    any               `json:"body,omitempty"`    // routes: string = raw, anything else = JSON
+	// sync.conflict: the decision (accept | reject | merge | park) and, for merge, the patch to apply.
+	Resolution string         `json:"resolution,omitempty"`
+	Patch      map[string]any `json:"patch,omitempty"`
+}
+
+// ConflictAccept applies the incoming patch of a sync conflict as it is.
+func ConflictAccept(message string) *Result {
+	return &Result{OK: true, Resolution: "accept", Message: message}
+}
+
+// ConflictReject refuses the incoming change; the spoke receives the hub state.
+func ConflictReject(message string) *Result {
+	return &Result{OK: true, Resolution: "reject", Message: message}
+}
+
+// ConflictMerge applies patch instead of the incoming one (still rule-checked
+// as the incoming actor). Counter/set operations of the incoming patch that
+// patch does not mention are kept.
+func ConflictMerge(patch map[string]any, message string) *Result {
+	return &Result{OK: true, Resolution: "merge", Patch: patch, Message: message}
+}
+
+// ConflictPark applies nothing and leaves the conflict open for an admin
+// (`toki sync conflicts --resolve`).
+func ConflictPark(message string) *Result {
+	return &Result{OK: true, Resolution: "park", Message: message}
 }
 
 // Ok returns an empty successful result.
