@@ -40,8 +40,7 @@ func (c *Client) ensureSession(ctx context.Context) error {
 		return err
 	}
 	if hs.Rebootstrap {
-		c.setState("rebootstrap_required")
-		c.emit(Event{Type: EventRebootstrap})
+		c.markRebootstrap(hs.LowWater)
 		return ErrRebootstrap
 	}
 	if err := c.applyPolicies(hs.Policies); err != nil {

@@ -136,8 +136,12 @@ func (c *Client) applyChange(tx kernel.App, ch *proto.PullChange) (bool, error) 
 		Mode: kernel.SyncModePull, Node: ch.Node, HLC: uint64(h), ChangeID: ch.ID,
 	})
 	switch ch.Op {
-	case "d", "p":
+	case "d":
 		return c.applyDelete(tx, ctx, col, ch, h)
+	case "p":
+		return c.applyPurge(tx, ctx, col, ch, h)
+	case "x":
+		return c.applyEvict(tx, ctx, col, ch)
 	case "c", "u":
 		return c.applyUpsert(tx, ctx, col, pv, ch, h)
 	}

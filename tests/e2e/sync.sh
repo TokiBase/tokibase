@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sync e2e (docs/SYNC_DESIGN.md §9, PR3 + PR5 field-merge and hook/park cases): one hub and two spokes, each with its own pb_data,
+# Sync e2e (docs/SYNC_DESIGN.md §9, PR3 + PR5 field-merge and hook/park cases + PR6 partition, purge and compaction cases): one hub and two spokes, each with its own pb_data,
 # on random loopback ports. Writes on all three (including concurrent edits of one record),
 # converge, compare `toki sync verify` digests, SIGKILL spoke 1 in the middle of a push,
 # restart it and converge again. Everything is killed by PID file at exit.
@@ -250,5 +250,93 @@ toki hub "$HUB" sync conflicts --resolve "$CID" --take incoming --note "e2e" >/d
 wait_converged "round 7 (hook park + resolve)"
 [ "$(api "$TH" GET "$URL_HUB" "/api/collections/e2eitems/records/$HK" | jget 'd["title"]')" = "s1 side" ] || fail "resolve --take incoming must apply the parked patch"
 [ "$(toki hub "$HUB" sync conflicts --open --json 2>/dev/null | grep -E '^\[(\{|\])' | tail -1 | jget 'len(d)')" = 0 ] || fail "no open conflict should remain"
+
+# ---- 8. partitions (PR6): gate-1 is branch A, gate-2 is branch B ----
+wait_for() { # label expression: poll until the expression (a shell command) succeeds
+  local t0=$SECONDS
+  while ! eval "$2"; do
+    [ $((SECONDS - t0)) -lt "$LIMIT" ] || fail "$1: timed out waiting for: $2"
+    sleep 1
+  done
+}
+http() { # token method url path [body] -> status code
+  curl -s -o /dev/null -w '%{http_code}' -X "$2" "$3$4" -H "Authorization: $1" -H 'Content-Type: application/json' -d "${5:-}"
+}
+kill_node() { local p; p="$(cat "$TMP/$1.pid")"; kill -9 "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; }
+
+COLL2='{"id":"pbc_e2etickets","name":"e2etickets","type":"base","listRule":"","viewRule":"","createRule":"","updateRule":"","deleteRule":"","fields":[{"name":"title","type":"text"},{"name":"branch","type":"text"},{"name":"created","type":"autodate","onCreate":true},{"name":"updated","type":"autodate","onCreate":true,"onUpdate":true}],"indexes":["CREATE INDEX idx_e2etickets_branch ON e2etickets (branch)"]}'
+api "$TH" POST "$URL_HUB" /api/collections "$COLL2" >/dev/null
+api "$T1" POST "$URL_S1" /api/collections "$COLL2" >/dev/null
+api "$T2" POST "$URL_S2" /api/collections "$COLL2" >/dev/null
+api "$TH" POST "$URL_HUB" /api/collections/_sync_policies/records \
+  '{"collection":"e2etickets","direction":"both","enabled":true,"partition":"branch = @node.branch"}' >/dev/null || fail "partition policy rejected"
+# a policy with a bad partition is refused by the validation
+[ "$(http "$TH" POST "$URL_HUB" /api/collections/_sync_policies/records '{"collection":"e2eitems","partition":"nope = @node.x","enabled":true}')" = 400 ] \
+  || fail "a policy with an unknown partition field must be refused"
+# partition parameters are node data on the hub
+PEERS="$(toki hub "$HUB" sync peers --json 2>/dev/null | grep -E '^\[(\{|\])' | tail -1)"
+for pair in "s1:A" "s2:B"; do
+  nid="$(echo "$PEERS" | jget "[p['id'] for p in d if p['name']=='${pair%%:*}'][0]")"
+  api "$TH" PATCH "$URL_HUB" "/api/collections/_sync_nodes/records/$nid" "{\"params\":{\"branch\":\"${pair##*:}\"}}" >/dev/null || fail "set params of ${pair%%:*}"
+done
+# the spokes get the new policy with their next handshake: restart them
+kill_node s1; kill_node s2
+start s1 spoke "$S1" "$PORT_S1"; start s2 spoke "$S2" "$PORT_S2"
+wait_health "$URL_S1" 30 || fail "s1 did not restart"; wait_health "$URL_S2" 30 || fail "s2 did not restart"
+T1="$(token "$URL_S1")"; T2="$(token "$URL_S2")"
+wait_for "policies on the spokes" '[ "$(api "$T1" GET "$URL_S1" "/api/collections/_sync_policies/records" | jget "d[\"totalItems\"]")" = 2 ] && [ "$(api "$T2" GET "$URL_S2" "/api/collections/_sync_policies/records" | jget "d[\"totalItems\"]")" = 2 ]'
+sleep 6 # policy cache ttl on the spokes
+
+tcreate() { # token url title branch -> id
+  api "$1" POST "$2" /api/collections/e2etickets/records "{\"title\":\"$3\",\"branch\":\"$4\"}" | jget 'd["id"]'
+}
+tget() { http "$1" GET "$2" "/api/collections/e2etickets/records/$3"; }
+TA="$(tcreate "$TH" "$URL_HUB" "ticket A" A)"
+TB="$(tcreate "$TH" "$URL_HUB" "ticket B" B)"
+wait_for "partition pull" '[ "$(tget "$T1" "$URL_S1" "$TA")" = 200 ] && [ "$(tget "$T2" "$URL_S2" "$TB")" = 200 ]'
+[ "$(tget "$T1" "$URL_S1" "$TB")" = 404 ] || fail "gate-1 (branch A) must not receive the ticket of branch B"
+[ "$(tget "$T2" "$URL_S2" "$TA")" = 404 ] || fail "gate-2 (branch B) must not receive the ticket of branch A"
+log "partition pull: each gate holds only its own branch"
+
+# an in-partition write travels up, a write outside the partition is refused and reverted
+TS1="$(tcreate "$T1" "$URL_S1" "from gate-1" A)"
+TOUT="$(tcreate "$T1" "$URL_S1" "gate-1 writes branch B" B)"
+wait_for "partition push" '[ "$(tget "$TH" "$URL_HUB" "$TS1")" = 200 ] && [ "$(tget "$T1" "$URL_S1" "$TOUT")" = 404 ]'
+[ "$(tget "$TH" "$URL_HUB" "$TOUT")" = 404 ] || fail "the hub must refuse a record outside the partition of the node"
+[ "$(tget "$T2" "$URL_S2" "$TS1")" = 404 ] || fail "gate-2 must not receive a ticket of branch A"
+log "partition push: in-partition accepted, out-of-partition refused and reverted"
+
+# moving a record to the other branch evicts it on gate-1 and delivers it to gate-2
+api "$TH" PATCH "$URL_HUB" "/api/collections/e2etickets/records/$TA" '{"branch":"B"}' >/dev/null
+wait_for "partition move" '[ "$(tget "$T1" "$URL_S1" "$TA")" = 404 ] && [ "$(tget "$T2" "$URL_S2" "$TA")" = 200 ]'
+log "partition move: evicted on gate-1, delivered to gate-2"
+
+# ---- 9. purge (PR6): the record, its log patches and the copies on all nodes are erased ----
+PRG="$(create "$TH" "$URL_HUB" "personal data" 1)"
+wait_for "purge target replicated" '[ "$(http "$T1" GET "$URL_S1" "/api/collections/e2eitems/records/$PRG")" = 200 ] && [ "$(http "$T2" GET "$URL_S2" "/api/collections/e2eitems/records/$PRG")" = 200 ]'
+toki hub "$HUB" sync purge e2eitems "$PRG" --legal --reason "e2e erasure" >"$TMP/purge.json" 2>/dev/null || fail "purge command failed"
+wait_for "purge propagated" '[ "$(http "$TH" GET "$URL_HUB" "/api/collections/e2eitems/records/$PRG")" = 404 ] && [ "$(http "$T1" GET "$URL_S1" "/api/collections/e2eitems/records/$PRG")" = 404 ] && [ "$(http "$T2" GET "$URL_S2" "/api/collections/e2eitems/records/$PRG")" = 404 ]'
+# no patch survives in the log; the legal tombstone exists on all three nodes
+for dir in "$HUB" "$S1" "$S2"; do
+  python3 - "$dir/data.db" "$PRG" <<'PY' || fail "purge check failed in $dir"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1], timeout=10)
+rid = sys.argv[2]
+kinds = [r[0] for r in db.execute("select kind from _sync_tombstones where record=?", (rid,))]
+assert kinds == ["legal"], kinds
+for op, patch, h in db.execute("select op, patch, hash from _changes where record=? and op!='p'", (rid,)):
+    assert patch == "{}" and h is None, (op, patch)
+PY
+done
+# the id can never be created again, on the hub or on a spoke
+[ "$(http "$TH" POST "$URL_HUB" /api/collections/e2eitems/records "{\"id\":\"$PRG\",\"title\":\"zombie\"}")" = 400 ] || fail "a purged id must be refused on the hub"
+[ "$(http "$T1" POST "$URL_S1" /api/collections/e2eitems/records "{\"id\":\"$PRG\",\"title\":\"zombie\"}")" = 400 ] || fail "a purged id must be refused on a spoke"
+log "purge: erased everywhere, legal tombstone in place"
+
+# ---- 10. compaction (PR6): nothing is old enough, the report is sane ----
+toki hub "$HUB" sync compact --json 2>/dev/null | grep '^{' | tail -1 >"$TMP/compact.json" || true
+[ -s "$TMP/compact.json" ] || fail "compact printed nothing"
+jget 'd["role"]=="hub" and d["changes_deleted"]==0 and d["stale_nodes"]==0' <"$TMP/compact.json" | grep -q True || fail "unexpected compaction report: $(cat "$TMP/compact.json")"
+curl -fsS "$URL_HUB/api/health" -H "Authorization: $TH" | jget 'd["data"]["sync"]["role"]=="hub" and d["data"]["sync"]["stale_nodes"]==0' | grep -q True || fail "health block missing"
 
 log "OK"

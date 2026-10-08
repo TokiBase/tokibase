@@ -380,7 +380,7 @@ func (m *Module) revertActor(tx kernel.App, nodeID string, group []*hubChange) *
 // the spoke keeps its state until an admin decides).
 func (m *Module) recordParked(tx kernel.App, nodeID string, c *hubChange, rj *rejection) (int64, error) {
 	patch := "{}"
-	if len(c.Patch) > 0 && string(c.Patch) != "null" {
+	if len(c.Patch) > 0 && string(c.Patch) != "null" && !m.erased(tx, c) {
 		patch = string(c.Patch)
 	}
 	seq, err := m.insertHubRow(tx.NonconcurrentDB(), &hubRow{
@@ -418,7 +418,7 @@ func (m *Module) addConflict(tx kernel.App, nodeID string, c *hubChange, rj *rej
 	}
 	r.Set("kind", kind)
 	r.Set("strategy", "lww")
-	if len(c.Patch) > 0 && string(c.Patch) != "null" {
+	if len(c.Patch) > 0 && string(c.Patch) != "null" && !m.erased(tx, c) {
 		r.Set("incoming", c.Patch)
 	}
 	r.Set("resolution", resolution)
@@ -439,12 +439,15 @@ func (m *Module) advancePushed(tx kernel.App, nodeID string, oseq int64) error {
 func (m *Module) recordRejected(tx kernel.App, nodeID string, c *hubChange, code string, revert bool, actor *core.Record) (int64, error) {
 	db := tx.NonconcurrentDB()
 	patch := "{}"
-	if len(c.Patch) > 0 && string(c.Patch) != "null" {
+	hash := c.hash
+	if len(c.Patch) > 0 && string(c.Patch) != "null" && code != proto.CodeLegalTombstone && !m.erased(tx, c) {
 		patch = string(c.Patch)
+	} else {
+		hash = nil // an erased record leaves no data in the log, not even a refused push
 	}
 	seq, err := m.insertHubRow(db, &hubRow{
 		node: nodeID, oseq: c.oseq, hlc: int64(c.hlc), base: int64(c.base), col: c.Collection, rec: c.Record,
-		op: c.Op, patch: patch, hash: c.hash, actor: c.Actor, tx: c.Tx, status: StatusRejected, code: code,
+		op: c.Op, patch: patch, hash: hash, actor: c.Actor, tx: c.Tx, status: StatusRejected, code: code,
 	})
 	if err != nil {
 		return 0, err
@@ -484,17 +487,22 @@ func (m *Module) insertRevert(tx kernel.App, nodeID, colRef, recID string, actor
 	if rec != nil {
 		// a revert must not carry more than the actor may see (P3-2): a record
 		// outside the view rule is reported as gone, without data
-		vr, err := newViewer(tx, nodeID, actor).view(rec, p, true)
-		if err != nil {
-			return 0, err
+		vw := newViewer(tx, nodeID, actor)
+		if !vw.inPartition(rec, p) {
+			rec = nil // another partition: the pull reports an eviction, nothing is stored
+		} else {
+			vr, err := vw.view(rec, p, true)
+			if err != nil {
+				return 0, err
+			}
+			if !vr.visible {
+				// outside the view rule of the actor: never an op d (that would delete
+				// the data on the device); the row is a verdict without data
+				r.op, r.patch, r.code = OpUpdate, "{}", revertInvisible
+				return m.insertHubRow(db, r)
+			}
+			hidden = vr.hidden
 		}
-		if !vr.visible {
-			// outside the view rule of the actor: never an op d (that would delete
-			// the data on the device); the row is a verdict without data
-			r.op, r.patch, r.code = OpUpdate, "{}", revertInvisible
-			return m.insertHubRow(db, r)
-		}
-		hidden = vr.hidden
 	}
 	if rec == nil {
 		r.op, r.patch = OpDelete, "{}"
@@ -533,6 +541,10 @@ type hubRow struct {
 	target string
 	status string
 	code   string
+	// partOld / partNew are the partition key of the record before and after
+	// the change ("" without partition or when the record does not exist).
+	partOld string
+	partNew string
 }
 
 // insertHubRow inserts a hub `_changes` row and returns its hub seq.
@@ -550,13 +562,13 @@ func (m *Module) insertHubRow(db dbx.Builder, r *hubRow) (int64, error) {
 		oseq = nil
 	}
 	q := `INSERT INTO _changes
-  (node, origin_seq, hlc, base_hlc, collection, record, op, patch, hash, schema_version, actor, tx, target, status, code, created)
+  (node, origin_seq, hlc, base_hlc, collection, record, op, patch, hash, schema_version, actor, tx, target, status, code, created, part_old, part_new)
   VALUES ({:node}, COALESCE({:oseq}, (SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='_changes'),0)+1)),
-  {:hlc}, {:base}, {:col}, {:rec}, {:op}, {:patch}, {:hash}, {:sv}, {:actor}, {:tx}, {:target}, {:status}, {:code}, {:created})`
+  {:hlc}, {:base}, {:col}, {:rec}, {:op}, {:patch}, {:hash}, {:sv}, {:actor}, {:tx}, {:target}, {:status}, {:code}, {:created}, {:po}, {:pn})`
 	res, err := db.NewQuery(q).Bind(dbx.Params{
 		"node": r.node, "oseq": oseq, "hlc": r.hlc, "base": r.base, "col": r.col, "rec": r.rec, "op": r.op,
 		"patch": r.patch, "hash": hashArg, "sv": sv, "actor": r.actor, "tx": r.tx, "target": r.target,
-		"status": r.status, "code": r.code, "created": m.created(),
+		"status": r.status, "code": r.code, "created": m.created(), "po": r.partOld, "pn": r.partNew,
 	}).Execute()
 	if err != nil {
 		return 0, err
@@ -705,4 +717,14 @@ func (m *Module) RejectParked(tx kernel.App, seq int64, code, by string) error {
 		return nil
 	}
 	return err
+}
+
+// erased reports whether the record of c has a legal tombstone (a purge): the
+// data of a change to it is never stored.
+func (m *Module) erased(tx kernel.App, c *hubChange) bool {
+	id := c.Collection
+	if col, err := tx.FindCachedCollectionByNameOrId(c.Collection); err == nil {
+		id = col.Id
+	}
+	return tombstoneKind(tx.NonconcurrentDB(), id, c.Record) == "legal"
 }

@@ -117,3 +117,10 @@ func bumpFieldClocks(db dbx.Builder, colId, id string, fields []string, h hlc.HL
 		Bind(dbx.Params{"f": encodeFieldClocks(cur), "c": colId, "r": id}).Execute()
 	return err
 }
+
+// setMetaPart stores the current partition key of a record (hub).
+func setMetaPart(db dbx.Builder, colId, id, part string) error {
+	_, err := db.NewQuery("UPDATE _sync_meta SET part={:p} WHERE collection={:c} AND record={:r} AND part!={:p}").
+		Bind(dbx.Params{"c": colId, "r": id, "p": part}).Execute()
+	return err
+}

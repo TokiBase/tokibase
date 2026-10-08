@@ -35,6 +35,9 @@ type Status struct {
 	ClockOffsetMs int64  `json:"clock_offset_ms"`
 	LastHandshake string `json:"last_handshake,omitempty"`
 	LastError     string `json:"last_error,omitempty"`
+	// State is the spoke loop state kept in `_sync_cursors` ("rebootstrap_required"
+	// when the hub compacted the changes this node is missing).
+	State string `json:"state,omitempty"`
 }
 
 // GetStatus reads the status from the database. role is the configured role
@@ -81,6 +84,7 @@ func GetStatus(app core.App, role Role) (*Status, error) {
 		}
 		if cur != nil {
 			s.HubID, s.HubURL, s.ClockOffsetMs, s.LastError = cur.HubID, cur.HubURL, cur.ClockOffsetMs, cur.LastError
+			s.State = cur.State
 			if cur.LastOK.Valid {
 				s.LastHandshake = cur.LastOK.String
 			}
@@ -125,8 +129,8 @@ func NewCommand(app core.App) *cobra.Command {
 			if s.Role == string(RoleHub) {
 				fmt.Fprintf(out, "nodes:    %d\n", s.Nodes)
 			} else {
-				fmt.Fprintf(out, "hub url:  %s\ncert expires: %s\nclock offset: %d ms\nlast handshake: %s\nlast error: %s\n",
-					dash(s.HubURL), dash(s.CertExpires), s.ClockOffsetMs, dash(s.LastHandshake), dash(s.LastError))
+				fmt.Fprintf(out, "hub url:  %s\ncert expires: %s\nclock offset: %d ms\nlast handshake: %s\nlast error: %s\nstate: %s\n",
+					dash(s.HubURL), dash(s.CertExpires), s.ClockOffsetMs, dash(s.LastHandshake), dash(s.LastError), dash(s.State))
 			}
 			return nil
 		},
@@ -134,6 +138,7 @@ func NewCommand(app core.App) *cobra.Command {
 	status.Flags().BoolVar(&asJSON, "json", false, "output JSON")
 	root.AddCommand(status)
 	root.AddCommand(enrollCommand(app), joinCommand(app), revokeCommand(app), peersCommand(app), verifyCommand(app), conflictsCommand(app))
+	root.AddCommand(policiesCommand(app), purgeCommand(app), compactCommand(app))
 	return root
 }
 

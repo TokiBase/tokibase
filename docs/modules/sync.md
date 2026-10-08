@@ -2,7 +2,7 @@
 
 Phase 3 hub/spoke replication (offline-first). The full design is `docs/SYNC_DESIGN.md`; this page describes what exists today. Package `modules/sync`, subpackage `modules/sync/hlc`.
 
-**Status: PR5 of 11 (conflict strategies, counter/set fields, `_sync_conflicts`, `hook` strategy; rule re-evaluation and actor grants since PR4).** A node with `TOKI_SYNC_ROLE=hub|spoke` records every write of the synced collections into a local change log (PR1). Since PR2 a hub can enroll devices and authenticate them (`/api/sync/{enroll,handshake,ping}`). Since PR3 a spoke pushes its changes to the hub, the hub applies them (record level `lww`), and the spoke pulls everything it is missing and applies it; hub and spokes converge. Since PR4 a pushed change is replayed as the user who made it, through the record API, so collection rules, fieldperm and batchguard apply on the hub. Since PR5 the hub resolves concurrent changes by the collection's strategy (`lww`, `hub-wins`, `field-merge`, `hook`) and records them in `_sync_conflicts`.
+**Status: PR6 of 11 (policies, partitions, purge, compaction; conflict strategies since PR5; rule re-evaluation and actor grants since PR4).** A node with `TOKI_SYNC_ROLE=hub|spoke` records every write of the synced collections into a local change log (PR1). Since PR2 a hub can enroll devices and authenticate them (`/api/sync/{enroll,handshake,ping}`). Since PR3 a spoke pushes its changes to the hub, the hub applies them (record level `lww`), and the spoke pulls everything it is missing and applies it; hub and spokes converge. Since PR4 a pushed change is replayed as the user who made it, through the record API, so collection rules, fieldperm and batchguard apply on the hub. Since PR5 the hub resolves concurrent changes by the collection's strategy (`lww`, `hub-wins`, `field-merge`, `hook`) and records them in `_sync_conflicts`. Since PR6 the policies are complete (partitions, view rule on pull), records can be purged for good, and the hub compacts its change log.
 
 ## What exists now
 
@@ -48,7 +48,7 @@ digest = sha256( UPPER(method) | path | host | hub_id | ts | nonce | hex(sha256(
 
 **Abuse limits.** `POST /api/sync/enroll` and `/handshake` have a built-in per-IP limit (20 and 120 requests per minute per address, IPv6 per /64, `429 sync_rate_limited` with `Retry-After`) that does not depend on Settings > Rate limits. Behind a reverse proxy configure the trusted proxy headers in Settings, otherwise all clients share one address.
 
-The answer carries `session_token` (HS256 JWT keyed by the hub `session_secret`, `typ:"toki_sync"`, `sub` node id, 15 min), `expires`, `hub_id`, `hub_epoch`, `server_time`, `clock {ok, offset_ms, max_drift_ms}`, `push_from` (`_sync_nodes.pushed_origin_seq + 1`), `params`, `policies` (the enabled `_sync_policies` rows with `strategy: "lww"`, empty `partition`, `crypto: "ciphertext"` until PR6), `poll_ms` and the fields that later PRs fill and PR2 returns empty: `schema {version: 0, bundles: []}` (PR8), `low_water: 0` (PR6), `keys: []` (PR9), `reservations: []` (PR8), `rebootstrap: false` (PR7). The hub updates `last_seen`, `clock_offset_ms`, `app_version` and `schema_version` of the node (not `profile`).
+The answer carries `session_token` (HS256 JWT keyed by the hub `session_secret`, `typ:"toki_sync"`, `sub` node id, 15 min), `expires`, `hub_id`, `hub_epoch`, `server_time`, `clock {ok, offset_ms, max_drift_ms}`, `push_from` (`_sync_nodes.pushed_origin_seq + 1`), `params`, `policies` (the enabled `_sync_policies` rows with their `strategy`, `partition` and `crypto`), `poll_ms` and the fields that later PRs fill and PR2 returns empty: `schema {version: 0, bundles: []}` (PR8), `low_water` (PR6: highest compacted seq), `keys: []` (PR9), `reservations: []` (PR8), `rebootstrap` (PR6: stale node or cursor below `low_water`; the snapshot is PR7). The hub updates `last_seen`, `clock_offset_ms`, `app_version` and `schema_version` of the node (not `profile`).
 
 **Clock.** The hub computes `offset_ms = server_time - client_time` and `ok = |offset| <= TOKI_SYNC_MAX_DRIFT` (default 5 m). PR2 reports `ok` but does not enforce it (no push exists; enforcement is PR8). The spoke measures `offset = server_time - (t_send + t_recv)/2` with its raw clock, stores it in `_sync_cursors.clock_offset_ms` and `hlc.Clock.SetOffset`, and starts from the stored offset after a restart. Only an offset from a hub-signed time with `|offset| <= 7 days` is applied. When the hub refuses a `ts` outside its window, the signed hub time of that `401` is used once to correct the offset and retry; if the retry fails, the previous offset is restored.
 
@@ -71,8 +71,8 @@ Fields that are not synced (file, password, tokenKey, hidden, derived, policy `e
 | Route | Behaviour |
 | --- | --- |
 | `POST /api/sync/push` | Up to 500 changes or 8 MiB per request (else 413 `sync_batch_too_large`); gzip request bodies are accepted. Changes must be the node's own (`<node>:<origin_seq>`), ascending and contiguous; a first change beyond `pushed_origin_seq+1` or a hole answers 409 `sync_push_gap` with `push_from`. Idempotent through the unique `(node, origin_seq)`: a processed change answers `duplicate` with the stored `hub_seq`, `hash`, `code` and `was` (the original status). Each change (or each `tx` group, all or nothing, no batchguard yet) is applied in its own transaction. Result statuses: `applied`, `merged` (the effective patch differs from the pushed one, see PR5), `superseded` (lost), `parked` (PR5, `hook` strategy: waiting for an admin, final for the ack), `duplicate`, `rejected` with a code (`policy_direction`, `future_hlc`, `tombstoned`, `legal_tombstone`, `orphaned`, `validation_failed`, `unique_violation`, `rule_denied` for hook errors). `acked_through` is the contiguous `pushed_origin_seq`, advanced in the same transaction as the apply. `_sync_nodes.last_seen` is updated. The hub observes the change HLC in its clock after rejecting any HLC more than `TOKI_SYNC_MAX_DRIFT` (5 min) ahead of hub time (`future_hlc`). |
-| `GET /api/sync/pull?after&limit[&wait]` | Rows with `seq` in `(after, head]`: `applied` rows, hub-local rows (see below), and `revert` rows addressed to the node. `limit` default 500, max 1000. `wait` (0-25 s) long-polls until a newer `seq` exists (woken by a notifier on every commit of a synced hub write or push batch). `after` implicitly acks (`pulled_seq`, clamped to the head). `after < low_water` answers 410 `sync_rebootstrap_required` (`low_water` is 0 until PR6). Counter and set fields are sent as absolute values read from the current record; revert rows carry the current full record and the current record clock (op `d` when the record does not exist). `next` is the head when nothing is left, so a node advances past rows it cannot receive. Partition filters, `pull_view_rule` and `evict` are PR6, `fields` carries the field clocks of `field-merge` collections (PR5). A page stops after about 4 MiB (`more: true`, always at least one row) so that it fits the 8 MiB the client reads. Revert rows are delivered whatever the collection direction (a push-only collection must learn that its change was refused). |
-| `POST /api/sync/ack` | `{"pulled_through": N, "digest": {"<collection id>": "<sha256>"}}`. Updates `pulled_seq`. A digest (sha256 over the sorted `(id, hash)` pairs of `_sync_meta`) is compared only when the node has pulled up to the hub head (`digest_checked`), because otherwise it would measure lag; differing collections come back in `digest_mismatch`. Compaction is PR6. |
+| `GET /api/sync/pull?after&limit[&wait]` | Rows with `seq` in `(after, head]`: `applied` rows, hub-local rows (see below), and `revert` rows addressed to the node. `limit` default 500, max 1000. `wait` (0-25 s) long-polls until a newer `seq` exists (woken by a notifier on every commit of a synced hub write or push batch). `after` implicitly acks (`pulled_seq`, clamped to the head). `after < low_water` answers 410 `sync_rebootstrap_required` (`low_water` is set by the compaction of PR6). Counter and set fields are sent as absolute values read from the current record; revert rows carry the current full record and the current record clock (op `d` when the record does not exist). `next` is the head when nothing is left, so a node advances past rows it cannot receive. Partition filters, `pull_view_rule` and `evict` exist since PR6 (see below), `fields` carries the field clocks of `field-merge` collections (PR5). A page stops after about 4 MiB (`more: true`, always at least one row) so that it fits the 8 MiB the client reads. Revert rows are delivered whatever the collection direction (a push-only collection must learn that its change was refused). |
+| `POST /api/sync/ack` | `{"pulled_through": N, "digest": {"<collection id>": "<sha256>"}}`. Updates `pulled_seq`. A digest (sha256 over the sorted `(id, hash)` pairs of `_sync_meta`) is compared only when the node has pulled up to the hub head (`digest_checked`), because otherwise it would measure lag; differing collections come back in `digest_mismatch`. Compaction: see the PR6 section. |
 
 ### Conflicts (lww, design §4.2)
 
@@ -158,7 +158,108 @@ Worked examples of the design (§4.2, §4.4, §4.5) are table tests in `resolve_
 
 **`toki sync conflicts`.** `--open` keeps rows waiting for an admin, `--collection` filters by name or id, `--json` prints `ConflictRow` objects. `--resolve <id> --take hub|incoming|<patch.json> [--note ...]` (hub only, open conflicts only): `hub` writes nothing and sends the node a revert, `incoming` applies the stored pushed patch (for parked changes the real patch from `_changes`; for a field-merge review the fields it dropped), `<file>` applies the JSON patch in the file (use it when the row holds `[encrypted]`). The write is replayed as the ORIGINAL ACTOR of the conflict (`apis.ReplayRecordRequestsFrom`, `@request.context = "sync"`), so collection rules, fieldperm and batchguard apply exactly as for the pushed change; it is captured as an ordinary hub change and delivered to every node by pull, and the originating node additionally gets a revert. If the grant is no longer valid the node's service actor is used; without one the resolution is refused. The row becomes `resolved` with `resolved_by=cli`.
 
-**Compaction note (PR6):** `parked` rows of `_changes` and open conflicts must be kept until resolved.
+**Compaction (PR6):** `parked` rows of `_changes` are never compacted; resolved conflicts are pruned after 90 days, open ones stay.
+
+## Policies, partitions, purge and compaction (PR6)
+
+### `_sync_policies` (design §2.6)
+
+System collection, superusers only, one row per collection (by name or id; two rows that resolve to the same collection are refused).
+
+| Field | Meaning |
+| --- | --- |
+| `collection` | name or id of a non-system, non-view collection |
+| `direction` | `both` (default), `push`, `pull`, `none`. **Auth collections can only be `pull` or `none`.** |
+| `strategy` | `lww` (default), `hub-wins`, `field-merge`, `hook`. Resolved by the hub, see "Conflict strategies" above |
+| `partition` | `"<field> = @node.<param>"` or empty (all records), see below |
+| `field_types` | `{"fee":"counter","tags":"set","ticket_no":"reserve:tickets","email":"include"}`. `counter` needs a number field, `set` a multi select or multi relation, `reserve:<sequence>` a text or number field (accepted now, enforced with PR8) |
+| `exclude` | field names that never sync (unknown names are only a lint warning) |
+| `hook` | WASM module of strategy `hook` |
+| `pull_view_rule` | default **true** when created through the REST API or the CLI (a bool field has no default of its own; a Go caller that saves the record directly must set it): on pull a record is only sent when the collection `viewRule` allows the node's service actor |
+| `trusted` | lets a collection whose `viewRule` is `null` be pulled (see below) |
+| `crypto` | `ciphertext` (default) or `strip` (stored; PR9 uses it) |
+| `order` | integer >= 0, apply order for the snapshot (PR7) |
+| `enabled` | the row only counts when true |
+| `review` | keep automatic `field-merge` conflicts open for review |
+
+**Validation.** Every save on the hub (REST, `toki sync policies set`, Go) runs `OnRecordValidate`: the same checks as `lint`, errors only, reported as field errors (HTTP 400 over REST). A spoke does not validate: it stores the hub's rows as they come, even before the collection exists. Findings that are only warnings: unknown `exclude` field, file fields that are not excluded (files do not sync in v1), `strategy` on a `pull`/`none` policy (nothing is pushed), a typed field that is also excluded, `counter`/`set` under `hub-wins`, a partition field that is not indexed or hidden, `trusted` without a null view rule, a null view rule without `trusted`.
+
+**Cache.** `policyCache` keeps the parsed rows for 5 s and is invalidated when a policy row or any collection changes; a failed reload keeps serving the last good set.
+
+**CLI.**
+
+```
+toki sync policies list [--json]
+toki sync policies set <collection> [--direction d] [--strategy s] [--partition "f = @node.p"] [--field-type f=counter]... [--exclude f]...
+                                    [--hook h] [--crypto c] [--order n] [--enabled=bool] [--review=bool] [--trusted=bool] [--pull-view-rule=bool]
+toki sync policies rm <collection>
+toki sync policies lint [--json]          # exit 1 when there is an error; warnings do not fail
+```
+
+`set` creates the policy (direction `both`, `lww`, enabled, `pull_view_rule` on) or changes only the flags that are passed (`--field-type` and `--exclude` replace the whole list).
+
+### Direction
+
+Push: the hub refuses a change for a collection whose policy is missing, `pull` or `none` with `policy_direction` (a revert row follows). Pull: only `both` and `pull` collections are delivered (revert rows addressed to the node are delivered whatever the direction, so a refused push is undone on the node).
+
+### Partitions (design §2.1, §3.5, §7.1)
+
+A policy with `partition: "branch = @node.branch"` limits a node to the records whose `branch` equals the parameter `branch` of the node (`toki sync enroll --param branch=B12`, stored in `_sync_nodes.params`; the admin can change it later). The field must exist, be a single-value text, number, bool, email, url, select or relation field, must not be excluded and must not be a counter or set. Comparison is by the string form (`12` and `"12"` are equal). A node that has no such parameter gets nothing and may push nothing (fail closed).
+
+- **Hub rows.** Every `_changes` row of a partitioned collection carries `part_old` and `part_new`, the key before and after the change (`""` before a create and after a delete), for hub-local writes, pushes and tx groups (the last change of a record in a group carries the stored key). `_sync_meta.part` holds the current key.
+- **Pull.** The page query drops the rows of other partitions in SQL (`part_new = :p OR part_old = :p`; revert rows and purges are exempt). In the page:
+  - key unchanged inside the partition: the normal row;
+  - `part_old` in, `part_new` out (record left): `{"op":"x","evict":true}`, no data;
+  - `part_new` in, `part_old` out (record entered): the whole current record as op `c` (an update row alone would be ignored by a node that never had the record);
+  - a delete is delivered when `part_old` is in (the spoke keeps a delete tombstone as for any delete).
+- **Push.** A change is refused with `policy_partition` when the record exists on the hub outside the node's partition (read, update or delete of someone else's record, also by guessing its id) or when the record would be outside it after the change (a create without the key, a key set to another value). The check uses the hub state before the change and the patch after it, per change inside a tx group. The revert row of such a refusal carries no data: a record in another partition is reported to the node as an eviction.
+- **Spoke.** Op `x` deletes the local copy and removes the delete tombstone that the replica delete wrote; the record can come back later. No `_changes` row is written.
+
+Records written before a partition was configured have `part_new = ""` and are not delivered to partitioned nodes; changing a partition means a snapshot (PR7) for the nodes concerned.
+
+### `pull_view_rule` and `trusted` (design §7.7)
+
+With `pull_view_rule` on, a non-revert row is sent only when the collection `viewRule` lets the node's service actor see the record (evaluated like a normal view, `@request.context = "sync"`, fieldperm included). Records that fail are omitted (create) or evicted (update: the node may have received them earlier). A restrictive (non-empty) rule makes updates travel as the whole record, because a record can become visible by an update. A collection with a **null** view rule (superusers only) is never pulled unless `trusted` is true, even when the service actor is a superuser; `pull_view_rule = false` switches both checks off. Reverts always use the view rule of the actor.
+
+Limits: visibility is evaluated when a row is sent, so a change of the rule itself, or of data the rule joins, does not retroactively evict or deliver records; the check runs per record, not as one query per collection per page.
+
+### Purge and legal tombstones (design §7.3)
+
+`POST /api/sync/purge` (superuser token) with `{"collection":"items","record":"<id>","reason":"...","legal":true}`, or `toki sync purge <collection> <id> --legal --reason "..."`:
+
+1. Deletes the record (hooks and webhooks of a delete fire once; the capture hook is bypassed) and its `_sync_meta`.
+2. Writes the `legal` tombstone (upgrading a `delete` tombstone). The PR1 triggers make it permanent: it can neither be updated nor deleted, and compaction never prunes it.
+3. Sets `patch='{}'` and `hash=NULL` on **every** `_changes` row of the record (own, rejected, parked, reverts) and clears the JSON copies and the note in `_sync_conflicts`. Later refused pushes of the record are stored without data too.
+4. Appends an op `p` row (`{"reason": ...}`). It is delivered to every node that pulls the collection, whatever its partition (the node may hold the record from earlier).
+
+A spoke that applies `p` deletes the record, writes the legal tombstone, deletes `_sync_meta` and blanks the patches of its own `_changes` rows of the record. A push of `c` or `u` for a tombstoned record is rejected `tombstoned` (delete tombstone) or `legal_tombstone` (purge); a delete tombstone is only an obstacle until it is pruned, a legal one never. Creating the id locally fails with `validation_sync_tombstoned` on hub and spokes. A purge is idempotent (`already: true`), works for ids that never existed (tombstone in advance) and needs a reason. A purge does not reach backups, files or any copy outside the sync log.
+
+### Compaction (design §3.6)
+
+Hourly cron entry `__tokiSyncCompact` -> job kind `sync.compact` through `kernel.Jobs` with `CronKey("sync.compact:<yyyymmddhh>")` (one run per hour even with several processes; without the jobs module it runs inline). `toki sync compact [--vacuum] [--json]` runs it now. Hub:
+
+1. Active nodes with `last_seen` (or creation time) older than `TOKI_SYNC_RETENTION` become `stale` and leave the minimum.
+2. `safe` = the lowest `pulled_seq` of the active nodes (0 when there is none: only the retention deletes then). Delete `_changes` with `seq <= safe` and older than `TOKI_SYNC_MIN_KEEP`, plus everything older than the retention. `parked` rows are never deleted. **`low_water` is set to the highest deleted seq** (monotonic), so a node that acknowledged exactly `safe` can still resume. `hlc_floor` is saved before the delete.
+3. `delete` tombstones older than the retention are pruned (spokes do this too); `legal` never.
+4. Resolved conflicts older than 90 days are deleted.
+
+Spoke: step 3 and `status='acked'` rows older than `TOKI_SYNC_SPOKE_KEEP`.
+
+**Consequences.** `GET /pull?after=N` answers 410 `sync_rebootstrap_required` (with `low_water`) when `N < low_water` and always for a node with status `stale` or `rebootstrap`. The handshake returns `low_water` and `rebootstrap: true` for such nodes (and for a node whose `pull_after` is below `low_water`, which includes a new node that joins a compacted hub). The snapshot that fixes this is PR7: until then the spoke sets `_sync_cursors.state = 'rebootstrap_required'` (shown by `toki sync status` and `Status().State`), logs a warning and **stops its loop**. A `stale` node stays stale (nothing sets it back before PR7). Pending local changes stay in its `_changes`.
+
+### Health
+
+`GET /api/health` with a superuser token adds `data.sync`: `role`, `pending` (spoke: local + pushed rows; hub: head - lowest `pulled_seq` of the active nodes), `low_water`, `head`, `stale_nodes`, and on the hub `active_nodes` and `open_conflicts`. Other callers see no change.
+
+### Env
+
+| Variable | Meaning |
+| --- | --- |
+| `TOKI_SYNC_RETENTION` | `90d`: nodes silent for longer are `stale`; hub changes and `delete` tombstones older than this are deleted |
+| `TOKI_SYNC_MIN_KEEP` | `24h`: acknowledged hub changes are kept at least this long |
+| `TOKI_SYNC_SPOKE_KEEP` | `24h`: acked spoke rows are kept this long (re-push after a hub restore) |
+
+Durations accept Go syntax and a `d` suffix; zero or an invalid value falls back to the default.
 
 ## Env
 
@@ -216,7 +317,7 @@ All in `data.db`, created with `IF NOT EXISTS` at bootstrap when the role is not
 | `_sync_tombstones` | one row per deleted id (`kind = 'delete'`); `kind = 'legal'` rows can never be updated or deleted (trigger `RAISE(ABORT)`); creating a record with a tombstoned id fails with `validation_sync_tombstoned` |
 | `_sync_state` | `node_id`, `hlc_floor`, `schema_version` |
 | `_sync_conflicts` (system collection, superusers only; PR5) | design §2.7: conflict rows of the hub, and on a spoke a local informational copy |
-| `_sync_policies` (system collection, superusers only) | minimal: `collection`, `direction` (`both|push|pull|none`), `field_types` (json), `exclude` (json), `enabled`, and since PR5 `strategy` (`lww|hub-wins|field-merge|hook`, empty = `lww`), `hook` (wasm module name) and `review` (bool). The remaining policy fields arrive in PR6. The cache has a 5 s TTL and is invalidated when a policy row changes. |
+| `_sync_policies` (system collection, superusers only) | the full model of PR6 (see "Policies, partitions, purge and compaction"). The cache has a 5 s TTL and is invalidated when a policy row changes. |
 
 `node_id` is derived from the node key since PR2 (see Identity). Rows written under the PR1 placeholder id (`_changes.node`, `_sync_meta.node`, `_sync_tombstones.node`) are migrated to the derived id in one transaction at the first boot with PR2.
 
@@ -234,6 +335,9 @@ toki sync peers [--json]                                                  # hub:
 toki sync verify [--against-hub] [--json]                                 # per-collection digests, mismatching ids (PR3)
 toki sync conflicts [--open] [--collection c] [--json]                    # list _sync_conflicts (PR5; on a spoke: the hub's answers to its changes)
 toki sync conflicts --resolve <id> --take hub|incoming|<patch.json> [--note ...]   # hub: settle an open conflict
+toki sync policies list|set|rm|lint                                       # hub: the policy model (PR6)
+toki sync purge <collection> <id> --legal --reason "..."                  # hub: erase a record for good (PR6)
+toki sync compact [--vacuum] [--json]                                     # compaction now (PR6)
 ```
 
 `enroll`, `revoke` and `peers` need `TOKI_SYNC_ROLE=hub`, `join` needs `TOKI_SYNC_ROLE=spoke`. `join` requires an https hub url unless `TOKI_SYNC_INSECURE=1`.
@@ -246,9 +350,9 @@ toki sync conflicts --resolve <id> --take hub|incoming|<patch.json> [--note ...]
 
 - Raw SQL writes (`app.DB().NewQuery("UPDATE ...")`) are not captured.
 - Files are not synced; file fields are not in patches or hashes.
-- No compaction: `_changes` grows until PR6 (`low_water` stays 0).
-- Rule re-evaluation and actor grants (PR4), partitions and `evict` (PR6), snapshot bootstrap (PR7), schema bundles, reservations and clock-drift enforcement (PR8), keys (PR9) are not implemented; the handshake returns those fields empty. Spokes need the synced collections created by hand until PR8, and `sync.Client` has no snapshot fallback: a 410 or `rebootstrap` ends the cycle with `ErrRebootstrap`.
+- Compaction (PR6) needs the snapshot bootstrap of PR7 to be useful for nodes that fall behind: they stop with `rebootstrap_required`.
+- Snapshot bootstrap (PR7), schema bundles, reservations and clock-drift enforcement (PR8), keys (PR9) are not implemented; the handshake returns those fields empty. Spokes need the synced collections created by hand until PR8, and `sync.Client` has no snapshot fallback: a 410 or `rebootstrap` ends the cycle with `ErrRebootstrap`, sets the cursor state `rebootstrap_required` and stops the loop.
 - The hub key cannot be rotated yet (`toki sync rotate-hub-key`, design §7.9); a lost hub key means a new hub id and re-enrollment of every node. A node offline past its certificate expiry (365 d, renewed by the handshake within the last 30 d) must enroll again.
 - Several hub processes behind one URL do not share the in-memory nonce cache; the persisted `sig_ts_floor` still blocks replays of an older request.
 - A derived-only update (computed rollup) or a save without changes bumps the `updated` autodate locally without a change row, so `updated` and the stored hash can differ between nodes; `toki sync verify` reports it (see Push, pull and the client loop above).
-- Known gaps, planned: a policy refers to a collection or field by name (rename stops capture until the policy is fixed; no `field_types`/`exclude` name validation until PR6); `counter` deltas use float64 subtraction (exact for integers); cascade children and hook-written rows are attributed to `node`, not to the request user; a panic inside a transaction leaks one `txs` map entry; `toki sync status` runs `Init` in a second process (a first start can race on `node_id`).
+- Known gaps, planned: a policy refers to a collection or field by name (rename stops capture until the policy is fixed; `field_types` names are validated on save, `exclude` names only by lint); `counter` deltas use float64 subtraction (exact for integers); cascade children and hook-written rows are attributed to `node`, not to the request user; a panic inside a transaction leaks one `txs` map entry; `toki sync status` runs `Init` in a second process (a first start can race on `node_id`).

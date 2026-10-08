@@ -68,8 +68,7 @@ func (c *Client) pullAll(ctx context.Context, res *Result) error {
 		}
 		if err != nil {
 			if IsCode(err, proto.CodeRebootstrap) {
-				c.setState("rebootstrap_required")
-				c.emit(Event{Type: EventRebootstrap})
+				c.markRebootstrap(0)
 				return ErrRebootstrap
 			}
 			return err
@@ -108,4 +107,21 @@ func setPullAfter(db dbx.Builder, hubID string, n int64) error {
 	_, err := db.NewQuery("UPDATE _sync_cursors SET pull_after={:n} WHERE hub_id={:h} AND pull_after<{:n}").
 		Bind(dbx.Params{"n": n, "h": hubID}).Execute()
 	return err
+}
+
+// markRebootstrap records that the hub no longer holds the changes this node is
+// missing (compaction, a stale node): the state is `rebootstrap_required`, shown
+// by Status() and `_sync_cursors.state`, and the loop stops until the snapshot
+// bootstrap (PR7) or an operator takes over.
+func (c *Client) markRebootstrap(lowWater int64) {
+	c.setState("rebootstrap_required")
+	if c.o.App != nil {
+		msg := "the hub requires a re-bootstrap: this node is behind the retained changes (low_water " + strconv.FormatInt(lowWater, 10) + ")"
+		_, _ = c.o.App.NonconcurrentDB().NewQuery("UPDATE _sync_cursors SET state='rebootstrap_required', last_error={:e}").
+			Bind(dbx.Params{"e": msg}).Execute()
+	}
+	if c.o.Logger != nil {
+		c.o.Logger.Warn("sync: the hub requires a re-bootstrap; the client loop stops (snapshot bootstrap is not available yet)", "low_water", lowWater)
+	}
+	c.emit(Event{Type: EventRebootstrap})
 }
