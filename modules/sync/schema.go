@@ -64,6 +64,24 @@ var ddl = []string{
 	`CREATE TRIGGER IF NOT EXISTS trg__sync_tomb_legal_upd BEFORE UPDATE ON _sync_tombstones
   WHEN old.kind = 'legal' BEGIN SELECT RAISE(ABORT, 'legal tombstone is permanent'); END`,
 
+	`CREATE TABLE IF NOT EXISTS _sync_cursors (
+  hub_id          TEXT PRIMARY KEY,
+  hub_url         TEXT NOT NULL,
+  hub_pub         TEXT NOT NULL DEFAULT '',
+  hub_epoch       TEXT NOT NULL DEFAULT '',
+  node_id         TEXT NOT NULL,
+  cert            TEXT NOT NULL,
+  pull_after      INTEGER NOT NULL DEFAULT 0,
+  acked_origin    INTEGER NOT NULL DEFAULT 0,
+  schema_version  INTEGER NOT NULL DEFAULT 0,
+  clock_offset_ms INTEGER NOT NULL DEFAULT 0,
+  snapshot_id     TEXT NOT NULL DEFAULT '',
+  snapshot_after  TEXT NOT NULL DEFAULT '',
+  last_ok         TEXT,
+  last_error      TEXT NOT NULL DEFAULT '',
+  state           TEXT NOT NULL DEFAULT 'idle'
+)`,
+
 	`CREATE TABLE IF NOT EXISTS _sync_state (
   key   TEXT PRIMARY KEY,
   value TEXT

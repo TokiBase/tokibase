@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	stdsync "sync"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/modules/sync/hlc"
+	"github.com/tokibase/tokibase/modules/sync/proto"
 	"github.com/tokibase/tokibase/tools/hook"
 )
 
@@ -71,6 +73,12 @@ type Module struct {
 
 	pol policyCache
 
+	// hub is the hub key material (role hub), spoke the node keys (role spoke).
+	hub   *hubIdentity
+	spoke *proto.Identity
+	// nonces guards the signed handshake against replays (hub).
+	nonces nonceCache
+
 	// stash maps the record of a client request to its actor (see actor.go).
 	stash stdsync.Map // *core.Record -> string
 	// txs holds the tx group state per open transaction.
@@ -118,6 +126,7 @@ func RegisterRole(app core.App, role Role) *Module {
 	})
 	m.bindCapture()
 	m.pol.bind()
+	m.bindRoutes()
 	return m
 }
 
@@ -148,13 +157,38 @@ func (m *Module) Init() error {
 		return err
 	}
 	if !ok || id == "" {
-		// placeholder identity; the key-derived node id arrives with PR2
+		// placeholder identity until the key-derived id below replaces it
 		id = randomNodeID()
 		if err := st.Set(keyNodeID, id); err != nil {
 			return err
 		}
 	}
 	m.nodeID.Store(id)
+
+	switch m.role {
+	case RoleHub:
+		if err := EnsureNodesCollection(m.app); err != nil {
+			return err
+		}
+		h, err := loadHubIdentity(st)
+		if err != nil {
+			return err
+		}
+		m.hub = h
+		// the hub's own writes are attributed to the hub id
+		if err := m.adoptNodeID(h.id); err != nil {
+			return err
+		}
+	case RoleSpoke:
+		key, err := proto.LoadOrCreateIdentity(filepath.Join(m.app.DataDir(), NodeKeyFile), os.Getenv(EnvNodeKey))
+		if err != nil {
+			return err
+		}
+		m.spoke = key
+		if err := m.adoptNodeID(key.NodeID()); err != nil {
+			return err
+		}
+	}
 
 	var maxHLC int64
 	if err := m.app.DB().NewQuery("SELECT COALESCE(MAX(hlc),0) FROM _changes").Row(&maxHLC); err != nil {
