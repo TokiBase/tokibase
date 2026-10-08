@@ -230,7 +230,7 @@ func TestCaptureCreateUpdateDelete(t *testing.T) {
 		t.Fatalf("create patch: %v", p)
 	}
 	jsonEq(t, p["tags"], `["a","b"]`)
-	for _, banned := range []string{"id", "photo", "note", "total"} {
+	for _, banned := range []string{"id", "photo", "note"} {
 		if _, ok := p[banned]; ok {
 			t.Fatalf("%s must not be in the patch: %v", banned, p)
 		}

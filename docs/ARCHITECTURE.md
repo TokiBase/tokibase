@@ -76,6 +76,20 @@ Exit gate: all modules on by default in profile `solo`, failover drill RTO under
 - [x] mcp (PR 2): streamable HTTP transport at `/api/mcp` (`TOKI_MCP=on`, bearer agent keys), `@request.auth.kind` (`guest|user|superuser|agent`) in rules with agents evaluated as `_agents` auth, sandbox mode (`--sandbox`, writes rolled back), `expires` (`docs/modules/mcp.md`). Copy-of-`pb_data` sandbox deferred.
 - [x] rule engine (PR 2): resolver/emitter split (`rule.Ref`, `rule.Dialect`, SQLite dialect byte-identical to the legacy SQL, differential corpus unchanged) and a PostgreSQL emitter/dialect (`kernel/rule/pg`, tested by golden SQL + structural parity, no PostgreSQL runtime). Unsupported on PostgreSQL: table valued joins (`:each`, multi-value relation hops) and `strftime`. In-memory evaluator is a later PR (`docs/RULE_ENGINE.md`).
 
+## Phase 3 (in progress): sync (`docs/SYNC_DESIGN.md`, `docs/modules/sync.md`)
+
+- [x] PR1 capture + HLC + `_changes` (no network): `modules/sync/hlc`, kernel `SyncOrigin`/`DerivedFields`/`RequestInfoContextSync`, `_changes`/`_sync_meta`/`_sync_tombstones`/`_sync_state`, capture hooks (patch diff, canonical hash, tombstone guard, tx groups), minimal `_sync_policies`, `toki sync status`, `no_sync`, `TOKI_SYNC_ROLE=off|hub|spoke` (default off).
+- [ ] PR2 identity + handshake: hub key, enrollment, device cert, signed handshake, node session token, `_sync_nodes`/`_sync_cursors`, `toki sync enroll/join/revoke/peers`, clock offset measurement.
+- [ ] PR3 push/pull + lww + client loop: `/push`, `/pull`, `/ack`, apply, lww, revert rows, spoke pull apply with rebase, backoff loop, `@sync` realtime poke, e2e `tests/e2e/sync.sh`.
+- [ ] PR4 rule re-evaluation + actors + audit: `apis.ReplayRecordRequests`, actor grants, `kernel.SessionActive`, autodate preservation, audit sink, webhooks/wasm skip `IsSyncReplica`.
+- [ ] PR5 conflict strategies + typed fields + hook: field clocks, `field-merge`, `hub-wins`, counter/set replay, `_sync_conflicts`, `toki sync conflicts`, `OnSyncConflictFor`, wasm `sync.conflict.*`.
+- [ ] PR6 policies, partitions, tombstones, compaction: full `_sync_policies` validation, direction checks, partition evict, `pull_view_rule`, purge/legal tombstones, compaction cron, `stale` nodes, 410.
+- [ ] PR7 snapshot bootstrap + re-bootstrap: `/snapshot`, resumable spoke bootstrap, local change export and rebase, hub epoch, `toki sync rebootstrap`.
+- [ ] PR8 reservations, schema bundles, drift: `_sync_sequences`/`_sync_reservations`, `/reserve`, schema versioning and bundles, spoke schema lock, drift enforcement and re-stamp.
+- [ ] PR9 crypto ciphertext sync: `kernel.SyncKeyProvider`, wrapped DEK export/import, `crypto: strip`.
+- [ ] PR10 nano/edge integration + parking prototype: `embed.Sync`, `mobile` facade, conditions/backoff, size measurement, parking e2e (48 h offline, converge with zero loss).
+- [ ] PR11 hardening / QC: fuzz decoders, race tests, rate limits, metrics in `/api/health`, threat-model tests, chaos run.
+
 ## Size budgets (stripped; CI enforces the numbers in `profiles.txt`: solo 46 MiB, team 46 MiB, no_ui 43 MiB, cluster (solo+replica_s3) 55 MiB, edge 28 MiB, nano 24 MiB). The full-featured `solo` build has reached the 45 MB design budget with passkey (+2.1 MB, go-webauthn/TPM/CBOR), mcp (+2 MB) and push; the `edge`/`nano` profiles exclude these through build tags (`no_mcp`, `no_passkey`, `no_push`, `no_webhooks`, `no_crypto`, ... see `docs/PROFILES.md`).
 
 | Profile | Design budget | Measured linux/amd64 (arm64) | CI budget |
