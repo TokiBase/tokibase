@@ -20,6 +20,8 @@ Dependency rules, enforced by `depguard` in CI:
 2. Modules import `kernel` only; modules never import each other.
 3. `server` imports `kernel` and modules.
 
+Measured capacity on a copy of real data: [CAPACITY.md](CAPACITY.md).
+
 ## Phase 0 (current)
 
 Goal: profile `solo` behaves identically to PocketBase v0.40.4.
