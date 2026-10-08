@@ -441,3 +441,42 @@ func TestFillerAdvancesThePushSequence(t *testing.T) {
 		t.Fatal("the change after the filler must apply")
 	}
 }
+
+func TestAutoHealRebootstrapsAfterTwoDigestMismatches(t *testing.T) {
+	h, a, b := hubFixture(t)
+	for i := 0; i < 6; i++ {
+		h.create(t, map[string]any{"title": "r" + strconv.Itoa(i)})
+	}
+	a.sync(t)
+	b.sync(t)
+	requireConverged(t, h, a, b)
+	// the metadata of one record drifts (a raw write the capture never saw)
+	if _, err := a.app.NonconcurrentDB().NewQuery("UPDATE _sync_meta SET hash=randomblob(32) WHERE rowid=(SELECT MIN(rowid) FROM _sync_meta WHERE collection={:c})").
+		Bind(dbx.Params{"c": h.items.Id}).Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, mm := digestOf(t, a.app, "items"); len(mm) == 0 {
+		t.Fatal("the corruption must be visible")
+	}
+	a.c = a.client(t, h, func(o *client.Options) {
+		o.Backend = backend{a.m}
+		o.Interval = 30 * time.Millisecond
+		o.DigestInterval = time.Millisecond
+		o.AutoHeal = true
+		o.NoPoke = true
+	})
+	a.c.Start(ctxb)
+	defer a.c.Stop(ctxb)
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if _, _, mm := digestOf(t, a.app, "items"); len(mm) == 0 && cursorOf(t, a.spokeEnv).State == client.StateIdle {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the auto-heal did not repair the node: %+v", cursorOf(t, a.spokeEnv))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	b.sync(t)
+	requireConverged(t, h, a, b)
+}
