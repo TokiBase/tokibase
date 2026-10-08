@@ -421,7 +421,6 @@ func (m *Module) Reconcile(ctx context.Context) (ReconcileReport, error) {
 			rep.Errors++
 			continue
 		}
-		rep.Checked++
 		if (st.State == StatusRefunded || st.State == StatusPartiallyRefunded) && st.RefundedAmount > int64(r.GetInt("refunded_amount")) {
 			if err := m.applyStatus(r.Id, st, "reconcile"); err != nil {
 				rep.Errors++

@@ -114,6 +114,8 @@ func (p *Provider) accessToken(ctx context.Context) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.token != "" && p.now().Before(p.expire) {
+		tok := p.token
+		p.tokSnap.Store(&tok)
 		return p.token, nil
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.base+"/v1/oauth2/token", strings.NewReader("grant_type=client_credentials"))
