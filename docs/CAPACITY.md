@@ -1,5 +1,7 @@
 # Capacity (measured)
 
+The tables under "Results" and "Findings" are the first run (binary `4a848155`). The section "After the fixes" repeats the affected scenarios on the same host and data after `perf/memory-wal-logs`; findings 1, 3, 4 and 5 below are resolved there.
+
 Measured with the harness in `tests/load` against a COPY of the real FitGymRun `pb_data`. One run, one host, one
 binary: treat the numbers as an order of magnitude, not as a guarantee. Not part of CI.
 
@@ -91,7 +93,71 @@ CLI backup and verify slow reads by 6-16 % and p99 by up to 1.3x; no read failed
 253 req/s average (min 224, max 299), 0 failures, p50 12 ms, per-minute p99 between 253 and 430 ms; p99 of minutes 1-3 was 367 ms and of minutes 18-20 was 266 ms (no drift). Create p99 177 ms; SSE connect p99 193 ms; event fan-out p99 179 ms (14,473 sessions, all got an event).
 Server RSS: 310 MB (minute 1), 384 MB (minute 20). `data.db-wal` grew linearly from 61 MB to 1.03 GB (about 50 MB/min), see below. Per-minute table in the results file.
 
-## Findings and claims check
+## After the fixes (branch `perf/memory-wal-logs`)
+
+Same host (`tokibuild`), same FGR copy, same harness (`tests/load/run.sh`, port 8098), 2026-10-08 08:36-09:15 UTC. The host was not idle: other jobs kept the load average at 11-19 at the start of every case, so single numbers move by +-10 % (the same pool size measured twice gave 186-213 req/s at 200 clients). Raw reports: `tests/load/results/2026-10-08-tokibuild-after-*.md`, `...-bk0.md`.
+
+### Summary
+
+| anomaly | before | after |
+| --- | --- | --- |
+| RSS, read-list 50 clients | 128 -> 818 MB | 82 -> 369 MB |
+| RSS, read-list 200 clients | 818 -> 1496 MB (peak 1567) | 369 -> 392 MB (peak 411) |
+| read-list 200 clients, req/s / p99 | 160 / 2585 ms | 199 / 2267 ms |
+| RSS, read-list 500 clients | 1496 -> 1563 MB | 392 -> 438 MB (peak 453) |
+| RSS peak during backup-under-load | 2414 MB | 607-636 MB (backup + 200 clients) |
+| `data.db-wal`, 20 min mixed soak | 61 MB -> 1032 MB, linear | sawtooth, maximum 257 MB, truncated every 5-6 min |
+| mixed soak throughput / p99 | 253 req/s / 295 ms (min 1) | 284 req/s / 224 ms (min 1: 429) |
+| `POST /api/backups`, 200 clients, `auxiliary.db` 2.4 GB | no answer in 120 s (76 s when waiting longer, see below) | 106 s while the log cap was still pruning that 2.4 GB; 9.5 s once `auxiliary.db` is at the cap |
+| `toki backup create`, same | 46.4 s | 10.3 s at the cap |
+| `auxiliary.db` live size | 143 MB -> 2.5 GB in one hour | held at 410-512 MB (`TOKI_LOGS_MAX_MB`) |
+
+### 1. Memory
+
+Measured with `LOAD_SERVER_ENV` (read-list, 30 s per case, RSS after the case; req/s is +-10 % noise). "unindexed" is the FGR schema as is.
+
+| max conns | `cache_size` | `temp_store` | RSS 50 / 200 clients (MB) | req/s 50 / 200 |
+| --- | --- | --- | --- | --- |
+| 120 (before) | 32000 KB | memory | 859 / 1498 | 223 / 199 |
+| 120 | 8192 KB | memory | 803 / 1467 | 214 / 197 |
+| 48 | 32000 KB | memory | 705 / 701 | 229 / 209 |
+| 48 | 8192 KB | file | 660 / 670 | 228 / 200 |
+| 48 | 2048 KB | file | 507 / 527 | 211 / 169 |
+| 48 | 8192 KB | file, soft heap limit 64 MB | 662 / 668 | 192 / 176 |
+| 24 | 8192 KB | memory | 373 / 393 | 187 / 204 |
+| 24 | 8192 KB | file | 371 / 396 | 247 / 214 |
+| 24 | 4096 KB | file | 347 / 367 | 177 / 192 |
+| 16 | 8192 KB | file | 277 / 301 | 215 / 186 |
+| 12 | 8192 KB | file | 232 / 250 | 192 / 198 |
+
+- The suspected `cache_size` is not the main cause: 32 -> 8 MB changes RSS by 4-5 %. `temp_store` and the SQLite soft heap limit did not change RSS either.
+- The pool size is the lever: RSS is about 80 MB + 12 MB per busy connection, because the unindexed `sort=-created` list builds a 7-12 MB sort in every running query. The queries are CPU bound (12 cores), so 12 connections give the same throughput as 120; fewer connections only shorten the queue inside SQLite.
+- Defaults now: pool `2 x CPUs` between 16 and 120 (24 here), `cache_size` 8 MB, `temp_store` memory. `TOKI_DB_MAX_CONNS`, `TOKI_DB_CACHE_KB`, `TOKI_DB_TEMP_STORE`, `TOKI_DB_HEAP_MB`, `TOKI_DB_MMAP_MB` override them ([PROFILES.md](PROFILES.md), "Sizing for a 1 GB VPS"). Result with the defaults: **392 MB at 200 clients** (target 512 MB), 199 req/s (before 160, same noise).
+- Not done: a shared cache budget across connections (SQLite has no shared page cache budget for private connections; the product `max conns x cache_size` is the bound), and the RSS stays after the load stops (the allocator keeps the pages: 392 MB after, 369 MB before the next case).
+- With the `created` indexes of finding 2 (below) the same 200 clients drive 7-8x the throughput, and RSS rises to 553 MB because the Go heap now serves 1100-1700 responses/s. `GOMEMLIMIT=350MiB` kept it at 514 MB at 200 clients with 1696 req/s. Set `GOMEMLIMIT` on small hosts.
+
+### 2. WAL
+
+`modules/store/sqlite/walmaint.go`: `kernel` cron `__tokiWALMaintain__` runs every minute on `data.db` and `auxiliary.db` a `PRAGMA wal_checkpoint(PASSIVE)` on a pooled read connection and, when the WAL file is larger than `TOKI_WAL_MAX_MB` (default 256), a `wal_checkpoint(TRUNCATE)` on the single write connection (writers are held back, readers on old snapshots finish within the 15 s attempt timeout while new readers already read the database file; up to 3 attempts with backoff). The cause is as suspected: the automatic checkpoint is PASSIVE, it can copy frames but never reset the log while a reader is always active. Counters (sizes, runs, escalations, failures, last error) and the pool state are in `GET /api/health` for superusers (`data.db.data.wal`, `data.db.auxiliary.wal`, `...pool`). Skipped while walreplica is active.
+
+Soak (20 min, same mix as before): `data.db-wal` per minute 37, 63, 112, 159, 211, **8**, 67, 117, 117, 134, 197, 257, **9**, 70, 129, 189, 251, **7**, 63, 112 MB. Maximum 257 MB (threshold 256 plus one minute of writes, about 50 MB/min) against 1032 MB before; no write failed, p99 did not drift (x0.94 between minutes 1-3 and 18-20). A unit test (`TestMaintainWALWithOverlappingReaders`) reproduces the starvation with three overlapping readers.
+
+### 3. API backup under load
+
+Before, measured again on the code of this branch with the log cap switched off (`TOKI_LOGS_MAX_MB=0`, `auxiliary.db` 2.4 GB) and a client timeout of 15 min: CLI backup 53.4 s, verify 30.8 s, `POST /api/backups` **76.5 s** (204). So it did finish, it was 1.4x the CLI, and the original 120 s client timeout was crossed because of the 2.3 GB `auxiliary.db` (`VACUUM INTO` of it plus zipping 2.3 GB of mostly request logs) on a host whose cores were all busy with the 200 clients. It was not the checkpoint (the final `TRUNCATE` is bounded by the 10 s busy timeout and `VACUUM INTO` takes no checkpoint) and not the backup lock. The fix is the size of `auxiliary.db` plus an opt-in non-blocking call:
+
+- With `auxiliary.db` at the cap (live 480 MB): CLI create 10.3 s (was 46.4), verify 5.5 s (was 38.0), **API 9.5 s** (was > 120 s), reads during the API backup 159 req/s against 164 baseline, p99 x1.1. Zip 90 MB (was 364 MB).
+- Starting from a 2.4 GB `auxiliary.db` with the cap on, the first minutes prune about 3 million rows in 10,000 row statements (it competes with the log writer), and the API backup took 106 s in that window; this is a one-time convergence after upgrading. The file itself keeps its size (free pages are reused); the backup copy (`VACUUM INTO`) is compact. To shrink the file run the logs vacuum once (settings, logs, "Vacuum" or `AuxVacuum()`).
+- `POST /api/backups?async=true` (or header `Prefer: respond-async`) returns `202` with `{state, name, startedAt}` immediately and `GET /api/backups/status` (superuser) reports `running`, `done` or `failed`. Without the opt-in the call is unchanged (204 when done). The job is a goroutine of the server, not a `kernel.Jobs` job: the durable queue is optional (`TOKI_JOBS=off`, nano) and re-running a half-finished multi-minute backup after a crash is not wanted. See `docs/COMPAT.md`.
+
+### 4. Logs and indexes
+
+- `TOKI_LOGS_MAX_MB` (default 512, `0` = off): the cron `__tokiLogsSizeCap__` (every minute) deletes the oldest `_logs` rows by insertion order while the live size of `auxiliary.db` (pages minus free list) is above the cap, down to 80 % of it. Measured: 2.4 GB inflated + 700 MB soak start -> live size 424 MB, 689k rows, file 859 MB. It is a size cap on the whole `auxiliary.db` (other auxiliary tables are small), on top of `logs.maxDays`; with `logs.maxDays = 0` nothing is logged and nothing pruned.
+- `TOKI_LOGS_SAMPLE_OK=N` (default 1 = all) keeps 1 of N successful GET request logs; errors, writes and non-GET requests are always logged.
+- `toki db advise [--json] [--min-records N] [--no-logs]` lists the unindexed `sort`/`filter` fields from the schema (autodate `created`/`updated`, single relation fields) and from the slow `GET .../records` request logs, with the `CREATE INDEX` statement. On the FGR copy it reports 26 findings; with `--min-records 5000`: `created` and `updated` of `fgr_run_event_changes` and `fgr_workout_exercises`, `fgr_workout_exercises.exercise` (filter), and `fgr_workout_exercises.order` seen in slow requests. `fgr_notifications.created` (3463 records) is below that threshold.
+- The index is the biggest single lever for reads. With an index on `created` in the three load collections (`CREATE INDEX ... (created)`, nothing else changed), read-list gave **1611 req/s at 50 clients (p50 26 ms, was 205 req/s, 237 ms)** and 1143-1696 req/s at 200 clients (p50 109-153 ms, was 199 req/s, 917 ms). Add the indexes that `db advise` suggests to the FGR schema.
+
+## Findings and claims check (original run, before the fixes)
 
 1. **README says `solo` is "a single binary on a 1 GB VPS".** Contradicted for this dataset under concurrent reads: RSS 818 MB at 50 clients, 1.5 GB at 200, 2.4 GB during backup-under-load (idle: 128 MB). Cause: `cache_size(-32000)` (32 MB) per SQLite connection with a pool of up to 120 connections (`kernel/base.go` `DefaultDataMaxOpenConns`) plus `temp_store(MEMORY)` for the sorts. A 1 GB host needs a smaller `DataMaxOpenConns`; not verified here.
 2. **Read throughput is bounded by unindexed sorts in the FGR schema, not by the kernel.** A single `fgr_workout_exercises` list takes 4.3 ms without sort and 15.6 ms with `sort=-created` (full scan plus temp b-tree: `EXPLAIN QUERY PLAN` shows `SCAN` and `USE TEMP B-TREE FOR ORDER BY`, no index on `created`). With the sort, about 27 ms of CPU per request. Not compared with upstream PocketBase (no PocketBase binary was run).
