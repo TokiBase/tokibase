@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 
 	qrcode "github.com/skip2/go-qrcode"
 )
@@ -37,6 +38,8 @@ type Builder struct {
 	// QRRaster makes QR emit a raster image instead of the native GS ( k
 	// command, for printers without native QR support.
 	QRRaster bool
+
+	hadCut, hadDrawer bool
 }
 
 // New returns a Builder that encodes text with cp.
@@ -86,10 +89,10 @@ func (b *Builder) Bold(on bool) *Builder {
 func (b *Builder) Feed(n int) *Builder { return b.raw(ESC, 'd', byte(clamp(n, 0, 255))) }
 
 // Cut feeds to the cutting position and makes a partial cut (GS V 66 0).
-func (b *Builder) Cut() *Builder { return b.raw(GS, 'V', 66, 0) }
+func (b *Builder) Cut() *Builder { b.hadCut = true; return b.raw(GS, 'V', 66, 0) }
 
 // Drawer pulses cash drawer pin 2 (ESC p 0 25 250: 50 ms on, 500 ms off).
-func (b *Builder) Drawer() *Builder { return b.raw(ESC, 'p', 0, 25, 250) }
+func (b *Builder) Drawer() *Builder { b.hadDrawer = true; return b.raw(ESC, 'p', 0, 25, 250) }
 
 // Text appends s encoded in the current codepage. Runes outside it become '?'.
 // Line breaks in s are sent as LF; carriage returns are dropped.
@@ -116,7 +119,7 @@ func (b *Builder) QR(data string, size int, level QRLevel) error {
 		b.Raster(bm)
 		return nil
 	}
-	if len(data) > 7089 {
+	if len(data) > qrNativeMax[clamp(int(level), 0, 3)] {
 		return ErrQRTooLong
 	}
 	b.raw(GS, '(', 'k', 4, 0, 0x31, 0x41, 0x32, 0)          // model 2
@@ -128,6 +131,13 @@ func (b *Builder) QR(data string, size int, level QRLevel) error {
 	b.raw(GS, '(', 'k', 3, 0, 0x31, 0x51, 0x30) // print
 	return nil
 }
+
+// maxRasterWidth is the widest QR image (80 mm paper at 203 dpi is 576 dots).
+const maxRasterWidth = 832
+
+// qrNativeMax is the byte capacity of a version 40 QR code per error
+// correction level (L, M, Q, H).
+var qrNativeMax = [4]int{2953, 2331, 1663, 1273}
 
 // Bitmap is a 1 bit image, row-major, MSB first, rows padded to bytes.
 type Bitmap struct {
@@ -162,6 +172,9 @@ func QRBitmap(data string, level QRLevel, scale, quiet int) (Bitmap, error) {
 	q.DisableBorder = true
 	m := q.Bitmap()
 	w := (len(m) + 2*quiet) * scale
+	if w > maxRasterWidth {
+		return Bitmap{}, fmt.Errorf("escpos: qr image is %d dots wide, the limit is %d (use a smaller size)", w, maxRasterWidth)
+	}
 	rb := (w + 7) / 8
 	bm := Bitmap{W: w, H: w, Data: make([]byte, rb*w)}
 	for y := 0; y < w; y++ {
@@ -207,8 +220,13 @@ func (b *Builder) Barcode(kind, data string) error {
 				return fmt.Errorf("escpos: code128 character %q not printable ASCII", data[i])
 			}
 		}
-		b.raw(GS, 'k', 73, byte(len(data)+2), '{', 'B')
-		b.buf.WriteString(data)
+		// a literal '{' is sent as "{{" (ESC/POS code set escape)
+		esc := strings.ReplaceAll(data, "{", "{{")
+		if len(esc) > 253 {
+			return errors.New("escpos: code128 data is too long after escaping")
+		}
+		b.raw(GS, 'k', 73, byte(len(esc)+2), '{', 'B')
+		b.buf.WriteString(esc)
 	case EAN13:
 		if len(data) != 12 && len(data) != 13 {
 			return errors.New("escpos: ean13 needs 12 or 13 digits")

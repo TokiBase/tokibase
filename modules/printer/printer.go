@@ -4,12 +4,14 @@ package printer
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"time"
 
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/internal/edgeguard"
 	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/hook"
 )
@@ -54,19 +56,28 @@ type Module struct {
 
 	// tunables (tests override them)
 	WaitDelay time.Duration
-	Now       func() time.Time
+	// LockWait is how long a job waits for the per-printer lock.
+	LockWait time.Duration
+	// MaxWaits bounds the paper polls of one job.
+	MaxWaits int
+	Now      func() time.Time
 	// Open opens the transport of a printer (default: devio).
 	Open func(ctx context.Context, p *Printer) (io.ReadWriteCloser, error)
 
 	mu     sync.Mutex
-	locks  map[string]*sync.Mutex
+	locks  map[string]chan struct{}
 	status map[string]PrinterStatus
+	// noStatus remembers printers that did not answer DLE EOT, until the time.
+	noStatus map[string]time.Time
+
+	thr *edgeguard.Throttle // per actor / per IP, POST /api/print
 }
 
 // New creates a module without binding any hook (CLI and tests).
 func New(app core.App) *Module {
-	m := &Module{app: app, WaitDelay: DefaultWaitDelay, Now: time.Now,
-		locks: map[string]*sync.Mutex{}, status: map[string]PrinterStatus{}}
+	m := &Module{app: app, WaitDelay: DefaultWaitDelay, LockWait: DefaultLockWait, MaxWaits: MaxWaits, Now: time.Now,
+		locks: map[string]chan struct{}{}, status: map[string]PrinterStatus{}, noStatus: map[string]time.Time{},
+		thr: edgeguard.NewThrottle(ratePerMin(), time.Minute)}
 	m.Open = m.openTransport
 	return m
 }
@@ -156,15 +167,40 @@ func Register(app core.App) *Module {
 	return m
 }
 
-func (m *Module) lockFor(name string) *sync.Mutex {
+// lockFor returns the one-slot semaphore of a printer.
+func (m *Module) lockFor(name string) chan struct{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l := m.locks[name]
 	if l == nil {
-		l = &sync.Mutex{}
+		l = make(chan struct{}, 1)
 		m.locks[name] = l
 	}
 	return l
+}
+
+// errPrinterBusy is returned when the printer lock is not free in time.
+var errPrinterBusy = errors.New("printer is busy with another job")
+
+// acquire takes the printer lock. It gives up when ctx ends or LockWait
+// passes, so a stuck printer never holds more than its own worker.
+func (m *Module) acquire(ctx context.Context, name string) (release func(), err error) {
+	l := m.lockFor(name)
+	select {
+	case l <- struct{}{}:
+		return func() { <-l }, nil
+	default:
+	}
+	t := time.NewTimer(m.LockWait)
+	defer t.Stop()
+	select {
+	case l <- struct{}{}:
+		return func() { <-l }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-t.C:
+		return nil, errPrinterBusy
+	}
 }
 
 func (m *Module) setStatus(name, state, detail string) {

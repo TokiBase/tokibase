@@ -33,19 +33,29 @@ const (
 	// Audit actions.
 	AuditJob  = "print.job"
 	AuditDead = "print.dead"
+	// AuditUnconfirmed: the data was written but the printer reported a fault
+	// afterwards; the job is not resent.
+	AuditUnconfirmed = "print.unconfirmed"
+	// AuditRetry: a person queued a job again.
+	AuditRetry = "print.retry"
+	// AuditStuck: a job waited too long for paper.
+	AuditStuck = "print.stuck"
 
 	// Job states.
 	StateQueued   = "queued"
 	StatePrinting = "printing"
 	StateWaiting  = "waiting_paper"
 	StateDone     = "done"
-	StateFailed   = "failed"
-	StateDead     = "dead"
+	// StateUnconfirmed: written completely, then the printer reported a fault.
+	// It is not resent automatically; Retry reprints it.
+	StateUnconfirmed = "done_unconfirmed"
+	StateFailed      = "failed"
+	StateDead        = "dead"
 
 	timeLayout = "2006-01-02 15:04:05.000Z"
 )
 
-var jobStates = []string{StateQueued, StatePrinting, StateWaiting, StateDone, StateFailed, StateDead}
+var jobStates = []string{StateQueued, StatePrinting, StateWaiting, StateDone, StateFailed, StateDead, StateUnconfirmed}
 
 var (
 	errNotFound = errors.New("not found")
@@ -78,6 +88,7 @@ func ensureCollections(app core.App) error {
 			&core.BoolField{Name: "enabled"},
 			&core.BoolField{Name: "default"},
 			&core.NumberField{Name: "timeout_ms", OnlyInt: true, Min: floatPtr(0)},
+			&core.NumberField{Name: "status_timeout_ms", OnlyInt: true, Min: floatPtr(0)},
 			&core.AutodateField{Name: "created", OnCreate: true},
 			&core.AutodateField{Name: "updated", OnCreate: true, OnUpdate: true},
 		)
@@ -122,11 +133,60 @@ func ensureCollections(app core.App) error {
 			&core.AutodateField{Name: "created", OnCreate: true},
 			&core.AutodateField{Name: "updated", OnCreate: true, OnUpdate: true},
 		)
-		c.AddIndex("idx_toki_print_jobs_idem", true, "idempotency_key", "idempotency_key != ''")
+		c.AddIndex("idx_toki_print_jobs_idem", true, "actor, idempotency_key", "idempotency_key != ''")
 		c.AddIndex("idx_toki_print_jobs_state", false, "state, updated", "")
 		if err := app.Save(c); err != nil {
 			return err
 		}
+	}
+	return upgradeCollections(app)
+}
+
+// upgradeCollections brings collections created by an earlier build up to
+// date: the status timeout field, the per-actor idempotency index and the
+// done_unconfirmed state.
+func upgradeCollections(app core.App) error {
+	if c, err := app.FindCollectionByNameOrId(PrintersCollection); err == nil && c.Fields.GetByName("status_timeout_ms") == nil {
+		c.Fields.Add(&core.NumberField{Name: "status_timeout_ms", OnlyInt: true, Min: floatPtr(0)})
+		if err := app.Save(c); err != nil {
+			return err
+		}
+	}
+	c, err := app.FindCollectionByNameOrId(JobsCollection)
+	if err != nil {
+		return nil
+	}
+	changed := false
+	if f, ok := c.Fields.GetByName("state").(*core.SelectField); ok {
+		has := false
+		for _, v := range f.Values {
+			has = has || v == StateUnconfirmed
+		}
+		if !has {
+			f.Values = append(f.Values, StateUnconfirmed)
+			changed = true
+		}
+	}
+	want := "actor, idempotency_key"
+	found := false
+	for _, ix := range c.Indexes {
+		if strings.Contains(ix, "idx_toki_print_jobs_idem") {
+			found = strings.Contains(ix, "`actor`") || strings.Contains(ix, want)
+		}
+	}
+	if !found {
+		kept := c.Indexes[:0:0]
+		for _, ix := range c.Indexes {
+			if !strings.Contains(ix, "idx_toki_print_jobs_idem") {
+				kept = append(kept, ix)
+			}
+		}
+		c.Indexes = kept
+		c.AddIndex("idx_toki_print_jobs_idem", true, want, "idempotency_key != ''")
+		changed = true
+	}
+	if changed {
+		return app.Save(c)
 	}
 	return nil
 }
@@ -146,6 +206,8 @@ type Printer struct {
 	Enabled   bool   `json:"enabled"`
 	Default   bool   `json:"default"`
 	TimeoutMs int    `json:"timeout_ms"`
+	// StatusTimeoutMs bounds the wait for the DLE EOT answer (default 1000).
+	StatusTimeoutMs int `json:"status_timeout_ms"`
 }
 
 func printerOf(r *core.Record) *Printer {
@@ -154,7 +216,12 @@ func printerOf(r *core.Record) *Printer {
 		Baud: r.GetInt("baud"), Cols: r.GetInt("cols"), Codepage: r.GetString("codepage"),
 		Cut: r.GetBool("cut"), Drawer: r.GetBool("drawer"), QRNative: r.GetBool("qr_native"),
 		Enabled: r.GetBool("enabled"), Default: r.GetBool("default"), TimeoutMs: r.GetInt("timeout_ms"),
+		StatusTimeoutMs: r.GetInt("status_timeout_ms"),
 	}
+	if p.StatusTimeoutMs <= 0 {
+		p.StatusTimeoutMs = int(DefaultStatusTimeout / time.Millisecond)
+	}
+	p.StatusTimeoutMs = max(100, min(p.StatusTimeoutMs, 10000))
 	if p.Cols <= 0 {
 		p.Cols = 42
 	}
@@ -169,6 +236,10 @@ func printerOf(r *core.Record) *Printer {
 }
 
 func (p *Printer) timeout() time.Duration { return time.Duration(p.TimeoutMs) * time.Millisecond }
+
+func (p *Printer) statusTimeout() time.Duration {
+	return time.Duration(p.StatusTimeoutMs) * time.Millisecond
+}
 
 func (p *Printer) codepage() escpos.Codepage {
 	cp, _ := escpos.ParseCodepage(p.Codepage)
@@ -259,11 +330,32 @@ type Job struct {
 	Created         string `json:"created"`
 }
 
-func jobOf(r *core.Record) *Job {
+// publicError is the part of a job error that regular users may see: the
+// printer state texts, never an address, device path or system error.
+func publicError(msg string) string {
+	switch {
+	case msg == "":
+		return ""
+	}
+	for _, ok := range []string{"printer not ready: ", "printer stuck:", "printed, but the printer reported:",
+		"paper out", "cover open", "mechanical error", "cutter error", "unrecoverable error", "stopped by an error", "offline"} {
+		if strings.HasPrefix(msg, ok) {
+			return msg
+		}
+	}
+	return "the printer could not be reached or failed (see the server log)"
+}
+
+// jobOf is the view of a job; su decides whether error texts are complete.
+func jobOf(r *core.Record, su bool) *Job {
+	lastErr := r.GetString("last_error")
+	if !su {
+		lastErr = publicError(lastErr)
+	}
 	return &Job{
 		ID: r.Id, Printer: r.GetString("printer"), Template: r.GetString("template"),
 		TemplateVersion: r.GetInt("template_version"), State: r.GetString("state"),
-		Attempts: r.GetInt("attempts"), LastError: r.GetString("last_error"),
+		Attempts: r.GetInt("attempts"), LastError: lastErr,
 		IdempotencyKey: r.GetString("idempotency_key"), Actor: r.GetString("actor"),
 		Copies: max(1, r.GetInt("copies")), PrintedAt: r.GetString("printed_at"),
 		Created: r.GetString("created"),
@@ -320,7 +412,7 @@ func ListJobs(app core.App, state string, limit int) ([]*Job, error) {
 	}
 	out := make([]*Job, 0, len(recs))
 	for _, r := range recs {
-		out = append(out, jobOf(r))
+		out = append(out, jobOf(r, true))
 	}
 	return out, nil
 }
@@ -344,13 +436,13 @@ func queueCounts(app core.App) map[string]int64 {
 	return out
 }
 
-// Prune deletes done jobs last updated before now-retention. It returns the
-// number of deleted rows.
+// Prune deletes finished jobs (done, done_unconfirmed, failed, dead) last
+// updated before now-retention. It returns the number of deleted rows.
 func Prune(app core.App, now time.Time, retention time.Duration) (int64, error) {
 	if !app.HasTable(JobsCollection) {
 		return 0, nil
 	}
-	res, err := app.DB().NewQuery(`DELETE FROM {{_print_jobs}} WHERE [[state]]='done' AND [[updated]] < {:t}`).
+	res, err := app.DB().NewQuery(`DELETE FROM {{_print_jobs}} WHERE [[state]] IN ('done','done_unconfirmed','failed','dead') AND [[updated]] < {:t}`).
 		Bind(dbx.Params{"t": now.Add(-retention).UTC().Format(timeLayout)}).Execute()
 	if err != nil {
 		return 0, err

@@ -80,6 +80,19 @@ code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/api/realtime" -H "A
   -d "{\"clientId\":\"$CID\",\"subscriptions\":[\"@scan\"]}")"
 [ "$code" = 204 ] || fail "authenticated subscribe got $code"
 
+# a self-registered user may neither read nor post scans by default
+curl -fsS -X POST "$URL/api/collections/users/records" -H 'Content-Type: application/json' \
+  -d '{"email":"signup@example.com","password":"signuppass123","passwordConfirm":"signuppass123"}' >/dev/null || fail "create user"
+UTOK="$(curl -fsS "$URL/api/collections/users/auth-with-password" -H 'Content-Type: application/json' \
+  -d '{"identity":"signup@example.com","password":"signuppass123"}' | jget 'd["token"]')"
+for spec in "GET /api/scan/events" "POST /api/scan"; do
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X "${spec% *}" "$URL${spec#* }" -H "Authorization: $UTOK" -H 'Content-Type: application/json' -d '{"scanner":"door","code":"USER0001"}')"
+  [ "$code" = 403 ] || fail "self-registered user ${spec} got $code, want 403"
+done
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/api/realtime" -H "Authorization: $UTOK" -H 'Content-Type: application/json' \
+  -d "{\"clientId\":\"$CID\",\"subscriptions\":[\"@scan\"]}")"
+[ "$code" = 403 ] || fail "self-registered user subscribe got $code, want 403"
+
 # wait for the reader
 state=""
 for _ in $(seq 1 100); do

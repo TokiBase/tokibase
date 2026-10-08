@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/internal/edgeguard"
 	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/subscriptions"
 )
@@ -41,6 +43,7 @@ type Event struct {
 	Code      string `json:"code" db:"code"`
 	Symbology string `json:"symbology" db:"symbology"`
 	Source    string `json:"source" db:"source"`
+	Actor     string `json:"actor,omitempty" db:"actor"`
 	DupCount  int    `json:"dup_count" db:"dup_count"`
 	TS        string `json:"ts" db:"created"`
 }
@@ -77,6 +80,11 @@ type Module struct {
 	// open opens the device of a serial or evdev scanner; tests replace it.
 	open func(*Scanner) (closer, error)
 
+	thr *edgeguard.Throttle // POST /api/scan, per actor and per IP
+
+	sendMu  sync.Mutex
+	senders map[string]*sender
+
 	supMu   sync.Mutex
 	running map[string]*reader
 	wake    chan struct{}
@@ -87,7 +95,9 @@ type Module struct {
 
 func newModule(app core.App) *Module {
 	return &Module{
-		app: app, now: func() time.Time { return time.Now().UTC() },
+		// time.Now keeps the monotonic reading, so a clock step (NTP on a
+		// box without RTC) cannot make the dedupe and client_seq windows negative
+		app: app, now: time.Now, senders: map[string]*sender{}, thr: edgeguard.NewThrottle(ratePerMin(), time.Minute),
 		dedupe: newLRU[*dedupeEntry](dedupeCapacity), seqs: newLRU[seqEntry](seqCapacity),
 		open: openDevice, running: map[string]*reader{}, wake: make(chan struct{}, 1),
 	}
@@ -139,6 +149,7 @@ func (m *Module) Ingest(ctx context.Context, sc *Scanner, raw string, o IngestOp
 				m.app.Logger().Warn("scanner: failed to count a duplicate", "error", err)
 			}
 			res := &Result{Event: d.ev, Duplicate: true}
+			res.Actor = o.Actor // never the first reader's identity
 			if seqKey != "" {
 				m.seqs.put(seqKey, seqEntry{res: *res, at: now})
 			}
@@ -148,7 +159,7 @@ func (m *Module) Ingest(ctx context.Context, sc *Scanner, raw string, o IngestOp
 
 	ev := Event{
 		ID: core.GenerateDefaultRandomId(), Scanner: sc.Name, Code: code,
-		Symbology: symbologyOf(code, o.Symbology), Source: o.Source, TS: fmtTime(now),
+		Symbology: symbologyOf(code, o.Symbology), Source: o.Source, Actor: o.Actor, TS: fmtTime(now),
 	}
 	_, err := m.app.DB().Insert(EventsCollection, dbx.Params{
 		"id": ev.ID, "scanner": ev.Scanner, "code": ev.Code, "symbology": ev.Symbology,
@@ -168,36 +179,138 @@ func (m *Module) Ingest(ctx context.Context, sc *Scanner, raw string, o IngestOp
 	return res, nil
 }
 
-// publish sends the event on "@scan" to the authenticated subscribers allowed
-// to read scans.
+// publish queues the event on "@scan" for the authenticated subscribers
+// allowed to read scans. Each client has its own bounded, ordered queue.
 func (m *Module) publish(ev Event) {
 	b, _ := json.Marshal(map[string]any{
-		"id": ev.ID, "scanner": ev.Scanner, "code": ev.Code, "symbology": ev.Symbology, "ts": ev.TS,
+		"id": ev.ID, "scanner": ev.Scanner, "code": ev.Code, "symbology": ev.Symbology,
+		"source": ev.Source, "actor": ev.Actor, "ts": ev.TS,
 	})
 	for _, c := range m.app.SubscriptionsBroker().Clients() {
-		if !allowedAuth(c.Get(apis.RealtimeClientAuthKey)) {
+		rec, _ := c.Get(apis.RealtimeClientAuthKey).(*core.Record)
+		if !allowedAuth(rec) || !m.stillExists(rec) {
 			continue
 		}
 		// "@scan" and "@scan?options=..." are both subscriptions to the topic;
 		// the event carries the name the client subscribed with
 		for key := range c.Subscriptions(Topic) {
 			if topicName(key) == Topic {
-				go c.Send(subscriptions.Message{Name: key, Data: b})
+				m.send(c, subscriptions.Message{Name: key, Data: b})
 			}
 		}
 	}
 }
 
-// allowedAuth applies TOKI_SCAN_TOPIC_AUTH to the auth record of a client.
+// stillExists re-checks the auth record of a long-lived connection: a deleted
+// user stops receiving scans.
+func (m *Module) stillExists(rec *core.Record) bool {
+	if rec == nil || rec.Collection() == nil {
+		return false
+	}
+	_, err := m.app.FindRecordById(rec.Collection().Name, rec.Id)
+	return err == nil
+}
+
+const senderQueue = 64
+
+// senderIdle is how often an idle sender checks whether its client is gone.
+var senderIdle = 30 * time.Second
+
+// sender delivers the messages of one client in order, from one goroutine.
+type sender struct {
+	q chan subscriptions.Message
+}
+
+// send queues msg for c. When a client does not read and its queue is full,
+// the oldest queued event is dropped: the client catches up with
+// GET /api/scan/events?since=. At most one goroutine and senderQueue events
+// are held per client.
+func (m *Module) send(c subscriptions.Client, msg subscriptions.Message) {
+	m.sendMu.Lock()
+	s := m.senders[c.Id()]
+	if s == nil {
+		s = &sender{q: make(chan subscriptions.Message, senderQueue)}
+		m.senders[c.Id()] = s
+		go m.runSender(c, s)
+	}
+	m.sendMu.Unlock()
+	for {
+		select {
+		case s.q <- msg:
+			return
+		default:
+		}
+		select {
+		case <-s.q: // drop the oldest
+			m.app.Logger().Warn("scanner: a realtime client does not read, dropping its oldest scan", "client", c.Id())
+		default:
+		}
+	}
+}
+
+func (m *Module) runSender(c subscriptions.Client, s *sender) {
+	defer func() {
+		m.sendMu.Lock()
+		if m.senders[c.Id()] == s {
+			delete(m.senders, c.Id())
+		}
+		m.sendMu.Unlock()
+	}()
+	t := time.NewTicker(senderIdle)
+	defer t.Stop()
+	for {
+		select {
+		case msg := <-s.q:
+			if c.IsDiscarded() {
+				return
+			}
+			c.Send(msg) // blocks while the client is busy; its Discard ends it
+		case <-t.C:
+			if c.IsDiscarded() {
+				return
+			}
+		}
+	}
+}
+
+// allowedAuth applies TOKI_SCAN_TOPIC_AUTH and TOKI_SCAN_READ_AUTH to the
+// auth record of a client or request.
 func allowedAuth(v any) bool {
 	rec, _ := v.(*core.Record)
 	if rec == nil {
 		return false
 	}
-	if topicSuperuserOnly() {
-		return rec.Collection().Name == core.CollectionNameSuperusers
+	if edgeguard.IsSuperuser(rec) {
+		return true
 	}
-	return true
+	switch readMode() {
+	case modeSuperuser:
+		return false
+	case modeAuth:
+		return true
+	}
+	return edgeguard.ParseAllow(os.Getenv("TOKI_SCAN_READ_AUTH")).Match(rec)
+}
+
+// canPost reports whether rec may POST a scan to the web scanner sc.
+func canPost(sc *Scanner, rec *core.Record) bool {
+	if rec == nil {
+		return false
+	}
+	if edgeguard.IsSuperuser(rec) {
+		return true
+	}
+	mode := postMode()
+	if mode == modeSuperuser {
+		return false
+	}
+	if al := edgeguard.ParseAllow(sc.AllowedActors); !al.Empty() {
+		return al.Match(rec)
+	}
+	if mode == modeAuth {
+		return true
+	}
+	return edgeguard.ParseAllow(os.Getenv("TOKI_SCAN_POST_COLLECTIONS")).Match(rec)
 }
 
 // Events returns scans after the event `since` (oldest first). Without a known
@@ -218,7 +331,7 @@ func (m *Module) Events(since, scanner string, limit int) (items []Event, gap bo
 			gap = true
 		}
 	}
-	cols := "[[id]],[[scanner]],[[code]],[[symbology]],[[source]],[[dup_count]],[[created]]"
+	cols := "[[id]],[[scanner]],[[code]],[[symbology]],[[source]],[[actor]],[[dup_count]],[[created]]"
 	where := "1=1"
 	p := dbx.Params{"lim": limit}
 	if scanner != "" {

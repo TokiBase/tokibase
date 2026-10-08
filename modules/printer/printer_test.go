@@ -523,16 +523,17 @@ func TestPrune(t *testing.T) {
 		}
 	}
 	n, err := Prune(e.app, time.Now(), 14*24*time.Hour)
-	if err != nil || n != 1 {
+	if err != nil || n != 2 {
 		t.Fatalf("pruned %d, %v", n, err)
 	}
 	if _, err := e.app.FindRecordById(JobsCollection, oldDone); err == nil {
 		t.Fatal("old done job survived")
 	}
-	for _, id := range []string{newDone, oldDead} {
-		if _, err := e.app.FindRecordById(JobsCollection, id); err != nil {
-			t.Fatalf("job %s was pruned", id)
-		}
+	if _, err := e.app.FindRecordById(JobsCollection, oldDead); err == nil {
+		t.Fatal("old dead job survived")
+	}
+	if _, err := e.app.FindRecordById(JobsCollection, newDone); err != nil {
+		t.Fatal("a recent job was pruned")
 	}
 }
 
@@ -724,6 +725,10 @@ func TestTCPStubSilentStatusStillPrints(t *testing.T) {
 	if got := e.job(t, res.ID).GetString("state"); got != StateDone {
 		t.Fatalf("state=%s", got)
 	}
+	// the stub reads on its own goroutine: the job is done once the write returned
+	for i := 0; i < 100 && !bytes.Contains(stub.bytes(), []byte("hello")); i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if !bytes.Contains(stub.bytes(), []byte("hello")) {
 		t.Fatal("payload not received")
 	}
@@ -803,6 +808,7 @@ func (e *env) users(t *testing.T) (user, other, super string) {
 }
 
 func TestHTTPAPI(t *testing.T) {
+	t.Setenv("TOKI_PRINT_ALLOW_COLLECTIONS", "members")
 	e := setup(t)
 	e.addPrinter(t, "counter", "tcp", "10.1.2.3:9100", map[string]any{"default": true})
 	e.addPrinter(t, "hidden", "tcp", "10.1.2.4:9100", map[string]any{"enabled": false})

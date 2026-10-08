@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tokibase/tokibase/internal/devio"
+	"github.com/tokibase/tokibase/internal/edgeguard"
 )
 
 const (
@@ -20,6 +21,18 @@ const (
 	MaxAttempts = 20
 	// DefaultWaitDelay is the polling interval while a printer is out of paper.
 	DefaultWaitDelay = 10 * time.Second
+	// MaxWaits bounds the paper polls of one job (360 x 10 s = 1 h); then it is dead.
+	MaxWaits = 360
+	// DefaultMaxQueuedPerActor bounds the unfinished jobs of one actor.
+	DefaultMaxQueuedPerActor = 20
+	defaultRatePerMin        = 60
+	// DefaultStatusTimeout is the wait for the DLE EOT answer.
+	DefaultStatusTimeout = time.Second
+	// DefaultLockWait is how long a job waits for the per-printer lock before
+	// it gives its worker back with a retryable error.
+	DefaultLockWait = 30 * time.Second
+	// noStatusTTL is how long a printer that never answered DLE EOT is not asked again.
+	noStatusTTL = 10 * time.Minute
 )
 
 // Enabled reports whether the module is on. It is opt-in: TOKI_PRINTER=on
@@ -32,9 +45,43 @@ func Enabled() bool {
 	return false
 }
 
-// superuserOnly reports TOKI_PRINT_AUTH=superuser.
-func superuserOnly() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("TOKI_PRINT_AUTH")), "superuser")
+// Access modes of TOKI_PRINT_AUTH.
+const (
+	authService   = "service" // default: superusers and the TOKI_PRINT_ALLOW_COLLECTIONS actors
+	authAny       = "auth"    // explicit opt-in: every authenticated record
+	authSuperuser = "superuser"
+)
+
+// authMode reads TOKI_PRINT_AUTH (service, auth, superuser; default service).
+func authMode() string {
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("TOKI_PRINT_AUTH"))); v {
+	case authAny, authSuperuser:
+		return v
+	}
+	return authService
+}
+
+// allowedActors is TOKI_PRINT_ALLOW_COLLECTIONS: auth collections ("gate_devices")
+// or single records ("gate_devices/abc") that may print in service mode.
+func allowedActors() *edgeguard.Allow {
+	return edgeguard.ParseAllow(os.Getenv("TOKI_PRINT_ALLOW_COLLECTIONS"))
+}
+
+// maxQueuedPerActor is TOKI_PRINT_MAX_QUEUED_PER_ACTOR (default 20, 0 = unlimited).
+func maxQueuedPerActor() int {
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("TOKI_PRINT_MAX_QUEUED_PER_ACTOR"))); err == nil && n >= 0 {
+		return n
+	}
+	return DefaultMaxQueuedPerActor
+}
+
+// ratePerMin is TOKI_PRINT_RATE_PER_MIN, the requests per minute of one actor
+// and of one IP address (default 60, 0 = unlimited).
+func ratePerMin() int {
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("TOKI_PRINT_RATE_PER_MIN"))); err == nil && n >= 0 {
+		return n
+	}
+	return defaultRatePerMin
 }
 
 // MaxBytes is the largest rendered (or raw) payload (env TOKI_PRINT_MAX_BYTES,

@@ -39,7 +39,7 @@ func testPage(p *Printer, qr bool) ([]byte, error) {
 		}
 		b.Align(escpos.AlignLeft)
 	}
-	return finish(p, b.Feed(3).Cut().Bytes()), nil
+	return finish(p, b.Feed(3).Cut().Bytes(), escpos.Info{HasCut: true}), nil
 }
 
 // NewCommand returns the `print` cobra command.
@@ -183,7 +183,7 @@ func NewCommand(app core.App) *cobra.Command {
 				return err
 			}
 			defer conn.Close()
-			st, ok, err := queryStatus(conn)
+			st, ok, err := queryStatus(conn, p.statusTimeout())
 			if err != nil {
 				return err
 			}
