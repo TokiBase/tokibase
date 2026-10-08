@@ -3,13 +3,16 @@
 package printer
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/internal/escpos"
 	"github.com/tokibase/tokibase/kernel"
@@ -77,12 +80,33 @@ func (m *Module) resolvePrinter(name string) (*Printer, error) {
 	return nil, badReq("printer is required (no default printer is configured)")
 }
 
-func (m *Module) findByKey(key string) *core.Record {
-	r, err := m.app.FindFirstRecordByData(JobsCollection, "idempotency_key", key)
+// findByKey finds the job of actor with the idempotency key: keys are scoped
+// per actor, so one user can neither suppress nor discover another one's job.
+func (m *Module) findByKey(actor, key string) *core.Record {
+	r, err := m.app.FindFirstRecordByFilter(JobsCollection, "actor = {:a} && idempotency_key = {:k}",
+		dbx.Params{"a": actor, "k": key})
 	if err != nil {
 		return nil
 	}
 	return r
+}
+
+// uniqueKey is the kernel job key of an actor scoped idempotency key.
+func uniqueKey(actor, key string) string {
+	h := sha256.Sum256([]byte(actor + "\x00" + key))
+	return "print:k:" + hex.EncodeToString(h[:16])
+}
+
+// overQuota reports whether actor has too many unfinished jobs. Superusers and
+// non collection actors (the CLI) are exempt.
+func (m *Module) overQuota(actor string) bool {
+	limit := maxQueuedPerActor()
+	if limit <= 0 || !strings.Contains(actor, "/") || strings.HasPrefix(actor, core.CollectionNameSuperusers+"/") {
+		return false
+	}
+	n, err := m.app.CountRecords(JobsCollection, dbx.NewExp(
+		"[[actor]] = {:a} AND [[state]] IN ('queued','printing','waiting_paper','failed')", dbx.Params{"a": actor}))
+	return err == nil && int(n) >= limit
 }
 
 // Enqueue renders the print, stores the job and queues the transmission.
@@ -105,9 +129,12 @@ func (m *Module) Enqueue(ctx context.Context, rq Request) (*Result, error) {
 		return nil, badReq("idempotency_key is too long")
 	}
 	if rq.IdempotencyKey != "" {
-		if r := m.findByKey(rq.IdempotencyKey); r != nil {
+		if r := m.findByKey(rq.Actor, rq.IdempotencyKey); r != nil {
 			return &Result{ID: r.Id, State: r.GetString("state"), Duplicate: true}, nil
 		}
+	}
+	if m.overQuota(rq.Actor) {
+		return nil, &RequestError{429, fmt.Sprintf("too many unfinished prints (limit %d per client)", maxQueuedPerActor())}
 	}
 
 	var tpl *Template
@@ -141,13 +168,19 @@ func (m *Module) Enqueue(ctx context.Context, rq Request) (*Result, error) {
 		lim := escpos.DefaultLimits
 		lim.MaxBytes = max
 		lim.MaxOutput = max * 2
-		payload, err = escpos.Render(tpl.Body, withCols(rq.Data, prn.Cols), escpos.Options{
+		var info escpos.Info
+		payload, info, err = escpos.RenderInfo(tpl.Body, withCols(rq.Data, prn.Cols), escpos.Options{
 			Codepage: prn.codepage(), QRRaster: !prn.QRNative, Location: time.Local, Limits: lim,
 		})
 		if err != nil {
-			return nil, badReq("render %q: %v", tpl.Name, err)
+			// the detail can quote the template: keep it in the log
+			m.app.Logger().Warn("printer: render failed", "template", tpl.Name, "actor", rq.Actor, "error", err)
+			if errors.Is(err, escpos.ErrLimit) {
+				return nil, badReq("the print data is too large for template %q", tpl.Name)
+			}
+			return nil, badReq("template %q could not be rendered with this data", tpl.Name)
 		}
-		payload = finish(prn, payload)
+		payload = finish(prn, payload, info)
 		if len(payload) > max {
 			return nil, badReq("rendered payload is %d bytes, the limit is %d", len(payload), max)
 		}
@@ -170,7 +203,7 @@ func (m *Module) Enqueue(ctx context.Context, rq Request) (*Result, error) {
 	rec.Set("actor", rq.Actor)
 	if err := m.app.SaveWithContext(ctx, rec); err != nil {
 		if rq.IdempotencyKey != "" { // lost the race for the key
-			if r := m.findByKey(rq.IdempotencyKey); r != nil {
+			if r := m.findByKey(rq.Actor, rq.IdempotencyKey); r != nil {
 				return &Result{ID: r.Id, State: r.GetString("state"), Duplicate: true}, nil
 			}
 		}
@@ -179,7 +212,7 @@ func (m *Module) Enqueue(ctx context.Context, rq Request) (*Result, error) {
 
 	uniq := "print:" + rec.Id
 	if rq.IdempotencyKey != "" {
-		uniq = "print:" + rq.IdempotencyKey
+		uniq = uniqueKey(rq.Actor, rq.IdempotencyKey)
 	}
 	jobID, err := kernel.Jobs(m.app).Enqueue(ctx, JobKind, map[string]string{"id": rec.Id},
 		kernel.Unique(uniq), kernel.MaxAttempts(MaxAttempts))
@@ -207,9 +240,7 @@ func withCols(data any, cols int) any {
 		for k, v := range d {
 			out[k] = v
 		}
-		if _, ok := out["_cols"]; !ok {
-			out["_cols"] = cols
-		}
+		out["_cols"] = cols // never caller controlled
 		return out
 	}
 	return data
@@ -217,12 +248,12 @@ func withCols(data any, cols int) any {
 
 // finish applies the printer defaults: drawer kick and cut when the template
 // did not do it itself.
-func finish(prn *Printer, payload []byte) []byte {
+func finish(prn *Printer, payload []byte, info escpos.Info) []byte {
 	b := escpos.New(prn.codepage())
-	if prn.Drawer && !bytes.Contains(payload, []byte{escpos.ESC, 'p'}) {
+	if prn.Drawer && !info.HasDrawer {
 		b.Drawer()
 	}
-	if prn.Cut && !bytes.Contains(payload, []byte{escpos.GS, 'V'}) {
+	if prn.Cut && !info.HasCut {
 		b.Feed(3).Cut()
 	}
 	if b.Len() == 0 {
@@ -231,23 +262,28 @@ func finish(prn *Printer, payload []byte) []byte {
 	return append(append([]byte{}, payload...), b.Bytes()...)
 }
 
-// Retry queues a failed or dead job again.
+// Retry queues a failed, dead or unconfirmed job again (an explicit reprint).
 func (m *Module) Retry(ctx context.Context, id string) (*Result, error) {
 	if kernel.IsSyncReplica(ctx) {
 		return nil, ErrSyncReplica
 	}
-	rec, err := m.app.FindRecordById(JobsCollection, id)
+	var rec *core.Record
+	err := m.app.RunInTransaction(func(tx core.App) error {
+		r, err := tx.FindRecordById(JobsCollection, id)
+		if err != nil {
+			return &RequestError{404, "print job not found"}
+		}
+		st := r.GetString("state")
+		if st != StateFailed && st != StateDead && st != StateUnconfirmed {
+			return &RequestError{409, fmt.Sprintf("only failed, dead or unconfirmed jobs can be retried, this one is %s", st)}
+		}
+		r.Set("state", StateQueued)
+		r.Set("waits", 0)
+		r.Set("last_error", "")
+		rec = r
+		return tx.Save(r)
+	})
 	if err != nil {
-		return nil, &RequestError{404, "print job not found"}
-	}
-	st := rec.GetString("state")
-	if st != StateFailed && st != StateDead {
-		return nil, &RequestError{409, fmt.Sprintf("only failed or dead jobs can be retried, this one is %s", st)}
-	}
-	rec.Set("state", StateQueued)
-	rec.Set("waits", 0)
-	rec.Set("last_error", "")
-	if err := m.app.Save(rec); err != nil {
 		return nil, err
 	}
 	// a new unique key: the old job may still wait for its backoff

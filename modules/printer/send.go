@@ -66,21 +66,69 @@ func isTimeout(err error) bool {
 	return errors.As(err, &ne) && ne.Timeout()
 }
 
-// queryStatus sends DLE EOT 1..4 and decodes the answer. ok is false when the
-// printer does not answer (many cheap models ignore real-time commands): the
-// caller prints anyway. A broken connection is an error.
-func queryStatus(c io.ReadWriter) (st escpos.Status, ok bool, err error) {
+// guardConn bounds every Write with a timer: a char device such as
+// /dev/usb/lp0 has no write deadline and blocks while the printer is out of
+// paper. On expiry the file is closed (which frees the caller; the stuck
+// kernel write ends with the close or when the printer wakes up).
+type guardConn struct {
+	io.ReadWriteCloser
+	timeout time.Duration
+}
+
+func (g *guardConn) Write(p []byte) (int, error) {
+	type result struct {
+		n   int
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		n, err := g.ReadWriteCloser.Write(p)
+		ch <- result{n, err}
+	}()
+	// a large payload may take longer to drain than a small one
+	t := time.NewTimer(g.timeout + time.Duration(len(p))*time.Millisecond/4)
+	defer t.Stop()
+	select {
+	case r := <-ch:
+		return r.n, r.err
+	case <-t.C:
+		_ = g.ReadWriteCloser.Close()
+		return 0, fmt.Errorf("write: %w", os.ErrDeadlineExceeded)
+	}
+}
+
+// queryStatus sends DLE EOT 1..4 and decodes the answer within timeout. ok is
+// false when the printer does not answer (many cheap models ignore real-time
+// commands): the caller prints anyway. A broken connection is an error.
+func queryStatus(c io.ReadWriter, timeout time.Duration) (st escpos.Status, ok bool, err error) {
 	if _, err := c.Write(escpos.StatusQuery()); err != nil {
 		return st, false, fmt.Errorf("status query: %w", err)
 	}
-	buf := make([]byte, 4)
-	if _, err := io.ReadFull(c, buf); err != nil {
-		if isTimeout(err) {
+	type reply struct {
+		buf []byte
+		err error
+	}
+	ch := make(chan reply, 1)
+	go func() {
+		buf := make([]byte, 4)
+		_, err := io.ReadFull(c, buf)
+		ch <- reply{buf, err}
+	}()
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	var r reply
+	select {
+	case r = <-ch:
+	case <-t.C:
+		return st, false, nil // the reader ends with the connection
+	}
+	if r.err != nil {
+		if isTimeout(r.err) {
 			return st, false, nil
 		}
-		return st, false, fmt.Errorf("status reply: %w", err)
+		return st, false, fmt.Errorf("status reply: %w", r.err)
 	}
-	st, perr := escpos.ParseStatus(buf)
+	st, perr := escpos.ParseStatus(r.buf)
 	if perr != nil {
 		return st, false, nil
 	}
@@ -115,11 +163,33 @@ type outcome int
 const (
 	outDone outcome = iota
 	outWait
+	// outUnconfirmed: everything was written, then the printer reported a
+	// fault. The job must not be resent.
+	outUnconfirmed
 )
 
+func (m *Module) statusSkipped(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	until, ok := m.noStatus[name]
+	return ok && m.Now().Before(until)
+}
+
+func (m *Module) rememberNoStatus(name string, answered bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if answered {
+		delete(m.noStatus, name)
+	} else {
+		m.noStatus[name] = m.Now().Add(noStatusTTL)
+	}
+}
+
 // transmit writes copies of payload to the printer. It returns outWait with a
-// reason when the printer needs a person (paper out, cover open); any other
-// problem is an error that the job queue retries.
+// reason when the printer is out of paper (nothing was written), outUnconfirmed
+// when the data went out and the printer reported a fault afterwards (never
+// resent: ESC/POS printers keep the buffer and finish it when the fault is
+// fixed), and an error for everything the job queue retries.
 func (m *Module) transmit(ctx context.Context, p *Printer, payload []byte, copies int) (outcome, string, error) {
 	c, err := m.Open(ctx, p)
 	if err != nil {
@@ -127,17 +197,24 @@ func (m *Module) transmit(ctx context.Context, p *Printer, payload []byte, copie
 		return outDone, "", err
 	}
 	defer c.Close()
-	hasStatus := p.Transport != "file"
+	var conn io.ReadWriter = c
+	if p.Transport == "file" {
+		conn = &guardConn{ReadWriteCloser: c, timeout: p.timeout()}
+	}
+	hasStatus := p.Transport != "file" && !m.statusSkipped(p.Name)
 
 	if hasStatus {
-		st, ok, err := queryStatus(c)
+		st, ok, err := queryStatus(conn, p.statusTimeout())
 		if err != nil {
 			m.setStatus(p.Name, "offline", err.Error())
 			return outDone, "", err
 		}
-		if ok {
+		m.rememberNoStatus(p.Name, ok)
+		if !ok {
+			hasStatus = false // prints anyway, and is not asked again for a while
+		} else {
 			switch {
-			case st.NeedsAttention():
+			case st.PaperEnd || st.PaperEndStop:
 				m.setStatus(p.Name, "paper", describe(st))
 				return outWait, describe(st), nil
 			case !st.Ready():
@@ -147,29 +224,29 @@ func (m *Module) transmit(ctx context.Context, p *Printer, payload []byte, copie
 		}
 	}
 	for i := 0; i < copies; i++ {
-		if err := writeAll(c, payload); err != nil {
+		if err := writeAll(conn, payload); err != nil {
 			m.setStatus(p.Name, "offline", err.Error())
 			return outDone, "", fmt.Errorf("write: %w", err)
 		}
 	}
 	if hasStatus {
-		st, ok, err := queryStatus(c)
+		st, ok, err := queryStatus(conn, p.statusTimeout())
 		if err != nil {
-			// the connection broke after the write: the print may or may not
-			// have happened; retry (a duplicate is possible, see the docs)
+			// the data is out: do not print it a second time
 			m.setStatus(p.Name, "offline", err.Error())
-			return outDone, "", err
+			return outUnconfirmed, "status unreadable after the write", nil
 		}
-		if ok && (st.PaperEndStop || st.ErrorStop || st.MechError || st.CutterError || st.Unrecovered) {
+		if ok && (st.PaperEndStop || st.ErrorStop || st.MechError || st.CutterError || st.Unrecovered || st.CoverOpen) {
 			m.setStatus(p.Name, "paper", describe(st))
-			return outWait, describe(st), nil
+			return outUnconfirmed, describe(st), nil
 		}
 		if ok {
 			m.setStatus(p.Name, "ok", "")
+			return outDone, "", nil
 		}
-	} else {
-		m.setStatus(p.Name, "ok", "")
+		m.rememberNoStatus(p.Name, false)
 	}
+	m.setStatus(p.Name, "ok", "")
 	return outDone, "", nil
 }
 
@@ -213,9 +290,14 @@ func (m *Module) handle(ctx context.Context, _ kernel.App, job *kernel.Job) erro
 	}
 
 	// one job at a time per printer, whatever the number of workers
-	l := m.lockFor(prn.Name)
-	l.Lock()
-	defer l.Unlock()
+	release, err := m.acquire(ctx, prn.Name)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return m.fail(rec, err, final) // the queue retries; the worker is free again
+	}
+	defer release()
 	if rec, err = m.app.FindRecordById(JobsCollection, in.ID); err != nil {
 		return nil
 	}
@@ -239,8 +321,17 @@ func (m *Module) handle(ctx context.Context, _ kernel.App, job *kernel.Job) erro
 		}
 		return m.fail(rec, terr, final)
 	}
-	if res == outWait {
+	switch res {
+	case outWait:
 		return m.wait(ctx, rec, reason)
+	case outUnconfirmed:
+		msg := "printed, but the printer reported: " + reason
+		rec.Set("state", StateUnconfirmed)
+		rec.Set("last_error", msg)
+		rec.Set("printed_at", types.NowDateTime())
+		m.app.Logger().Warn("printer: print not confirmed, not resent", "job", rec.Id, "printer", prn.Name, "reason", reason)
+		audit(AuditUnconfirmed, rec.Id, map[string]any{"printer": prn.Name, "reason": reason})
+		return m.app.Save(rec)
 	}
 	rec.Set("state", StateDone)
 	rec.Set("last_error", "")
@@ -256,6 +347,7 @@ func (m *Module) fail(rec *core.Record, cause error, final bool) error {
 		msg = msg[:1900]
 	}
 	rec.Set("last_error", msg)
+	m.app.Logger().Warn("printer: transmission failed", "job", rec.Id, "printer", rec.GetString("printer"), "final", final, "error", msg)
 	if final {
 		rec.Set("state", StateDead)
 	} else {
@@ -278,6 +370,12 @@ func (m *Module) fail(rec *core.Record, cause error, final bool) error {
 // second Enqueue with it would only return the running job.
 func (m *Module) wait(ctx context.Context, rec *core.Record, reason string) error {
 	n := rec.GetInt("waits") + 1
+	if limit := m.MaxWaits; (limit > 0 && n > limit) || (limit <= 0 && n > MaxWaits) {
+		rec.Set("state", StateDead)
+		rec.Set("last_error", "printer stuck: waited too long for the printer ("+reason+")")
+		audit(AuditStuck, rec.Id, map[string]any{"printer": rec.GetString("printer"), "waits": n - 1, "reason": reason})
+		return m.app.Save(rec)
+	}
 	rec.Set("state", StateWaiting)
 	rec.Set("waits", n)
 	rec.Set("last_error", reason)

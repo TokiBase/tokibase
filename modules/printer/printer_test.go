@@ -803,6 +803,7 @@ func (e *env) users(t *testing.T) (user, other, super string) {
 }
 
 func TestHTTPAPI(t *testing.T) {
+	t.Setenv("TOKI_PRINT_ALLOW_COLLECTIONS", "members")
 	e := setup(t)
 	e.addPrinter(t, "counter", "tcp", "10.1.2.3:9100", map[string]any{"default": true})
 	e.addPrinter(t, "hidden", "tcp", "10.1.2.4:9100", map[string]any{"enabled": false})

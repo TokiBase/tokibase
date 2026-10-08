@@ -24,19 +24,50 @@ func rateTag(tag string) *hook.Handler[*core.RequestEvent] {
 	}
 }
 
+// authMiddleware applies TOKI_PRINT_AUTH. The default "service" lets only
+// superusers and the actors of TOKI_PRINT_ALLOW_COLLECTIONS through; "auth"
+// (every authenticated record, public sign-ups included) is an explicit opt-in.
 func authMiddleware() *hook.Handler[*core.RequestEvent] {
-	if superuserOnly() {
-		return apis.RequireSuperuserAuth()
+	return &hook.Handler[*core.RequestEvent]{
+		Id: hookId + "auth", Priority: -950,
+		Func: func(e *core.RequestEvent) error {
+			if e.Auth == nil {
+				return e.UnauthorizedError("The request requires valid record authorization token.", nil)
+			}
+			if !e.HasSuperuserAuth() {
+				switch authMode() {
+				case authSuperuser:
+					return e.ForbiddenError("Printing requires a superuser.", nil)
+				case authService:
+					if !allowedActors().Match(e.Auth) {
+						return e.ForbiddenError("This account may not print. Add its collection to TOKI_PRINT_ALLOW_COLLECTIONS.", nil)
+					}
+				}
+			}
+			return e.Next()
+		},
 	}
-	return apis.RequireAuth()
+}
+
+// throttleMW limits the write requests per actor and per client address.
+func (m *Module) throttleMW() *hook.Handler[*core.RequestEvent] {
+	return &hook.Handler[*core.RequestEvent]{
+		Id: hookId + "thr", Priority: -940,
+		Func: func(e *core.RequestEvent) error {
+			if !e.HasSuperuserAuth() && (!m.thr.Allow("a:"+actorOf(e)) || !m.thr.Allow("ip:"+e.RealIP())) {
+				return e.TooManyRequestsError("Too many print requests, slow down.", nil)
+			}
+			return e.Next()
+		},
+	}
 }
 
 func (m *Module) bindRoutes(se *core.ServeEvent) {
 	g := se.Router
-	g.POST("/api/print", m.apiPrint).Bind(authMiddleware(), apis.BodyLimit(int64(2*MaxBytes())+(64<<10)), rateTag("print"))
+	g.POST("/api/print", m.apiPrint).Bind(authMiddleware(), m.throttleMW(), apis.BodyLimit(int64(2*MaxBytes())+(64<<10)), rateTag("print"))
 	g.GET("/api/print/printers", m.apiPrinters).Bind(authMiddleware(), rateTag("print"))
 	g.GET("/api/print/{id}", m.apiJob).Bind(authMiddleware(), rateTag("print"))
-	g.POST("/api/print/{id}/retry", m.apiRetry).Bind(authMiddleware(), rateTag("print"))
+	g.POST("/api/print/{id}/retry", m.apiRetry).Bind(authMiddleware(), m.throttleMW(), rateTag("print"))
 }
 
 func actorOf(e *core.RequestEvent) string {
@@ -104,7 +135,7 @@ func (m *Module) apiJob(e *core.RequestEvent) error {
 	if err != nil {
 		return err
 	}
-	return e.JSON(http.StatusOK, jobOf(r))
+	return e.JSON(http.StatusOK, jobOf(r, e.HasSuperuserAuth()))
 }
 
 func (m *Module) apiRetry(e *core.RequestEvent) error {
@@ -116,6 +147,7 @@ func (m *Module) apiRetry(e *core.RequestEvent) error {
 	if err != nil {
 		return m.writeErr(e, err)
 	}
+	audit(AuditRetry, r.Id, map[string]any{"actor": actorOf(e)})
 	return e.JSON(http.StatusOK, res)
 }
 
@@ -131,9 +163,13 @@ func (m *Module) apiPrinters(e *core.RequestEvent) error {
 			continue
 		}
 		depth, _ := m.app.CountRecords(JobsCollection, queueExpr(p.Name))
+		status := m.LastStatus(p.Name)
+		if !su { // errors quote addresses and device paths
+			status.Detail = publicError(status.Detail)
+		}
 		row := map[string]any{
 			"name": p.Name, "transport": p.Transport, "cols": p.Cols, "default": p.Default,
-			"enabled": p.Enabled, "status": m.LastStatus(p.Name), "queue_depth": depth,
+			"enabled": p.Enabled, "status": status, "queue_depth": depth,
 		}
 		if su {
 			row["address"] = p.Address

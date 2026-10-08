@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -19,6 +20,12 @@ type closer = io.ReadCloser
 
 // openDevice opens the device of a serial or evdev scanner.
 func openDevice(sc *Scanner) (closer, error) {
+	// only character devices: /dev/zero and friends would spin a core
+	if fi, err := os.Stat(sc.Device); err != nil {
+		return nil, err
+	} else if fi.Mode()&os.ModeCharDevice == 0 {
+		return nil, errors.New("scanner: " + sc.Device + " is not a character device")
+	}
 	switch sc.Kind {
 	case KindSerial:
 		return devio.OpenSerial(sc.Device, devio.SerialConfig{Baud: sc.Baud})

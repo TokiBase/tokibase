@@ -79,10 +79,20 @@ SPORT="$(cat "$TMP/stub.port")"
 "$TMP/toki" superuser upsert "$EMAIL" "$PASS" --dir "$TMP/pb_data" >/dev/null
 PORT=$((20000 + RANDOM % 20000))
 BASE="http://127.0.0.1:$PORT"
-TOKI_PRINTER=on "$TMP/toki" serve --dir "$TMP/pb_data" --http "127.0.0.1:$PORT" >"$TMP/toki.log" 2>&1 &
-echo $! >"$TMP/toki.pid"
-for _ in $(seq 1 100); do curl -fs "$BASE/api/health" >/dev/null 2>&1 && break; sleep 0.2; done
-curl -fs "$BASE/api/health" >/dev/null || fail "server did not start"
+start_server() { # extra env assignments as arguments
+  env TOKI_PRINTER=on "$@" "$TMP/toki" serve --dir "$TMP/pb_data" --http "127.0.0.1:$PORT" >>"$TMP/toki.log" 2>&1 &
+  echo $! >"$TMP/toki.pid"
+  for _ in $(seq 1 100); do curl -fs "$BASE/api/health" >/dev/null 2>&1 && break; sleep 0.2; done
+  curl -fs "$BASE/api/health" >/dev/null || fail "server did not start"
+}
+stop_server() {
+  local p
+  p="$(cat "$TMP/toki.pid")"
+  kill "$p" 2>/dev/null || true
+  wait "$p" 2>/dev/null || true
+  rm -f "$TMP/toki.pid"
+}
+start_server
 
 ST="$(curl -fs "$BASE/api/collections/_superusers/auth-with-password" -H 'Content-Type: application/json' \
   -d "{\"identity\":\"$EMAIL\",\"password\":\"$PASS\"}" | jget "d['token']")"
@@ -104,6 +114,16 @@ UT="$(curl -fs "$BASE/api/collections/users/auth-with-password" -H 'Content-Type
 
 code="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/print" -H 'Content-Type: application/json' -d '{"template":"ticket"}')"
 [ "$code" = 401 ] || fail "guest print returned $code, want 401"
+
+# the default is restrictive: a self-registered user may not print or list printers
+code="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/print" -H "Authorization: $UT" -H 'Content-Type: application/json' -d '{"template":"ticket"}')"
+[ "$code" = 403 ] || fail "self-registered user print returned $code, want 403"
+code="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/print/printers" -H "Authorization: $UT")"
+[ "$code" = 403 ] || fail "self-registered user printers returned $code, want 403"
+
+# the operator opts the users collection in; the data is kept, the server restarts
+stop_server
+start_server TOKI_PRINT_ALLOW_COLLECTIONS=users
 
 RES="$(curl -fs "$BASE/api/print" -H "Authorization: $UT" -H 'Content-Type: application/json' \
   -d "{\"template\":\"ticket\",\"data\":{\"plate\":\"B 1234 XY\",\"ticket_id\":\"$QR\"},\"idempotency_key\":\"e2e-1\"}")" \
@@ -136,6 +156,21 @@ curl -fs "$BASE/api/health" -H "Authorization: $ST" | grep -q '"printer"' || fai
 list="$(curl -fs "$BASE/api/print/printers" -H "Authorization: $UT")"
 echo "$list" | grep -q counter || fail "printers list: $list"
 echo "$list" | grep -q "127.0.0.1" && fail "address leaked to a regular user"
+
+# data is never a directive: a plate with newlines must not open the drawer
+INJ="$(curl -fs "$BASE/api/print" -H "Authorization: $UT" -H 'Content-Type: application/json' \
+  -d '{"template":"ticket","data":{"plate":"INJ\n@drawer\n@feed 255\n@cut","ticket_id":"INJ-TICKET"}}' | jget "d['id']")"
+for _ in $(seq 1 60); do
+  [ "$(curl -fs "$BASE/api/print/$INJ" -H "Authorization: $UT" | jget "d['state']")" = done ] && break
+  sleep 0.5
+done
+python3 - "$TMP/captured.bin" <<'PY' || fail "template injection"
+import sys
+b = open(sys.argv[1], "rb").read()
+assert b"INJ-TICKET" in b, "injection job not printed"
+assert b"\x1bp" not in b, "drawer pulse found: data was executed as a directive"
+assert b"\x1bd\xff" not in b, "feed 255 found"
+PY
 
 TOKI_PRINTER=on "$TMP/toki" print jobs --dir "$TMP/pb_data" | grep -q "$ID" || fail "toki print jobs"
 log "OK"

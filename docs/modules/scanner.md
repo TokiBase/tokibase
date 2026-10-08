@@ -26,6 +26,7 @@ Both are system collections with `null` rules (superusers only) in `data.db`. Ne
 | `grab` | evdev: take the device exclusively (`EVIOCGRAB`) so the digits do not also type into a focused browser or terminal |
 | `enabled` | disabled scanners are not read and are refused by the API |
 | `layout` | `us` (the only value) |
+| `allowed_actors` | web scanners: comma list of auth collections or records (`gate_devices`, `gate_devices/abc`) that may `POST /api/scan` to this scanner; empty = `TOKI_SCAN_POST_COLLECTIONS` |
 
 Rows are validated on save, also through the admin API. A change restarts that reader within seconds. Control characters (below 0x20) in a code reject the scan.
 
@@ -77,16 +78,16 @@ Options: `url` (base, default same origin), `token()`, `scanner`, `minLen` (4), 
 
 | Route | Auth | Notes |
 | --- | --- | --- |
-| `POST /api/scan` | any auth record, rate-limit tag `scan` | body `{scanner?, code, client_seq?, symbology?}` (8 KiB max). `scanner` omitted = first enabled `web` scanner, else the built-in default named `web`. Answers `200 {id, scanner, code, symbology, source, dup_count, ts, duplicate}`. Errors: `400` with `data.code = scan_rejected` and `data.reason` (`empty`, `too_short`, `too_long`, `control_char`, `charset`), `404` unknown scanner, `409` disabled, `403` from a sync replica apply |
+| `POST /api/scan` | superusers, the scanner's `allowed_actors`, else `TOKI_SCAN_POST_COLLECTIONS` (`TOKI_SCAN_POST_AUTH=auth` = every auth record); others get `403`. Rate-limit tag `scan` plus a built-in `TOKI_SCAN_RATE_PER_MIN` (default 600) per actor and per client address. The request stays in the activity log | body `{scanner?, code, client_seq?, symbology?}` (8 KiB max). `scanner` omitted = first enabled `web` scanner, else the built-in default named `web`; the built-in one exists only while no web scanner row is configured. `client_seq` is at most 128 characters. Answers `200 {id, scanner, code, symbology, source, dup_count, ts, duplicate}`. Errors: `400` with `data.code = scan_rejected` and `data.reason` (`empty`, `too_short`, `too_long`, `control_char`, `charset`), `404` unknown scanner, `409` disabled, `403` from a sync replica apply |
 | `GET /api/scan/events?since=<id>&limit=<n>&scanner=<name>` | same as the topic (below) | `{items, gap}`, oldest first, `limit` 1 to 500 (default 100). Without `since` it returns the newest `limit` events. `gap: true` means `since` is not retained any more (pruned): re-read state from the items |
-| `GET /api/scan/scanners` | any auth record | status of every scanner; `device` and `last_error` only for superusers |
+| `GET /api/scan/scanners` | readers (as the topic) and posting actors | status of every scanner; `device` and `last_error` only for superusers |
 | `GET /scan/wedge.js` | none | the script above |
 
 Rule: scan events are created only by the local process (readers, `POST /api/scan`, `toki scan simulate`). A request carrying a sync-replica origin is refused, so a hub row can never make an edge "scan".
 
 ## Realtime topic `@scan`
 
-Subscribe like any realtime topic (`pb.realtime.subscribe('@scan', cb)`, or `@scan?options=...`). Unlike `@sync` the payload carries data: `{"id","scanner","code","symbology","ts"}`. Delivery is only to clients with an auth record, enforced twice: the subscribe request of a guest answers `403`, and the publisher skips any client without auth. `TOKI_SCAN_TOPIC_AUTH=auth` (default) lets every auth record read; `superuser` limits the topic and `GET /api/scan/events` to superusers. The auth of a long-lived SSE connection is the one it subscribed with; revoke by closing the connection. After a gap in the SSE stream, call `GET /api/scan/events?since=<last id>`.
+Subscribe like any realtime topic (`pb.realtime.subscribe('@scan', cb)`, or `@scan?options=...`). Unlike `@sync` the payload carries data: `{"id","scanner","code","symbology","source","actor","ts"}` (`source` = `serial`, `evdev`, `web`; `actor` = who posted a web scan, empty for readers, so a gate consumer can tell a person at the door from a forged browser scan). Delivery is only to clients allowed to read, enforced twice: the subscribe request answers `403`, and the publisher skips any client that is not allowed or whose auth record no longer exists. `TOKI_SCAN_TOPIC_AUTH=service` (default) lets superusers and `TOKI_SCAN_READ_AUTH` (collections or records) read the topic and `GET /api/scan/events`; `auth` lets every auth record read (sign-ups included); `superuser` limits both to superusers. Each client has its own ordered queue of 64 events; a client that does not read is disconnected and catches up with `events?since=`. After a gap in the SSE stream, call `GET /api/scan/events?since=<last id>`.
 
 ## Env
 
@@ -94,7 +95,11 @@ Subscribe like any realtime topic (`pb.realtime.subscribe('@scan', cb)`, or `@sc
 | --- | --- | --- |
 | `TOKI_SCANNER` | off | `on` enables the module |
 | `TOKI_SCAN_RETENTION_HOURS` | 168 | age after which `_scan_events` rows are removed (cron every 10 minutes) |
-| `TOKI_SCAN_TOPIC_AUTH` | `auth` | `auth` or `superuser` |
+| `TOKI_SCAN_TOPIC_AUTH` | `service` | `service`, `auth` or `superuser` (see Realtime topic) |
+| `TOKI_SCAN_READ_AUTH` | empty | collections / records that may read scans in `service` mode |
+| `TOKI_SCAN_POST_AUTH` | `service` | `service`, `auth` or `superuser` for `POST /api/scan` |
+| `TOKI_SCAN_POST_COLLECTIONS` | empty | collections / records that may post scans to a scanner without `allowed_actors` |
+| `TOKI_SCAN_RATE_PER_MIN` | 600 | `POST /api/scan` per actor and per client address (`0` = off) |
 
 ## CLI
 

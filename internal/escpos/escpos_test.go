@@ -346,3 +346,78 @@ func TestRenderLimits(t *testing.T) {
 		t.Errorf("custom: %v", err)
 	}
 }
+
+func TestDataNeverStartsDirective(t *testing.T) {
+	drawer := []byte{ESC, 'p'}
+	cut := []byte{GS, 'V'}
+	cases := []struct {
+		name string
+		tpl  string
+		data any
+	}{
+		{"newlines", "Plat: {{.plate}}", map[string]any{"plate": "X\n@drawer\n@feed 255\n@cut"}},
+		{"cr", "Plat: {{.plate}}", map[string]any{"plate": "X\r@cut\r@drawer"}},
+		{"line only", "{{.x}}", map[string]any{"x": "@drawer"}},
+		{"line only cut", "a\n{{.x}}\nb", map[string]any{"x": "@cut"}},
+		{"nested", "{{range .l}}{{.}}\n{{end}}", map[string]any{"l": []any{"@drawer", "ok\n@cut"}}},
+		{"qr data", "@qr {{.x}}", map[string]any{"x": "A\x1bpB\x1dVC"}},
+		{"barcode", "@barcode code128 {{.x}}", map[string]any{"x": "A\n@cut"}},
+	}
+	for _, c := range cases {
+		got, info, err := RenderInfo(c.tpl, c.data, Options{QRRaster: false})
+		if err != nil {
+			if c.name == "barcode" {
+				continue
+			}
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if bytes.Contains(got, drawer) || bytes.Contains(got, cut) || bytes.Contains(got, []byte{ESC, 'd', 255}) {
+			t.Errorf("%s: data was executed as a directive: % X", c.name, got)
+		}
+		if info.HasCut || info.HasDrawer {
+			t.Errorf("%s: info reports data as directives", c.name)
+		}
+	}
+	// the text itself is kept, the leading @ too
+	got, _ := Render("{{.x}}", map[string]any{"x": "@drawer"}, Options{})
+	if !bytes.HasSuffix(got, []byte("@drawer\n")) {
+		t.Errorf("literal @ lost: %q", got)
+	}
+	// the template's own directives still work and are reported
+	got, info, _ := RenderInfo("@drawer\nx\n@cut", nil, Options{})
+	if !bytes.Contains(got, drawer) || !bytes.Contains(got, cut) || !info.HasCut || !info.HasDrawer {
+		t.Errorf("own directives: % X %+v", got, info)
+	}
+}
+
+func TestMissingKeyPrintsNothing(t *testing.T) {
+	got, err := Render("Plat: {{.plate}}|", map[string]any{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(got, []byte("no value")) {
+		t.Errorf("missing key printed: %q", got)
+	}
+}
+
+func TestCode128EscapesBrace(t *testing.T) {
+	b := New(CP437)
+	if err := b.Barcode(Code128, "A{B"); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b.Bytes(), []byte{'{', 'B', 'A', '{', '{', 'B'}) {
+		t.Errorf("brace not doubled: % X", b.Bytes())
+	}
+}
+
+func TestQRLimits(t *testing.T) {
+	b := New(CP437)
+	if err := b.QR(strings.Repeat("a", 1300), 4, QRHigh); err == nil {
+		t.Error("1300 bytes at level H must not fit")
+	}
+	r := New(CP437)
+	r.QRRaster = true
+	if err := r.QR(strings.Repeat("a", 800), 16, QRLow); err == nil {
+		t.Error("an image wider than the paper must be refused")
+	}
+}

@@ -52,32 +52,116 @@ var ErrLimit = errors.New("escpos: limit exceeded")
 // The template can use pad, padl, money, date and upper. It cannot define or
 // call other templates (no recursion) and has no I/O function.
 func Render(tpl string, data any, o Options) ([]byte, error) {
+	out, _, err := RenderInfo(tpl, data, o)
+	return out, err
+}
+
+// Info reports which directives the template itself used.
+type Info struct {
+	HasCut    bool // the template contains an explicit @cut
+	HasDrawer bool // the template contains an explicit @drawer
+}
+
+// atSentinel stands in for a '@' that starts a data string: data values are
+// never directives. compile turns it back into a literal '@'.
+const atSentinel = '\uE000'
+
+// sanitizeData returns a copy of the JSON-like data with every string made
+// safe: control characters (newlines included) become spaces and a leading
+// '@' is replaced by atSentinel, so a value can never start a directive line
+// or smuggle raw bytes into @qr / @barcode. Typed Go values (structs) pass
+// through unchanged: only decoded request data is untrusted.
+func sanitizeData(v any) any {
+	switch x := v.(type) {
+	case string:
+		return sanitizeString(x)
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[k] = sanitizeData(e)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = sanitizeData(e)
+		}
+		return out
+	case map[string]string:
+		out := make(map[string]string, len(x))
+		for k, e := range x {
+			out[k] = sanitizeString(e)
+		}
+		return out
+	case []string:
+		out := make([]string, len(x))
+		for i, e := range x {
+			out[i] = sanitizeString(e)
+		}
+		return out
+	}
+	return v
+}
+
+func sanitizeString(s string) string {
+	clean := true
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			clean = false
+			break
+		}
+	}
+	if clean && (s == "" || s[0] != '@') {
+		return s
+	}
+	r := []rune(s)
+	for i, c := range r {
+		if c < 0x20 || c == 0x7f || c == 0x2028 || c == 0x2029 {
+			r[i] = ' '
+		}
+	}
+	if len(r) > 0 && r[0] == '@' {
+		r[0] = atSentinel
+	}
+	return string(r)
+}
+
+// RenderInfo is [Render] that also reports the explicit @cut / @drawer of the
+// template (never of data).
+func RenderInfo(tpl string, data any, o Options) ([]byte, Info, error) {
 	lim := o.Limits
 	if lim == (Limits{}) {
 		lim = DefaultLimits
 	}
 	if len(tpl) > lim.MaxTemplate {
-		return nil, fmt.Errorf("%w: template is %d bytes", ErrLimit, len(tpl))
+		return nil, Info{}, fmt.Errorf("%w: template is %d bytes", ErrLimit, len(tpl))
 	}
 	if err := checkData(reflect.ValueOf(data), lim, new(int), 0); err != nil {
-		return nil, err
+		return nil, Info{}, err
 	}
+	data = sanitizeData(data)
 	loc := o.Location
 	if loc == nil {
 		loc = time.UTC
 	}
 	t, err := template.New("p").Option("missingkey=zero").Funcs(funcMap(loc)).Parse(tpl)
 	if err != nil {
-		return nil, err
+		return nil, Info{}, err
 	}
 	if err := checkTree(t); err != nil {
-		return nil, err
+		return nil, Info{}, err
 	}
 	w := &limitWriter{max: lim.MaxOutput}
 	if err := t.Execute(w, data); err != nil {
-		return nil, err
+		return nil, Info{}, err
 	}
-	return compile(w.buf.String(), o, lim)
+	// a missing key prints as nothing, not as "<no value>"
+	text := strings.ReplaceAll(w.buf.String(), "<no value>", "")
+	b, err := compile(text, o, lim)
+	if err != nil {
+		return nil, Info{}, err
+	}
+	return b.Bytes(), Info{HasCut: b.hadCut, HasDrawer: b.hadDrawer}, nil
 }
 
 func checkTree(t *template.Template) error {
@@ -321,34 +405,41 @@ func formatDate(v any, layout string, loc *time.Location) (string, error) {
 
 // ---- directives ----
 
-func compile(text string, o Options, lim Limits) ([]byte, error) {
+func compile(text string, o Options, lim Limits) (*Builder, error) {
 	b := New(o.Codepage)
 	b.QRRaster = o.QRRaster
 	b.Init()
 	text = strings.TrimSuffix(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	if text == "" {
-		return b.Bytes(), nil
+		return b, nil
 	}
 	for i, line := range strings.Split(text, "\n") {
 		if i > 0 && b.Len() > lim.MaxBytes {
 			return nil, fmt.Errorf("%w: stream over %d bytes", ErrLimit, lim.MaxBytes)
 		}
 		if strings.HasPrefix(line, "@@") {
-			b.Line(line[1:])
+			b.Line(unsentinel(line[1:]))
 			continue
 		}
 		if !strings.HasPrefix(line, "@") {
-			b.Line(line)
+			b.Line(unsentinel(line))
 			continue
 		}
-		if err := directive(b, strings.TrimSpace(stripComment(line[1:]))); err != nil {
+		if err := directive(b, strings.TrimSpace(stripComment(unsentinel(line[1:])))); err != nil {
 			return nil, fmt.Errorf("line %d: %w", i+1, err)
 		}
 	}
 	if b.Len() > lim.MaxBytes {
 		return nil, fmt.Errorf("%w: stream over %d bytes", ErrLimit, lim.MaxBytes)
 	}
-	return b.Bytes(), nil
+	return b, nil
+}
+
+func unsentinel(s string) string {
+	if strings.ContainsRune(s, atSentinel) {
+		return strings.ReplaceAll(s, string(atSentinel), "@")
+	}
+	return s
 }
 
 func stripComment(s string) string {

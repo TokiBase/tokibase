@@ -55,6 +55,9 @@ func setup(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(app.Cleanup)
+	// most tests drive the module as a plain "users" record
+	t.Setenv("TOKI_SCAN_POST_COLLECTIONS", "users")
+	t.Setenv("TOKI_SCAN_READ_AUTH", "users")
 	m := Register(app)
 	clk := &clock{t: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)}
 	m.now = clk.now
@@ -772,8 +775,8 @@ func TestRealtimeScanTopicNeedsAuth(t *testing.T) {
 	if got == nil || got["code"] != "LIVE1234" || got["id"] != posted["id"] || got["scanner"] != "web" || got["symbology"] == nil || got["ts"] == nil {
 		t.Fatalf("payload %v", got)
 	}
-	if len(got) != 5 {
-		t.Fatalf("payload must be exactly {id, scanner, code, symbology, ts}: %v", got)
+	if len(got) != 7 || got["source"] != "web" || !strings.HasPrefix(got["actor"].(string), "users/") {
+		t.Fatalf("payload must be {id, scanner, code, symbology, source, actor, ts}: %v", got)
 	}
 	if g := guest.next(300 * time.Millisecond); g != nil {
 		t.Fatalf("the guest received %v", g)

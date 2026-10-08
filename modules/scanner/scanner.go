@@ -63,10 +63,36 @@ func retention() time.Duration {
 	return time.Duration(h) * time.Hour
 }
 
-// topicSuperuserOnly reports TOKI_SCAN_TOPIC_AUTH=superuser; any other value
-// (default "auth") lets every authenticated client read scans.
-func topicSuperuserOnly() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("TOKI_SCAN_TOPIC_AUTH")), "superuser")
+// Access modes of TOKI_SCAN_TOPIC_AUTH (reading) and TOKI_SCAN_POST_AUTH (posting).
+const (
+	modeService   = "service" // default: superusers and the configured allowlist
+	modeAuth      = "auth"    // explicit opt-in: every authenticated record
+	modeSuperuser = "superuser"
+)
+
+func modeOf(env string) string {
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv(env))); v {
+	case modeAuth, modeSuperuser:
+		return v
+	}
+	return modeService
+}
+
+// readMode is TOKI_SCAN_TOPIC_AUTH: who may read scans (the "@scan" topic and
+// GET /api/scan/events). Default service: superusers and the collections or
+// records listed in TOKI_SCAN_READ_AUTH.
+func readMode() string { return modeOf("TOKI_SCAN_TOPIC_AUTH") }
+
+// postMode is TOKI_SCAN_POST_AUTH: who may POST /api/scan. Default service:
+// superusers, the actors allowed by the scanner row (allowed_actors) and, for
+// a scanner without that list, TOKI_SCAN_POST_COLLECTIONS.
+func postMode() string { return modeOf("TOKI_SCAN_POST_AUTH") }
+
+func ratePerMin() int {
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("TOKI_SCAN_RATE_PER_MIN"))); err == nil && n >= 0 {
+		return n
+	}
+	return 600
 }
 
 // Scanner is a row of the _scanners collection with defaults applied.
@@ -86,6 +112,10 @@ type Scanner struct {
 	Grab       bool   `json:"grab"`
 	Enabled    bool   `json:"enabled"`
 	Layout     string `json:"layout"`
+	// AllowedActors lists the collections ("gate_devices") or records
+	// ("gate_devices/abc") that may POST to this web scanner. Empty = the
+	// TOKI_SCAN_POST_COLLECTIONS list.
+	AllowedActors string `json:"allowed_actors"`
 
 	re *regexp.Regexp
 }
@@ -97,7 +127,7 @@ func scannerOf(r *core.Record) *Scanner {
 		Prefix: r.GetString("prefix"), Suffix: r.GetString("suffix"),
 		MinLen: r.GetInt("min_len"), MaxLen: r.GetInt("max_len"), Charset: r.GetString("charset"),
 		DedupeMs: r.GetInt("dedupe_ms"), Grab: r.GetBool("grab"), Enabled: r.GetBool("enabled"),
-		Layout: r.GetString("layout"),
+		Layout: r.GetString("layout"), AllowedActors: r.GetString("allowed_actors"),
 	}
 	s.applyDefaults()
 	return s
@@ -127,6 +157,15 @@ func (s *Scanner) applyDefaults() {
 	}
 }
 
+func serialPath(d string) bool {
+	for _, p := range []string{"/dev/tty", "/dev/rfcomm", "/dev/pts/", "/dev/serial/", "/dev/cu."} {
+		if strings.HasPrefix(d, p) {
+			return true
+		}
+	}
+	return false
+}
+
 var nameRe = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 
 // Validate checks a scanner config.
@@ -145,6 +184,12 @@ func (s *Scanner) Validate() error {
 		if s.Kind == KindSerial && !devio.ValidBaud(s.Baud) {
 			return fmt.Errorf("scanner: unsupported baud %d", s.Baud)
 		}
+		if s.Kind == KindEvdev && !strings.HasPrefix(s.Device, "/dev/input/") {
+			return errors.New("scanner: an evdev device must be under /dev/input/")
+		}
+		if s.Kind == KindSerial && !serialPath(s.Device) {
+			return errors.New("scanner: a serial device must be /dev/tty*, /dev/rfcomm*, /dev/pts/* or under /dev/serial/")
+		}
 	case KindWeb:
 	default:
 		return errors.New("scanner: kind must be serial, evdev or web")
@@ -159,6 +204,9 @@ func (s *Scanner) Validate() error {
 	}
 	if s.MaxLen < s.MinLen {
 		return errors.New("scanner: max_len is below min_len")
+	}
+	if len(s.AllowedActors) > 1000 {
+		return errors.New("scanner: allowed_actors is too long")
 	}
 	if len(s.Charset) > 256 {
 		return errors.New("scanner: charset is too long")
@@ -267,10 +315,17 @@ func ensureCollections(app core.App) error {
 			&core.BoolField{Name: "grab"},
 			&core.BoolField{Name: "enabled"},
 			&core.TextField{Name: "layout", Max: 10},
+			&core.TextField{Name: "allowed_actors", Max: 1000},
 			&core.AutodateField{Name: "created", OnCreate: true},
 			&core.AutodateField{Name: "updated", OnCreate: true, OnUpdate: true},
 		)
 		c.AddIndex("idx_toki_scanners_name", true, "name", "")
+		if err := app.Save(c); err != nil {
+			return err
+		}
+	}
+	if c, err := app.FindCollectionByNameOrId(ConfigCollection); err == nil && c.Fields.GetByName("allowed_actors") == nil {
+		c.Fields.Add(&core.TextField{Name: "allowed_actors", Max: 1000})
 		if err := app.Save(c); err != nil {
 			return err
 		}

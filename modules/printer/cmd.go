@@ -183,7 +183,7 @@ func NewCommand(app core.App) *cobra.Command {
 				return err
 			}
 			defer conn.Close()
-			st, ok, err := queryStatus(conn)
+			st, ok, err := queryStatus(conn, p.statusTimeout())
 			if err != nil {
 				return err
 			}
