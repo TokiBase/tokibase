@@ -191,6 +191,9 @@ func syncedFields(col *core.Collection, p *policy) []core.Field {
 				continue
 			}
 		}
+		if stripped(col, p, name) {
+			continue // crypto: strip (docs/SYNC_DESIGN.md §7.6)
+		}
 		out = append(out, f)
 	}
 	return out

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -93,6 +94,10 @@ func (c *Client) applyPage(hubID string, pr *proto.PullResponse) (applied, faile
 		c.emit(Event{Type: EventApplied, Message: fmt.Sprintf("%d changes", applied)})
 	}
 	if failure != nil {
+		if errors.Is(failure.Err, kernel.ErrSyncKeyMissing) {
+			// a new data key version: the next handshake carries it (PR9)
+			c.ForceHandshake()
+		}
 		return applied, failed, failure
 	}
 	return applied, failed, nil

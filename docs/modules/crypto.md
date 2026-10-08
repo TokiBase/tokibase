@@ -151,6 +151,18 @@ At boot the module logs a warning for every collection whose API rule (list/view
 
 Ciphertext is what is stored, so `toki backup` archives, WAL replicas and Litestream carry ciphertext only; `toki backup verify` still checks integrity (it never needs plaintext). The master key is not in `pb_data` and so not in backups: store it in your secret manager and back it up separately. Restoring a backup on a node needs the same master key. `_crypto_keys` holds the wrapped DEKs and travels with the data on purpose.
 
+## Sync (docs/SYNC_DESIGN.md §7.6)
+
+With `modules/sync` the **ciphertext replicates verbatim** between hub and spokes and every node keeps its own master key. The module implements `kernel.SyncKeyProvider`:
+
+- `ExportKeys` (hub): every DEK version of the given collections, unwrapped with the hub master key and sealed to the X25519 key of the node (`ephPub || nonce || AES-GCM(HKDF(X25519(eph, node)), dek)`, AAD = collection id + version). Retired versions are listed without key material.
+- `ImportKeys` (spoke): unwrap with the node key, **re-wrap under the local master key** into `_crypto_keys`. Idempotent; a different DEK for an existing version is an error; with no master key it fails (`ErrNoMasterKey`) and sync refuses to run. A retired version is destroyed locally only when no local row still uses it.
+- `NeedsKeys`: the collection has non-stripped encrypted fields.
+- Write path under a `SyncOrigin`: `onValidate` runs for new records too, decrypts the incoming ciphertext and remembers it; `onWrite` stores it unchanged (so the record hash is the same on every node) and recomputes the blind-index row locally. A push whose ciphertext cannot be decrypted is refused; a pull of an unknown key version returns `kernel.ErrSyncKeyMissing` (the sync client fetches the key with a new handshake and retries).
+- `_crypto_fields.state = "stripped"` (set by a sync schema bundle for `crypto: strip`): the module ignores the field on that node; it needs no key and the column is plain.
+
+The wrap keys are derived per handshake with an ephemeral hub key; the device never learns the hub master key. Limits: `enable`, `disable` and `rotate` sweep rows without hooks, so they produce no change rows (see docs/modules/sync.md "Encrypted fields").
+
 ## Limits
 
 - Filters on encrypted fields: only equality on `blind-index` fields (see above); no sort, range, prefix or substring search, no uniqueness on encrypted fields.

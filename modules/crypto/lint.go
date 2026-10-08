@@ -63,7 +63,13 @@ func (m *Module) bootWarn() {
 	if err != nil || len(cfgs) == 0 {
 		return
 	}
-	if !m.Active() {
+	live := 0
+	for _, c := range cfgs {
+		if c.State != StateStripped {
+			live++
+		}
+	}
+	if !m.Active() && live > 0 {
 		m.app.Logger().Error("crypto: fields are configured as encrypted but no master key is set; writes to them are refused and reads return ciphertext",
 			"env", EnvMasterKey)
 	}

@@ -44,12 +44,14 @@ URL_HUB="http://127.0.0.1:$PORT_HUB"
 URL_S1="http://127.0.0.1:$PORT_S1"
 URL_S2="http://127.0.0.1:$PORT_S2"
 
+# every node has a master key of its own (PR9: the ciphertext syncs, the keys are wrapped per device)
+mk() { python3 -c 'import sys,hashlib,base64; print(base64.b64encode(hashlib.sha256(("e2e-"+sys.argv[1]).encode()).digest()).decode())' "$(basename "$1")"; }
 toki() { # role dir args...
   local role="$1" dir="$2"; shift 2
-  TOKI_SYNC_ROLE="$role" TOKI_SYNC_INSECURE=1 "$TOKI" "$@" --dir "$dir"
+  TOKI_CRYPTO_MASTER_KEY="$(mk "$dir")" TOKI_SYNC_ROLE="$role" TOKI_SYNC_INSECURE=1 "$TOKI" "$@" --dir "$dir"
 }
 start() { # name role dir port
-  TOKI_SYNC_ROLE="$2" TOKI_SYNC_INSECURE=1 TOKI_SYNC_INTERVAL=1s TOKI_SYNC_PAGE=25 TOKI_SYNC_SNAPSHOT_PAGE="${SNAP_PAGE:-500}" \
+  TOKI_CRYPTO_MASTER_KEY="$(mk "$3")" TOKI_SYNC_ROLE="$2" TOKI_SYNC_INSECURE=1 TOKI_SYNC_INTERVAL=1s TOKI_SYNC_PAGE=25 TOKI_SYNC_SNAPSHOT_PAGE="${SNAP_PAGE:-500}" \
     "$TOKI" serve --automigrate=false --dir "$3" --http "127.0.0.1:$4" >>"$TMP/$1.log" 2>&1 &
   echo $! >"$TMP/$1.pid"
 }
@@ -513,5 +515,34 @@ HR="$(api "$TH" POST "$URL_HUB" /api/collections/e2etk/records '{"plate":"hub-ne
 wait_for "new field and record on the spokes" '[ "$(api "$T1" GET "$URL_S1" "/api/collections/e2etk/records/$HR" 2>/dev/null | jget "d[\"extra\"]" 2>/dev/null)" = "from the new field" ] && [ "$(api "$T2" GET "$URL_S2" "/api/collections/e2etk/records/$HR" 2>/dev/null | jget "d[\"extra\"]" 2>/dev/null)" = "from the new field" ]'
 log "schema bundle: the new field and a record using it reached both spokes"
 curl -fsS "$URL_HUB/api/health" -H "Authorization: $TH" | jget 'd["data"]["sync"]["schema_version"] >= 3' | grep -q True || fail "health block lacks the schema version"
+
+# ---- 14. encrypted fields (PR9): each node has its own master key, the ciphertext is identical everywhere ----
+TH="$(token "$URL_HUB")"; T1="$(token "$URL_S1")"; T2="$(token "$URL_S2")"
+COLL5='{"id":"pbc_e2esec","name":"e2esec","type":"base","listRule":"","viewRule":"","createRule":"","updateRule":"","deleteRule":"","fields":[{"name":"title","type":"text"},{"name":"secret","type":"text"},{"name":"created","type":"autodate","onCreate":true},{"name":"updated","type":"autodate","onCreate":true,"onUpdate":true}]}'
+api "$TH" POST "$URL_HUB" /api/collections "$COLL5" >/dev/null
+toki hub "$HUB" crypto enable e2esec secret --mode blind-index >/dev/null || fail "crypto enable"
+# the policy comes last: it cuts the bundle that carries the collection and its encrypted-field config
+api "$TH" POST "$URL_HUB" /api/collections/_sync_policies/records '{"collection":"e2esec","direction":"both","enabled":true}' >/dev/null || fail "policy e2esec"
+wait_for "e2esec on the spokes" '[ "$(http "$T1" GET "$URL_S1" /api/collections/e2esec)" = 200 ] && [ "$(http "$T2" GET "$URL_S2" /api/collections/e2esec)" = 200 ]'
+sec() { api "$1" POST "$2" /api/collections/e2esec/records "{\"title\":\"$3\",\"secret\":\"$4\"}" | jget 'd["id"]'; }
+sget() { api "$1" GET "$2" "/api/collections/e2esec/records/$3" 2>/dev/null | jget 'd["secret"]' 2>/dev/null; }
+sfind() { api "$1" GET "$2" "/api/collections/e2esec/records?filter=(secret%3D'$3')&perPage=1" 2>/dev/null | jget 'd["totalItems"]' 2>/dev/null; }
+sdigest() { toki "$1" "$2" sync verify --json 2>/dev/null | grep '^{' | tail -1 | jget '[c["digest"]+str(c["records"]) for c in d["collections"] if c["name"]=="e2esec"][0]' 2>/dev/null; }
+SEC1="$(sec "$TH" "$URL_HUB" "from hub" "hub-secret-value")"
+wait_for "hub secret decrypts on both spokes" '[ "$(sget "$T1" "$URL_S1" "$SEC1")" = "hub-secret-value" ] && [ "$(sget "$T2" "$URL_S2" "$SEC1")" = "hub-secret-value" ]'
+SEC2="$(sec "$T1" "$URL_S1" "from s1" "s1-secret-value")"
+wait_for "spoke secret decrypts on the hub and the other spoke" '[ "$(sget "$TH" "$URL_HUB" "$SEC2")" = "s1-secret-value" ] && [ "$(sget "$T2" "$URL_S2" "$SEC2")" = "s1-secret-value" ]'
+wait_for "e2esec digests equal on all nodes" 'D1="$(sdigest hub "$HUB")"; [ -n "$D1" ] && [ "$D1" = "$(sdigest spoke "$S1")" ] && [ "$D1" = "$(sdigest spoke "$S2")" ]'
+for who in "$TH|$URL_HUB" "$T1|$URL_S1" "$T2|$URL_S2"; do
+  [ "$(sfind "${who%%|*}" "${who##*|}" s1-secret-value)" = 1 ] || fail "blind-index lookup failed on ${who##*|}"
+done
+# rotation on the hub: the new key version reaches the spokes with the next handshake
+toki hub "$HUB" crypto rotate e2esec >/dev/null || fail "crypto rotate"
+SEC3="$(sec "$TH" "$URL_HUB" "after rotation" "rotated-secret-value")"
+wait_for "rotated secret decrypts on both spokes" '[ "$(sget "$T1" "$URL_S1" "$SEC3")" = "rotated-secret-value" ] && [ "$(sget "$T2" "$URL_S2" "$SEC3")" = "rotated-secret-value" ]'
+# a spoke write after the rotation uses the new version and the hub reads it
+SEC4="$(sec "$T2" "$URL_S2" "s2 after rotation" "s2-rotated-value")"
+wait_for "spoke write with the new key version on the hub" '[ "$(sget "$TH" "$URL_HUB" "$SEC4")" = "s2-rotated-value" ] && [ "$(sget "$T1" "$URL_S1" "$SEC4")" = "s2-rotated-value" ]'
+log "encrypted fields: ciphertext identical on hub and two spokes with three master keys, blind index works, rotation propagated"
 
 log "OK"

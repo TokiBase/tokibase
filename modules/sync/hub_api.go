@@ -526,6 +526,12 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 	if err != nil {
 		return err
 	}
+	// PR9: the data keys of the encrypted collections, wrapped to the X25519 key of the node
+	keys, err := m.handshakeKeys(cur)
+	if err != nil {
+		e.App.Logger().Error("sync: cannot export the encryption keys for a handshake", "node", nodeID, "error", err)
+		return syncErr(e, http.StatusServiceUnavailable, proto.CodeHubUnavailable, "the hub cannot provide the encryption keys (is its crypto master key set?)", nil)
+	}
 	serverTime := m.stampTime(e, nodeID, ts, nonce, now)
 	return e.JSON(http.StatusOK, proto.HandshakeResponse{
 		SessionToken: tok,
@@ -539,7 +545,7 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 		Schema:       schema,
 		Policies:     m.handshakePolicies(),
 		Params:       params,
-		Keys:         []any{}, // TODO(PR9): wrapped collection keys
+		Keys:         keys,
 		PushFrom:     int64(cur.GetFloat("pushed_origin_seq")) + 1,
 		LowWater:     low,
 		Rebootstrap:  rebootstrap,
@@ -585,9 +591,7 @@ func (m *Module) handshakePolicies() []proto.Policy {
 		if raw := rawJSON(r, "field_types"); raw != nil {
 			_ = json.Unmarshal(raw, &p.FieldTypes)
 		}
-		if raw := rawJSON(r, "exclude"); raw != nil {
-			_ = json.Unmarshal(raw, &p.Exclude)
-		}
+		p.Exclude = m.effectiveExclude(r)
 		out = append(out, p)
 	}
 	return out

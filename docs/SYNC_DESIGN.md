@@ -575,7 +575,7 @@ Covered in §1.6. Response: `{aid, exp, assertion, record}`. `DELETE /api/sync/a
 | 429 | `sync_rate_limited` / `sync_reservation_limit` | honor `Retry-After` |
 | 503 | `sync_hub_unavailable` (standby/readonly/busy) | backoff |
 
-Per-change codes: `rule_denied`, `validation_failed`, `unique_violation`, `tombstoned`, `legal_tombstone`, `actor_unknown|actor_node_mismatch|actor_expired|actor_revoked|actor_forbidden`, `policy_direction`, `policy_partition`, `future_hlc`, `reservation_out_of_range`, `hub_wins`, `hook_rejected`, `hook_failed`, `superseded`.
+Per-change codes: `rule_denied`, `validation_failed`, `unique_violation`, `tombstoned`, `legal_tombstone`, `actor_unknown|actor_node_mismatch|actor_expired|actor_revoked|actor_forbidden`, `policy_direction`, `policy_partition`, `future_hlc`, `reservation_out_of_range`, `policy_crypto`, `hub_wins`, `hook_rejected`, `hook_failed`, `superseded`.
 
 ### 3.13 Resumability summary
 
@@ -828,6 +828,8 @@ Why not decrypt-on-push / re-encrypt-on-apply:
 4. The v1 trade-off (a device holds the DEK of collections it pulls) adds little exposure, because the device already holds those records' plaintext after local decryption.
 
 `crypto: strip` covers devices that must not see a field. "Crypto full" (DEK per device, per-tenant shredding) stays a later phase.
+
+Implementation notes (PR9): `crypto` is a property of the collection policy, so `strip` applies to every node that syncs the collection (not per node). A `strip` collection leaves the encrypted fields out of the hashed field set on **all** nodes (hub included); nodes learn the set through the policy `exclude` list and the bundle's `_crypto_fields.state = "stripped"`. Keys are also sent for push-only collections (the node encrypts its own writes). `toki crypto enable|disable|rotate` sweep rows without hooks and produce no change rows: spokes keep old-version ciphertext of existing rows until those rows are written again (both versions stay readable), and a spoke keeps a retired version while a local row still uses it. The wrap is `ephPub(32) || nonce || AES-GCM`, one ephemeral key per handshake answer, AAD = collection id and version.
 
 Seam (kernel, §8.1): `kernel.SyncKeyProvider`, implemented by crypto. A spoke without a master key refuses to enroll for collections that need keys (clear error), consistent with crypto refusing plaintext writes.
 

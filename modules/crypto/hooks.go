@@ -242,7 +242,8 @@ func Decrypt(app kernel.App, record *core.Record) error {
 // url, pattern, max length) runs on the plaintext.
 func (m *Module) onValidate(e *core.RecordEvent) error {
 	col := e.Record.Collection()
-	if col == nil || isCryptoSystem(col.Name) || e.Record.IsNew() || !m.Active() {
+	origin := kernel.SyncOriginFrom(e.Context)
+	if col == nil || isCryptoSystem(col.Name) || (e.Record.IsNew() && origin == nil) || !m.Active() {
 		return e.Next()
 	}
 	cfg, err := m.fieldsFor(col.Id)
@@ -252,10 +253,16 @@ func (m *Module) onValidate(e *core.RecordEvent) error {
 	for field := range cfg {
 		isJSON := isJSONField(col, field)
 		stored := storedOf(e.Record, field)
-		if _, ok := ctOf(stored, isJSON); !ok {
+		ct, ok := ctOf(stored, isJSON)
+		if !ok {
 			continue
 		}
 		if p, err := m.openStored(col, field, e.Record.Id, stored, isJSON); err == nil {
+			if origin != nil {
+				// a sync apply: the stored form must stay the ciphertext that came over the
+				// wire (same bytes, same hash on every node), see onWrite
+				origin.Remember(syncCTKey{e.Record, field}, ct)
+			}
 			setStored(e.Record, field, p, isJSON)
 		} // on failure the ciphertext stays; execute treats it as unchanged
 	}
@@ -296,6 +303,7 @@ func (m *Module) onWrite(e *core.RecordEvent) error {
 		orig = e.Record.Original()
 	}
 	var ops []indexOp
+	origin := kernel.SyncOriginFrom(e.Context)
 
 	for field, mode := range cfg {
 		f := col.Fields.GetByName(field)
@@ -310,6 +318,18 @@ func (m *Module) onWrite(e *core.RecordEvent) error {
 		origStored := ""
 		if !isNew {
 			origStored = storedOf(orig, field)
+		}
+		if origin != nil {
+			op, handled, err := m.syncField(origin, col, e.Record, field, mode, cur, origStored, isNew, isJSON)
+			if err != nil {
+				return err
+			}
+			if handled {
+				if op != nil {
+					ops = append(ops, *op)
+				}
+				continue
+			}
 		}
 		if !isNew && isSentinel(cur, isJSON) {
 			if _, isCT := ctOf(origStored, isJSON); isCT {
@@ -414,3 +434,88 @@ func indexDel(db execer, collId, field, rec string) error {
 }
 
 var _ = strings.TrimSpace
+
+// syncCTKey identifies a remembered ciphertext: the record being saved and the field.
+type syncCTKey struct {
+	rec   *core.Record
+	field string
+}
+
+// syncField handles an encrypted field of a record written by a sync apply
+// (docs/SYNC_DESIGN.md §7.6). The ciphertext that came over the wire is stored
+// UNCHANGED so that the stored bytes, and with them the record hash, are the
+// same on every node whatever its master key. It reports handled=false when
+// the normal write path must run (a plaintext value, for example from a local
+// edit).
+//
+//   - onValidate decrypted the value (so validators saw plaintext) and
+//     remembered the ciphertext: it is put back when the plaintext is still the
+//     decryption of it.
+//   - The value is still a ciphertext (SaveNoValidate: pull, snapshot): it is
+//     kept as is. One that cannot be decrypted is refused for a push (a node
+//     must not be able to plant garbage), and stored verbatim for a pull or
+//     snapshot (a historic change can carry a retired key version; the next
+//     change of the record replaces it).
+//
+// The blind index is recomputed from the plaintext with the local copy of the
+// same DEK, so it is identical on every node.
+func (m *Module) syncField(origin *kernel.SyncOrigin, col *core.Collection, rec *core.Record, field, mode, cur, origStored string, isNew, isJSON bool) (*indexOp, bool, error) {
+	key := syncCTKey{rec, field}
+	if v, ok := origin.Recall(key); ok {
+		origin.Forget(key)
+		ct, _ := v.(string)
+		stored := storedFromCT(ct, isJSON)
+		if p, err := m.openStored(col, field, rec.Id, stored, isJSON); err == nil && p == cur {
+			setStored(rec, field, stored, isJSON)
+			if !isNew && stored == origStored {
+				return nil, true, nil // unchanged: the index row is already right
+			}
+			if mode == ModeBlindIndex {
+				return &indexOp{field: field, plain: p}, true, nil
+			}
+			return nil, true, nil
+		}
+		return nil, false, nil // a hook changed the plaintext: encrypt it normally
+	}
+	if _, isCT := ctOf(cur, isJSON); !isCT || (!isNew && cur == origStored) {
+		return nil, false, nil
+	}
+	p, err := m.openStored(col, field, rec.Id, cur, isJSON)
+	if err != nil {
+		if ct, _ := ctOf(cur, isJSON); m.keyUnknown(col.Id, ct) && origin.Mode != kernel.SyncModePush {
+			// a new key version (rotation) that the next handshake brings: retry then, with the index
+			return nil, false, fmt.Errorf("%w (%s.%s)", kernel.ErrSyncKeyMissing, col.Name, field)
+		}
+		if origin.Mode == kernel.SyncModePush {
+			return nil, false, fmt.Errorf("crypto: the ciphertext sent for %s.%s cannot be decrypted by the hub (unknown or retired key version, or it belongs to another record): refused", col.Name, field)
+		}
+		var op *indexOp
+		if mode == ModeBlindIndex {
+			op = &indexOp{field: field, drop: true}
+		}
+		m.app.Logger().Warn("crypto: stored a synced ciphertext that this node cannot decrypt", "collection", col.Name, "field", field, "record", rec.Id, "error", err)
+		return op, true, nil
+	}
+	if mode == ModeBlindIndex {
+		return &indexOp{field: field, plain: p}, true, nil
+	}
+	return nil, true, nil
+}
+
+// keyUnknown reports whether the ciphertext names a key version that this node
+// has no row for at all (neither usable nor retired): the hub has not shipped it
+// yet.
+func (m *Module) keyUnknown(collId, ct string) bool {
+	ver, _, ok := parseCT(ct)
+	if !ok {
+		return false
+	}
+	k, err := m.keysFor(collId)
+	if err != nil {
+		return false
+	}
+	if _, have := k.deks[ver]; have || k.retired[ver] {
+		return false
+	}
+	return true
+}
