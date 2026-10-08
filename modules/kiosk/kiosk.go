@@ -445,7 +445,7 @@ func Register(app core.App) *Module {
 			if err := d.Validate(); err != nil {
 				return err
 			}
-			if err := validateActor(e.App, d); err != nil {
+			if err := validateActor(app, d); err != nil {
 				return err
 			}
 			return e.Next()
