@@ -269,7 +269,7 @@ func TestValidation(t *testing.T) {
 func TestLint(t *testing.T) {
 	e := setup(t)
 	e.role(t, "admin")
-	r1, r2 := `@role("admin") = true`, `@role('ghost') = true || @role("admin", team) = true`
+	r1, r2 := `@role("admin") = true`, `@role('ghost') = true || @role("admin", team, "teams") = true`
 	e.docs.ListRule, e.docs.ViewRule = &r1, &r2
 	if err := e.app.Save(e.docs); err != nil {
 		t.Fatal(err)
