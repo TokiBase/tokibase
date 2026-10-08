@@ -460,3 +460,58 @@ func TestRevokeEndpointRefusesAnotherNode(t *testing.T) { // review test 8
 		t.Fatal("the grant must stay valid")
 	}
 }
+
+func TestResolvingAParkedChangeLeavesParked(t *testing.T) { // P4-2 (b)
+	for _, take := range []string{TakeHub, TakeIncoming} {
+		t.Run(take, func(t *testing.T) {
+			t.Setenv(EnvParkTTL, "1h")
+			active := withSessions(t)
+			h, a, _ := actorHub(t)
+			aid := grant(t, a, h.usr)
+			code, out := a.asUser(t, aid, "POST", "/api/collections/items/records", `{"title":"offline work"}`)
+			if code != 200 {
+				t.Fatalf("%d %s", code, out)
+			}
+			id := idOf(t, out)
+			active.Store(false)
+			a.sync(t)
+			if countWhere(t, h.app, "_changes", "status='parked'", nil) != 1 {
+				t.Fatal("expected a parked change")
+			}
+			rows, _ := ListConflicts(h.app, true, "")
+			if len(rows) != 1 {
+				t.Fatalf("%+v", rows)
+			}
+			if err := ResolveConflict(h.app, ResolveOptions{ID: rows[0].ID, Take: take}); err != nil {
+				t.Fatal(err)
+			}
+			if countWhere(t, h.app, "_changes", "status='parked'", nil) != 0 {
+				t.Fatal("a resolved change must leave parked")
+			}
+			want := proto.CodeParkResolved
+			if take == TakeIncoming {
+				want = proto.CodeParkAccepted
+			}
+			if countWhere(t, h.app, "_changes", "status='rejected' AND code={:c}", dbx.Params{"c": want}) != 1 {
+				t.Fatalf("expected a row with code %s", want)
+			}
+			// the TTL job has nothing left to reject
+			if _, err := h.app.DB().NewQuery("UPDATE _changes SET created='2020-01-01 00:00:00.000Z'").Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := h.m.ExpireParked(); err != nil || n != 0 {
+				t.Fatalf("expire: %d %v", n, err)
+			}
+			a.sync(t)
+			a.sync(t)
+			_, herr := h.app.FindRecordById("items", id)
+			_, aerr := a.app.FindRecordById("items", id)
+			if take == TakeHub && (herr == nil || aerr == nil) {
+				t.Fatalf("take hub: neither side keeps the record (hub %v, spoke %v)", herr, aerr)
+			}
+			if take == TakeIncoming && (herr != nil || aerr != nil) {
+				t.Fatalf("take incoming: both sides keep the record (hub %v, spoke %v)", herr, aerr)
+			}
+		})
+	}
+}

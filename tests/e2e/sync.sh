@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sync e2e (docs/SYNC_DESIGN.md §9, PR3): one hub and two spokes, each with its own pb_data,
+# Sync e2e (docs/SYNC_DESIGN.md §9, PR3 + PR5 field-merge and hook/park cases): one hub and two spokes, each with its own pb_data,
 # on random loopback ports. Writes on all three (including concurrent edits of one record),
 # converge, compare `toki sync verify` digests, SIGKILL spoke 1 in the middle of a push,
 # restart it and converge again. Everything is killed by PID file at exit.
@@ -217,5 +217,38 @@ log "hub holds $HUBN records, identical on all three nodes"
 # ---- 5. verify: a spoke compares its metadata digest with the hub ----
 toki spoke "$S2" sync verify --against-hub --json 2>/dev/null | grep '^{' | tail -1 >"$TMP/against.json" || true; [ -s "$TMP/against.json" ] || fail "verify --against-hub failed: $(cat "$TMP/against.json" 2>/dev/null)"
 jget 'd["against_hub"]["checked"] is True and d["against_hub"]["mismatch"] == []' <"$TMP/against.json" | grep -q True || fail "hub reported digest differences: $(cat "$TMP/against.json")"
+
+# ---- 6. field-merge (PR5): concurrent edits of DIFFERENT fields both survive ----
+PID="$(api "$TH" GET "$URL_HUB" "/api/collections/_sync_policies/records" | jget 'd["items"][0]["id"]')"
+api "$TH" PATCH "$URL_HUB" "/api/collections/_sync_policies/records/$PID" '{"strategy":"field-merge"}' >/dev/null
+FM="$(create "$TH" "$URL_HUB" "fm base" 0)"
+wait_converged "field-merge record replicated"
+api "$T1" PATCH "$URL_S1" "/api/collections/e2eitems/records/$FM" '{"title":"fm title from s1"}' >/dev/null
+api "$T2" PATCH "$URL_S2" "/api/collections/e2eitems/records/$FM" '{"note":"fm note from s2"}' >/dev/null
+wait_converged "round 6 (field-merge)"
+FMR="$(api "$TH" GET "$URL_HUB" "/api/collections/e2eitems/records/$FM")"
+[ "$(echo "$FMR" | jget 'd["title"]')" = "fm title from s1" ] || fail "field-merge lost the title edit: $FMR"
+[ "$(echo "$FMR" | jget 'd["note"]')" = "fm note from s2" ] || fail "field-merge lost the note edit: $FMR"
+
+# ---- 7. hook strategy without a wasm module fails closed (parked), CLI resolves it (PR5) ----
+api "$TH" PATCH "$URL_HUB" "/api/collections/_sync_policies/records/$PID" '{"strategy":"hook"}' >/dev/null
+HK="$(create "$TH" "$URL_HUB" "hook base" 0)"
+wait_converged "hook record replicated"
+api "$T1" PATCH "$URL_S1" "/api/collections/e2eitems/records/$HK" '{"title":"s1 side"}' >/dev/null
+api "$TH" PATCH "$URL_HUB" "/api/collections/e2eitems/records/$HK" '{"title":"hub side"}' >/dev/null
+OPEN=""
+for ((i = 0; i < 60; i++)); do
+  OPEN="$(toki hub "$HUB" sync conflicts --open --json 2>/dev/null | grep -E '^\[(\{|\])' | tail -1 || true)"
+  [ -n "$OPEN" ] && [ "$(echo "$OPEN" | jget 'len(d)')" = 1 ] && break
+  sleep 1
+done
+[ -n "$OPEN" ] && [ "$(echo "$OPEN" | jget 'len(d)')" = 1 ] || fail "expected one open conflict, got: $OPEN"
+[ "$(echo "$OPEN" | jget 'd[0]["kind"]')" = hook_failed ] || fail "expected a hook_failed conflict: $OPEN"
+CID="$(echo "$OPEN" | jget 'd[0]["id"]')"
+[ "$(api "$TH" GET "$URL_HUB" "/api/collections/e2eitems/records/$HK" | jget 'd["title"]')" = "hub side" ] || fail "a parked change must not be applied"
+toki hub "$HUB" sync conflicts --resolve "$CID" --take incoming --note "e2e" >/dev/null || fail "resolve"
+wait_converged "round 7 (hook park + resolve)"
+[ "$(api "$TH" GET "$URL_HUB" "/api/collections/e2eitems/records/$HK" | jget 'd["title"]')" = "s1 side" ] || fail "resolve --take incoming must apply the parked patch"
+[ "$(toki hub "$HUB" sync conflicts --open --json 2>/dev/null | grep -E '^\[(\{|\])' | tail -1 | jget 'len(d)')" = 0 ] || fail "no open conflict should remain"
 
 log "OK"

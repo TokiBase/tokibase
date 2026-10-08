@@ -5,7 +5,7 @@ package sync
 import "github.com/tokibase/tokibase/core"
 
 // ConflictsCollection is the hub's system collection of changes that need a
-// decision (docs/SYNC_DESIGN.md §2.7). PR4 only writes `actor_revoked`
+// decision (docs/SYNC_DESIGN.md §2.7). PR4 wrote `actor_revoked`
 // (parked) and `apply_error` rows; PR5 adds the conflict strategies and the
 // admin commands and extends this schema.
 const ConflictsCollection = "_sync_conflicts"

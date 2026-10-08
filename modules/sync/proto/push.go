@@ -20,6 +20,9 @@ const (
 	CodeRebootstrap   = "sync_rebootstrap_required"
 	CodeSchemaBehind  = "sync_schema_behind"
 	CodeClockDrift    = "sync_clock_drift"
+	// CodeResponseTooLarge is raised by the client when a response is cut at
+	// its read limit; the pull page is then halved.
+	CodeResponseTooLarge = "sync_response_too_large"
 )
 
 // Limits of one push request.
@@ -51,6 +54,9 @@ const (
 	CodeFutureHLC        = "future_hlc"
 	CodeSuperseded       = "superseded"
 	CodeOrphaned         = "orphaned"
+	CodeHubWins          = "hub_wins"
+	CodeHookRejected     = "hook_rejected"
+	CodeHookFailed       = "hook_failed"
 )
 
 // PushChange is one change of a push request.
@@ -101,6 +107,12 @@ const (
 	// NoticeInvisible: the node's change was reverted, but the record is outside
 	// the view rule of its actor; the hub sends no data and the node keeps its copy.
 	NoticeInvisible = "invisible"
+)
+
+// Codes of a parked change settled by an operator (`toki sync conflicts --resolve`).
+const (
+	CodeParkResolved = "park_resolved" // --take hub: rejected, the node gets a revert
+	CodeParkAccepted = "park_accepted" // --take incoming|patch: applied as a hub write
 )
 
 // CodeParkExpired is the code of a parked change that nobody resolved within

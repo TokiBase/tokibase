@@ -61,6 +61,7 @@ const (
 	KindRoute
 	KindJob
 	KindBatch
+	KindSync
 )
 
 // ParsedEvent is a validated entry of `events`.
@@ -75,6 +76,7 @@ type ParsedEvent struct {
 	Path       string
 	Job        string
 	Phase      string // batch: before | after | *
+	// Collection (above) is also the collection of sync.conflict.<collection|*>.
 }
 
 var recordActions = map[string]bool{"create": true, "update": true, "delete": true, "*": true}
@@ -110,6 +112,12 @@ func ParseEvent(s string) (ParsedEvent, error) {
 			return ev, fmt.Errorf("event %q: want batch.before, batch.after or batch.*", s)
 		}
 		ev.Kind, ev.Phase = KindBatch, phase
+	case strings.HasPrefix(s, "sync.conflict."):
+		col := strings.TrimPrefix(s, "sync.conflict.")
+		if col == "" || strings.ContainsAny(col, " \t./") {
+			return ev, fmt.Errorf("event %q: want sync.conflict.<collection> or sync.conflict.*", s)
+		}
+		ev.Kind, ev.Collection = KindSync, col
 	case strings.HasPrefix(s, "record."):
 		parts := strings.Split(s, ".")
 		if len(parts) > 1 && parts[1] == "after" {
@@ -133,6 +141,18 @@ func (e ParsedEvent) matchRecord(after bool, action, collection string) bool {
 		return false
 	}
 	if e.Action != "*" && e.Action != action {
+		return false
+	}
+	if e.Collection == "*" {
+		return !strings.HasPrefix(collection, "_")
+	}
+	return e.Collection == collection
+}
+
+// matchSync reports whether a sync.conflict event of collection is selected by
+// e. A wildcard never matches names starting with "_".
+func (e ParsedEvent) matchSync(collection string) bool {
+	if e.Kind != KindSync {
 		return false
 	}
 	if e.Collection == "*" {

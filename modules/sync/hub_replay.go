@@ -57,16 +57,18 @@ type prepared struct {
 	fields []core.Field
 	key    gkey
 
-	skip       bool // lost lww: nothing replayed
-	skipRevert bool
-	req        *core.InternalRequest
-	applied    map[string]any // patch after resolution (typed ops kept)
-	wantAuto   map[string]string
-	isNew      bool
-	merged     bool
-	nh         int64
-	nn         string
-	actor      *actorCtx // who the change replays as (the user, or the service actor for hook-written members)
+	skip        bool // lost lww: nothing replayed
+	skipRevert  bool
+	req         *core.InternalRequest
+	applied     map[string]any // patch after resolution (typed ops kept)
+	wantAuto    map[string]string
+	isNew       bool
+	merged      bool
+	keepMeta    bool     // the record clock stays that of the current winner
+	clockFields []string // plain fields written (field-merge clocks)
+	nh          int64
+	nn          string
+	actor       *actorCtx // who the change replays as (the user, or the service actor for hook-written members)
 }
 
 // applyFault is a test seam: a non-nil error aborts the apply of a group like an
@@ -298,25 +300,33 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 	for _, f := range pr.fields {
 		allowed[f.GetName()] = f
 	}
+	if rj := validateTyped(p.Types, allowed, c.patch, !exists); rj != nil {
+		return nil, rj
+	}
 	patch := c.patch
+	pr.clockFields = plainFields(p.Types, c.patch)
 	if exists && int64(c.base) != meta.h {
-		// concurrent: the writer did not see the latest hub version (lww, record level)
-		if hlc.Less(hlc.HLC(meta.h), meta.node, c.hlc, nodeID) {
-			// the incoming change wins; fields not in the patch keep the hub values
-		} else {
-			// lost: nothing but counter/set operations is applied (they never conflict, §4.5)
-			typedOnly := map[string]any{}
-			for k, v := range patch {
-				if _, ok := typedOp(v); ok {
-					typedOnly[k] = v
-				}
-			}
-			if len(typedOnly) == 0 {
-				pr.skip, pr.skipRevert = true, true
-				return pr, nil
-			}
-			patch, pr.merged = typedOnly, true
+		// concurrent: the writer did not see the latest hub version. The strategy
+		// of the policy decides (resolve.go: lww, hub-wins, field-merge, hook).
+		if rec == nil {
+			rec, _ = tx.FindRecordById(col.Id, c.Record)
 		}
+		if rec == nil {
+			return nil, errors.New("sync: the record vanished during the apply")
+		}
+		d, derr := m.decide(tx, nodeID, c, col, p, rec, pr.fields, meta.h, meta.node)
+		if derr != nil {
+			return nil, derr
+		}
+		if err := m.settle(tx, nodeID, c, col, d); err != nil {
+			return nil, err
+		}
+		switch d.Verdict {
+		case VerdictSuperseded:
+			pr.skip, pr.skipRevert = true, true
+			return pr, nil
+		}
+		patch, pr.merged, pr.keepMeta, pr.clockFields = d.Patch, d.Merged, d.KeepMeta, d.ClockFields
 	}
 
 	pr.isNew = !exists
@@ -335,15 +345,9 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 			continue // unknown, excluded or never-synced field (file, password, tokenKey, derived)
 		}
 		pr.applied[name] = v
-		if op, typed := typedOp(v); typed {
-			if d, ok := op["$inc"]; ok {
-				body[name+"+"] = d
-			}
-			if add, ok := op["$add"]; ok {
-				body[name+"+"] = add
-			}
-			if rm, ok := op["$rm"]; ok {
-				body[name+"-"] = rm
+		if op, typed := opOf(p.Types, name, v); typed {
+			for mk, mv := range typedModifiers(name, op) {
+				body[mk] = mv
 			}
 			continue
 		}
@@ -369,7 +373,7 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 	}
 	// record clock: max(meta.hlc, change.hlc); a lost-lww merge keeps the winner's clock
 	pr.nh, pr.nn = int64(c.hlc), nodeID
-	if meta.has && (pr.merged || !hlc.Less(hlc.HLC(meta.h), meta.node, c.hlc, nodeID)) {
+	if meta.has && (pr.keepMeta || !hlc.Less(hlc.HLC(meta.h), meta.node, c.hlc, nodeID)) {
 		pr.nh, pr.nn = meta.h, meta.node
 	}
 	gs.exists[key] = true
@@ -435,6 +439,17 @@ func (m *Module) finish(tx kernel.App, db dbx.Builder, nodeID string, p *prepare
 	if isLast && fresh != nil {
 		if err := upsertMeta(db, col.Id, c.Record, p.nh, p.nn, hash); err != nil {
 			return nil, err
+		}
+		if p.pol.Strategy == StratFieldMerge { // field clocks (§4.4); counters and sets have none
+			var written []string
+			for _, f := range p.clockFields {
+				if _, ok := p.applied[f]; ok {
+					written = append(written, f)
+				}
+			}
+			if err := bumpFieldClocks(db, col.Id, c.Record, written, c.hlc); err != nil {
+				return nil, err
+			}
 		}
 	}
 	st := proto.ResApplied

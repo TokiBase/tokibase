@@ -36,6 +36,11 @@ type rejection struct {
 	park bool
 	// internal marks an infrastructure failure during validation (not a verdict).
 	internal bool
+	// conflict (sync PR5) is the `_sync_conflicts` row to record with the
+	// rejection, written in the transaction that stores it; change is the
+	// pushed change it belongs to.
+	conflict *ConflictInfo
+	change   *hubChange
 }
 
 func (r *rejection) Error() string { return r.code + ": " + r.msg }
@@ -326,6 +331,11 @@ func (m *Module) processGroup(app kernel.App, nodeID, ip string, pushed int64, g
 				return err
 			}
 			rejSeqs = append(rejSeqs, seq)
+			if rj.change == c && !rj.park {
+				if err := m.writeRejectionConflict(tx, nodeID, rj); err != nil {
+					return err
+				}
+			}
 		}
 		return m.advancePushed(tx, nodeID, todo[len(todo)-1].oseq)
 	})
@@ -379,6 +389,13 @@ func (m *Module) recordParked(tx kernel.App, nodeID string, c *hubChange, rj *re
 	})
 	if err != nil {
 		return 0, err
+	}
+	if rj.change == c && rj.conflict != nil {
+		col, cerr := tx.FindCachedCollectionByNameOrId(c.Collection)
+		if cerr != nil {
+			return seq, nil
+		}
+		return seq, m.writeConflict(tx, nodeID, c, col, rj.conflict)
 	}
 	return seq, m.addConflict(tx, nodeID, c, rj, "parked", "open")
 }
@@ -566,18 +583,6 @@ func tombstoneKind(db dbx.Builder, colId, id string) string {
 		return ""
 	}
 	return k
-}
-
-// isTyped reports whether v is a counter/set operation object.
-func typedOp(v any) (map[string]any, bool) {
-	mp, ok := v.(map[string]any)
-	if !ok {
-		return nil, false
-	}
-	_, inc := mp["$inc"]
-	_, add := mp["$add"]
-	_, rm := mp["$rm"]
-	return mp, inc || add || rm
 }
 
 // superseded records a lost lww change: nothing is written to the record, the
