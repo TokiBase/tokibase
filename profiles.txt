@@ -4,7 +4,5 @@
 solo    46
 team    46
 cluster 55 replica_s3
-edge    28 no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd no_roles
-nano    24 no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_replica no_backupcheck no_audit no_wasm no_jsvm no_ghupdate no_migratecmd no_totp no_geo no_roles
-edge    28 no_payments no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd
-nano    24 no_payments no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_replica no_backupcheck no_audit no_wasm no_jsvm no_ghupdate no_migratecmd no_totp no_geo
+edge    28 no_payments no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd no_roles
+nano    24 no_payments no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_replica no_backupcheck no_audit no_wasm no_jsvm no_ghupdate no_migratecmd no_totp no_geo no_roles
