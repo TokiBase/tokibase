@@ -179,6 +179,9 @@ func nowHLC(offsetMs int64, logical uint16) hlc.HLC {
 
 func rawPush(t *testing.T, h *hubEnv, tok string, req proto.PushRequest) (int, proto.PushResponse, proto.ErrorBody) {
 	t.Helper()
+	if req.SchemaVersion == 0 {
+		req.SchemaVersion = h.m.schemaVersion() // PR8: a push must carry the hub schema version
+	}
 	body, _ := json.Marshal(req)
 	r, _ := http.NewRequest("POST", h.srv.URL+proto.PathPush, bytes.NewReader(body))
 	r.Header.Set("Authorization", "Bearer "+tok)
@@ -505,8 +508,8 @@ func TestDeleteWinsAndTombstoned(t *testing.T) {
 func TestRejectionWritesRevertAndSpokeAppliesIt(t *testing.T) {
 	h, a, b := hubFixture(t)
 	// a unique index only on the hub: the spoke cannot know
-	h.items.AddIndex("idx_items_title_u", true, "title", "title != ''")
-	if err := h.app.Save(h.items); err != nil {
+	// (a raw SQL index: a collection index would travel to the spokes with the schema bundle)
+	if _, err := h.app.NonconcurrentDB().NewQuery("CREATE UNIQUE INDEX idx_items_title_u ON items (title) WHERE title != ''").Execute(); err != nil {
 		t.Fatal(err)
 	}
 	first := h.create(t, map[string]any{"title": "dup"})

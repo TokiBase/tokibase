@@ -29,6 +29,20 @@ type HealthBlock struct {
 	// ActiveNodes and OpenConflicts are hub only.
 	ActiveNodes   int64 `json:"active_nodes,omitempty"`
 	OpenConflicts int64 `json:"open_conflicts,omitempty"`
+	// SchemaVersion is the schema version of this node (hub: latest bundle).
+	SchemaVersion int64 `json:"schema_version"`
+	// MaxSkewMs and NodeSkew are hub only: the largest clock skew seen from any
+	// node and from each node (docs/SYNC_DESIGN.md §7.4).
+	MaxSkewMs int64      `json:"max_skew_ms,omitempty"`
+	NodeSkew  []NodeSkew `json:"node_skew,omitempty"`
+}
+
+// NodeSkew is the clock metric of one node.
+type NodeSkew struct {
+	Node          string `json:"node"`
+	Name          string `json:"name"`
+	ClockOffsetMs int64  `json:"clock_offset_ms"`
+	MaxSkewMs     int64  `json:"max_skew_ms"`
 }
 
 // Health computes the health block.
@@ -37,8 +51,12 @@ func (m *Module) Health() *HealthBlock {
 		return nil
 	}
 	db := m.app.DB()
-	b := &HealthBlock{Role: string(m.role), LowWater: m.lowWater(), Head: m.headSeq()}
+	b := &HealthBlock{Role: string(m.role), LowWater: m.lowWater(), Head: m.headSeq(), SchemaVersion: m.schemaVersion()}
 	if m.role == RoleHub {
+		b.NodeSkew = m.nodeSkew()
+		for _, n := range b.NodeSkew {
+			b.MaxSkewMs = max(b.MaxSkewMs, n.MaxSkewMs)
+		}
 		_ = db.NewQuery("SELECT COUNT(*) FROM " + NodesCollection + " WHERE status='stale'").Row(&b.StaleNodes)
 		_ = db.NewQuery("SELECT COUNT(*) FROM " + NodesCollection + " WHERE status='active'").Row(&b.ActiveNodes)
 		if b.ActiveNodes > 0 {
@@ -63,4 +81,23 @@ func (m *Module) bindHealth() {
 		}
 		return nil
 	})
+}
+
+// nodeSkew lists the clock metrics of the nodes that ever showed a skew (at most 50).
+func (m *Module) nodeSkew() []NodeSkew {
+	var rows []struct {
+		ID   string  `db:"id"`
+		Name string  `db:"name"`
+		Off  float64 `db:"offs"`
+		Max  float64 `db:"mx"`
+	}
+	if err := m.app.DB().NewQuery("SELECT id, name, COALESCE(clock_offset_ms,0) AS offs, COALESCE(max_skew_ms,0) AS mx FROM " + NodesCollection +
+		" WHERE status!='revoked' AND status!='pending' ORDER BY mx DESC LIMIT 50").All(&rows); err != nil {
+		return nil
+	}
+	out := make([]NodeSkew, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, NodeSkew{Node: r.ID, Name: r.Name, ClockOffsetMs: int64(r.Off), MaxSkewMs: int64(r.Max)})
+	}
+	return out
 }

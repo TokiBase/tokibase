@@ -121,6 +121,9 @@ type Module struct {
 	stash stdsync.Map // *core.Record -> string
 	// txs holds the tx group state per open transaction.
 	txs stdsync.Map // *kernel.TxAppInfo -> *txState
+
+	// p8 is the state of schema bundles, reservations and clock drift (bundle.go).
+	p8 pr8State
 }
 
 // Register binds the module according to TOKI_SYNC_ROLE. With the role off it
@@ -197,6 +200,8 @@ func RegisterRole(app core.App, role Role) *Module {
 	m.bindLoop()
 	m.registerProviders()
 	m.bindDevCert()
+	m.bindSchema()
+	m.bindReserve()
 	return m
 }
 
@@ -246,6 +251,9 @@ func (m *Module) Init() error {
 		if err := EnsureConflictsCollection(m.app); err != nil {
 			return err
 		}
+		if err := EnsureReserveCollections(m.app); err != nil {
+			return err
+		}
 		h, err := loadHubIdentity(st, m.app.Logger().Warn)
 		if err != nil {
 			return err
@@ -286,6 +294,13 @@ func (m *Module) Init() error {
 	m.clock.Store(c)
 	m.ready.Store(true)
 	m.pol.invalidate()
+	if m.role == RoleHub {
+		// bring the stored bundles in line with the current schema (an upgrade, or a
+		// change made while the hooks were not bound)
+		if _, err := m.refreshBundle(); err != nil {
+			m.app.Logger().Error("sync: failed to refresh the schema bundle", "error", err)
+		}
+	}
 	return nil
 }
 

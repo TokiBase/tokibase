@@ -344,6 +344,11 @@ func (c *Client) importSchema(raw []json.RawMessage) error {
 	if len(missing) == 0 {
 		return nil
 	}
+	if si, ok := c.o.Backend.(interface {
+		ImportCollections([]map[string]any) error
+	}); ok {
+		return si.ImportCollections(missing) // inside the schema lock exemption
+	}
 	return c.o.App.ImportCollections(missing, false)
 }
 
@@ -384,7 +389,7 @@ func (c *Client) checkSchema(start proto.SnapshotStart) error {
 			if f.Type == "file" || ex[f.Name] || col.Fields.GetByName(f.Name) != nil {
 				continue
 			}
-			return fmt.Errorf("sync: collection %q on this node lacks the field %q that the hub syncs; add the field (schema bundles come with PR8) and bootstrap again", m.Name, f.Name)
+			return fmt.Errorf("sync: collection %q on this node lacks the field %q that the hub syncs; the schema bundle of the hub should have added it: handshake again, or lift the schema lock and add the field", m.Name, f.Name)
 		}
 	}
 	return nil

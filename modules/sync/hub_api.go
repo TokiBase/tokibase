@@ -367,7 +367,7 @@ func (m *Module) touchNode(id string, now time.Time, offset int64, schema int64,
 		ce = certExpires.UTC().Format(types.DefaultDateLayout)
 	}
 	t := now.UTC().Format(types.DefaultDateLayout)
-	res, err := m.app.NonconcurrentDB().NewQuery("UPDATE " + NodesCollection + " SET last_seen={:t}, updated={:t}, clock_offset_ms={:o}, schema_version={:sv}, " +
+	res, err := m.app.NonconcurrentDB().NewQuery("UPDATE " + NodesCollection + " SET last_seen={:t}, updated={:t}, clock_offset_ms={:o}, max_skew_ms=MAX(COALESCE(max_skew_ms,0), ABS({:o})), schema_version={:sv}, " +
 		"app_version=CASE WHEN {:av}!='' THEN {:av} ELSE app_version END, enroll_hash='', enroll_expires='', sig_ts_floor={:ts}, " +
 		"cert_expires=CASE WHEN {:ce}!='' THEN {:ce} ELSE cert_expires END " +
 		"WHERE id={:id} AND status IN ({:s1},{:s2},{:s3}) AND sig_ts_floor<{:ts}").
@@ -514,6 +514,9 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 	low := m.lowWater()
 	rebootstrap := cur.GetString("status") == NodeStale || cur.GetString("status") == NodeRebootstrap || req.PullAfter < low ||
 		m.epochRequiresRebootstrap(req.HubEpoch, req.PullAfter)
+	// PR8: schema bundles newer than the node's version; a node too far behind re-bootstraps
+	schema, schemaTooOld := m.handshakeSchema(nodeID, req.SchemaVersion)
+	rebootstrap = rebootstrap || schemaTooOld
 
 	expires := now.Add(SessionTTL)
 	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -532,16 +535,15 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 		HubEpoch:     m.hub.epoch,
 		HubEpochSeq:  m.hub.epochSeq,
 		ServerTime:   serverTime,
-		// TODO(PR8): clock.ok is computed here but enforced (409 sync_clock_drift on push) only in PR8.
-		Clock:        proto.Clock{Ok: clockOK, OffsetMs: offset, MaxDriftMs: drift.Milliseconds()},
-		Schema:       proto.Schema{Version: 0, Bundles: []any{}}, // TODO(PR8): schema versions and bundles
+		Clock:        proto.Clock{Ok: clockOK, OffsetMs: offset, MaxDriftMs: drift.Milliseconds()}, // enforced on push (drift.go)
+		Schema:       schema,
 		Policies:     m.handshakePolicies(),
 		Params:       params,
 		Keys:         []any{}, // TODO(PR9): wrapped collection keys
 		PushFrom:     int64(cur.GetFloat("pushed_origin_seq")) + 1,
 		LowWater:     low,
 		Rebootstrap:  rebootstrap,
-		Reservations: []any{}, // TODO(PR8): sequence reservations
+		Reservations: m.handshakeReservations(nodeID),
 		PollMs:       DefaultPollMs,
 		Caps:         []string{proto.CapFiller},
 	})

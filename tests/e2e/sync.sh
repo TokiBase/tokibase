@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sync e2e (docs/SYNC_DESIGN.md §9, PR7 snapshot bootstrap / stale re-bootstrap / hub restore cases at the end, PR3 + PR5 field-merge and hook/park cases + PR6 partition, purge and compaction cases): one hub and two spokes, each with its own pb_data,
+# Sync e2e (docs/SYNC_DESIGN.md §9, PR8 schema bundles and reservations, PR7 snapshot bootstrap / stale re-bootstrap / hub restore cases at the end, PR3 + PR5 field-merge and hook/park cases + PR6 partition, purge and compaction cases): one hub and two spokes, each with its own pb_data,
 # on random loopback ports. Writes on all three (including concurrent edits of one record),
 # converge, compare `toki sync verify` digests, SIGKILL spoke 1 in the middle of a push,
 # restart it and converge again. Everything is killed by PID file at exit.
@@ -89,7 +89,7 @@ api "$TH" POST "$URL_HUB" /api/collections/_sync_policies/records \
   '{"collection":"e2eitems","direction":"both","enabled":true,"field_types":{"qty":"counter"}}' >/dev/null
 log "hub up on $PORT_HUB with collection e2eitems and policy direction=both"
 
-# ---- spokes: enroll, start, create the same collection (schema bundles are PR8) ----
+# ---- spokes: enroll and start; the collection and the policy arrive as a schema bundle (PR8) ----
 enroll_spoke() { # name dir port url
   local code
   code="$(toki hub "$HUB" sync enroll --name "$1" --profile edge --actor "_superusers/$SU_ID" --allow-superuser-actor | awk '/^code:/ {print $2}')"
@@ -98,9 +98,6 @@ enroll_spoke() { # name dir port url
   toki spoke "$2" sync join "$URL_HUB" "$code" >/dev/null || fail "join $1"
   start "$1" spoke "$2" "$3"
   wait_health "$4" 30 || fail "$1 did not start"
-  local t
-  t="$(token "$4")"
-  api "$t" POST "$4" /api/collections "$COLL" >/dev/null
 }
 enroll_spoke s1 "$S1" "$PORT_S1" "$URL_S1"
 enroll_spoke s2 "$S2" "$PORT_S2" "$URL_S2"
@@ -266,8 +263,8 @@ kill_node() { local p; p="$(cat "$TMP/$1.pid")"; kill -9 "$p" 2>/dev/null || tru
 
 COLL2='{"id":"pbc_e2etickets","name":"e2etickets","type":"base","listRule":"","viewRule":"","createRule":"","updateRule":"","deleteRule":"","fields":[{"name":"title","type":"text"},{"name":"branch","type":"text"},{"name":"created","type":"autodate","onCreate":true},{"name":"updated","type":"autodate","onCreate":true,"onUpdate":true}],"indexes":["CREATE INDEX idx_e2etickets_branch ON e2etickets (branch)"]}'
 api "$TH" POST "$URL_HUB" /api/collections "$COLL2" >/dev/null
-api "$T1" POST "$URL_S1" /api/collections "$COLL2" >/dev/null
-api "$T2" POST "$URL_S2" /api/collections "$COLL2" >/dev/null
+# a spoke refuses local collection changes (the schema comes from the hub, PR8)
+[ "$(http "$T1" POST "$URL_S1" /api/collections "$COLL2")" = 400 ] || fail "a spoke must refuse to create a collection itself"
 api "$TH" POST "$URL_HUB" /api/collections/_sync_policies/records \
   '{"collection":"e2etickets","direction":"both","enabled":true,"partition":"branch = @node.branch"}' >/dev/null || fail "partition policy rejected"
 # a policy with a bad partition is refused by the validation
@@ -467,5 +464,54 @@ wait_for3 "round 13 (s3 after the hub restore)"
 [ "$(count "$TH" "$URL_HUB")" = "$TOTAL" ] || fail "records were lost by the restore: $(count "$TH" "$URL_HUB") != $TOTAL"
 log "epoch $EPOCH0 -> $EPOCH1, all $TOTAL records present on the hub again"
 
+# ---- 12. schema bundles and reserved numbers (PR8) ----
+# a spoke has the hub's collection although it never created it (section 8 relied on it already)
+[ "$(http "$T1" GET "$URL_S1" /api/collections/e2eitems)" = 200 ] || fail "the bundle must have created e2eitems on the spoke"
+SV_HUB="$(curl -fsS "$URL_HUB/api/health" -H "Authorization: $TH" | jget 'd["data"]["sync"]["schema_version"]')"
+[ "$SV_HUB" -ge 2 ] || fail "the hub should have cut schema versions, got $SV_HUB"
+wait_for "spoke schema version" '[ "$(curl -fsS "$URL_S1/api/health" -H "Authorization: $T1" | jget "d[\"data\"][\"sync\"][\"schema_version\"]")" -ge 2 ]'
+
+# reserved ticket numbers: two spokes create offline, no duplicates after the sync
+COLL3='{"id":"pbc_e2etk","name":"e2etk","type":"base","listRule":"","viewRule":"","createRule":"","updateRule":"","deleteRule":"","fields":[{"name":"no","type":"text","required":true},{"name":"plate","type":"text"},{"name":"created","type":"autodate","onCreate":true},{"name":"updated","type":"autodate","onCreate":true,"onUpdate":true}],"indexes":["CREATE UNIQUE INDEX idx_e2etk_no ON e2etk (no)"]}'
+api "$TH" POST "$URL_HUB" /api/collections "$COLL3" >/dev/null
+toki hub "$HUB" sync reserve create-seq e2etk --block 50 --max-open 2 >/dev/null || fail "create-seq"
+api "$TH" POST "$URL_HUB" /api/collections/_sync_policies/records \
+  '{"collection":"e2etk","direction":"both","enabled":true,"field_types":{"no":"reserve:e2etk"}}' >/dev/null || fail "reserve policy rejected"
+tk() { api "$1" POST "$2" /api/collections/e2etk/records "{\"plate\":\"$3\"}" | jget 'd["no"]'; }
+tkcount() { api "$1" GET "$2" "/api/collections/e2etk/records?perPage=1" | jget 'd["totalItems"]'; }
+# the collection and a first range arrive with the next sessions; until then a create fails closed
+wait_for "reserved range on s1" 'tk "$T1" "$URL_S1" first-s1 >"$TMP/tk1" 2>/dev/null'
+wait_for "reserved range on s2" 'tk "$T2" "$URL_S2" first-s2 >"$TMP/tk2" 2>/dev/null'
+[ "$(cat "$TMP/tk1")" != "$(cat "$TMP/tk2")" ] || fail "both spokes got the same first number"
+wait_for "first tickets on the hub" '[ "$(tkcount "$TH" "$URL_HUB")" = 2 ]'
+# offline: the hub goes away, both spokes keep issuing numbers
+kill_node hub
+for i in 1 2 3 4 5 6 7 8; do
+  tk "$T1" "$URL_S1" "off-s1-$i" >/dev/null || fail "s1 could not issue a number offline"
+  tk "$T2" "$URL_S2" "off-s2-$i" >/dev/null || fail "s2 could not issue a number offline"
+done
+start hub hub "$HUB" "$PORT_HUB"
+wait_health "$URL_HUB" 30 || fail "hub did not restart"
+wait_for "offline tickets on the hub" '[ "$(tkcount "$TH" "$URL_HUB")" = 18 ]'
+api "$TH" GET "$URL_HUB" "/api/collections/e2etk/records?perPage=200&fields=no" >"$TMP/tk-hub.json"
+[ "$(jget 'len(set(i["no"] for i in d["items"])) == len(d["items"]) == 18' <"$TMP/tk-hub.json")" = True ] || fail "duplicate ticket numbers on the hub: $(cat "$TMP/tk-hub.json")"
+wait_for "tickets on both spokes" '[ "$(tkcount "$T1" "$URL_S1")" = 18 ] && [ "$(tkcount "$T2" "$URL_S2")" = 18 ]'
+log "reservations: 16 offline tickets from two spokes, no duplicate numbers"
+toki hub "$HUB" sync reserve list --json 2>/dev/null | grep '^{' | tail -1 >"$TMP/reserve.json"
+jget 'len([r for r in d["ranges"] if r["sequence"]=="e2etk"]) >= 2' <"$TMP/reserve.json" | grep -q True || fail "expected ranges for both spokes: $(cat "$TMP/reserve.json")"
+
+# a hub schema change (add a field) reaches the spokes before the data that uses it
+TH="$(token "$URL_HUB")"
+COL3_NOW="$(api "$TH" GET "$URL_HUB" /api/collections/e2etk)"
+echo "$COL3_NOW" | python3 -c '
+import sys, json
+c = json.load(sys.stdin)
+c["fields"].append({"name": "extra", "type": "text"})
+print(json.dumps({"fields": c["fields"]}))' >"$TMP/col3-patch.json"
+api "$TH" PATCH "$URL_HUB" /api/collections/e2etk "$(cat "$TMP/col3-patch.json")" >/dev/null || fail "hub schema change"
+HR="$(api "$TH" POST "$URL_HUB" /api/collections/e2etk/records '{"plate":"hub-new","extra":"from the new field"}' | jget 'd["id"]')"
+wait_for "new field and record on the spokes" '[ "$(api "$T1" GET "$URL_S1" "/api/collections/e2etk/records/$HR" 2>/dev/null | jget "d[\"extra\"]" 2>/dev/null)" = "from the new field" ] && [ "$(api "$T2" GET "$URL_S2" "/api/collections/e2etk/records/$HR" 2>/dev/null | jget "d[\"extra\"]" 2>/dev/null)" = "from the new field" ]'
+log "schema bundle: the new field and a record using it reached both spokes"
+curl -fsS "$URL_HUB/api/health" -H "Authorization: $TH" | jget 'd["data"]["sync"]["schema_version"] >= 3' | grep -q True || fail "health block lacks the schema version"
 
 log "OK"

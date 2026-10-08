@@ -57,6 +57,7 @@ func saveChild(t *testing.T, app core.App, col, ticket string) *core.Record {
 }
 
 func TestSpokeCascadeOfReplicatedParentChangeIsNotCaptured(t *testing.T) {
+	t.Setenv(EnvSchemaLock, "off") // the test builds child collections on the spokes by hand
 	h := newTicketHub(t)
 	childCollections(t, h.app, h.col)
 	for _, c := range []string{"notes", "logs"} {
@@ -138,6 +139,7 @@ func mustFind(app core.App, col, id string) *core.Record {
 
 // A cascade on the HUB during a push replay is still captured (other nodes need it).
 func TestHubPushCascadeStillCaptured(t *testing.T) {
+	t.Setenv(EnvSchemaLock, "off") // the test builds child collections on the spokes by hand
 	h := newTicketHub(t)
 	childCollections(t, h.app, h.col)
 	for _, c := range []string{"notes", "logs"} {
