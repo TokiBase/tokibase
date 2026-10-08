@@ -9,7 +9,7 @@ import (
 )
 
 // NewClient returns the transport client of this spoke (it must be enrolled).
-// PR2 has no loop yet; callers run Handshake/Ping themselves.
+// StartLoop wraps it with the sync loop (PR3).
 func (m *Module) NewClient(extra ...func(*client.Options)) (*client.Client, error) {
 	if m.role != RoleSpoke || m.spoke == nil {
 		return nil, errors.New("sync: not a spoke (TOKI_SYNC_ROLE=spoke)")

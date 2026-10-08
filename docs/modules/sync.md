@@ -2,7 +2,7 @@
 
 Phase 3 hub/spoke replication (offline-first). The full design is `docs/SYNC_DESIGN.md`; this page describes what exists today. Package `modules/sync`, subpackage `modules/sync/hlc`.
 
-**Status: PR2 of 11 (change capture + node identity and handshake).** A node with `TOKI_SYNC_ROLE=hub|spoke` records every write of the synced collections into a local change log (PR1). Since PR2 a hub can enroll devices and authenticate them (`/api/sync/{enroll,handshake,ping}`), and a spoke has a key-derived identity and a transport client skeleton. There is no push, pull or client loop yet: no change leaves a node.
+**Status: PR3 of 11 (push/pull/ack, lww, revert rows, spoke client loop).** A node with `TOKI_SYNC_ROLE=hub|spoke` records every write of the synced collections into a local change log (PR1). Since PR2 a hub can enroll devices and authenticate them (`/api/sync/{enroll,handshake,ping}`). Since PR3 a spoke pushes its changes to the hub, the hub applies them (record level `lww`), and the spoke pulls everything it is missing and applies it; hub and spokes converge. **Pushed changes are applied as superuser in PR3: collection rules, fieldperm, batchguard and actor grants are not evaluated until PR4.**
 
 ## What exists now
 
@@ -62,6 +62,52 @@ The answer carries `session_token` (HS256 JWT keyed by the hub `session_secret`,
 
 **Data.** `_sync_nodes` system collection (hub only, superusers only; fields as in the design §2.4). `_sync_cursors` plain table (all roles; one row per hub; design §2.5 plus a `hub_pub` column). `_sync_state` keys: `node_id`, `hub_id`, `hub_key` (only without `TOKI_SYNC_HUB_KEY_FILE`), `epoch`. `_sync_nodes.sig_ts_floor` is the replay floor of a node.
 
+## Push, pull, ack and the client loop (PR3)
+
+**Temporary: rules are NOT checked on push.** The hub applies a pushed change by calling `SaveWithContext`/`DeleteWithContext` directly with `kernel.WithSyncOrigin(Mode: Push)`, i.e. as superuser. Collection create/update/delete rules, `fieldperm`, `batchguard`, the actor grants of design §1.6 and the `actor_*` result codes do not exist yet; PR4 replaces this path with the rule-checked replay (`apis.ReplayRecordRequests`). Until then any enrolled, active node can write every collection whose policy direction is `both` or `push`. Do not enrol nodes you do not trust. Fields that are not synced (file, password, tokenKey, derived, policy `exclude`) are dropped from pushed patches. Model validation and unique indexes still apply (`validation_failed`, `unique_violation`). Hooks and webhooks of other modules run on the hub as for any save (the webhooks/wasm `IsSyncReplica` skip is PR4).
+
+### Hub routes (node session token required)
+
+| Route | Behaviour |
+| --- | --- |
+| `POST /api/sync/push` | Up to 500 changes or 8 MiB per request (else 413 `sync_batch_too_large`); gzip request bodies are accepted. Changes must be the node's own (`<node>:<origin_seq>`), ascending and contiguous; a first change beyond `pushed_origin_seq+1` or a hole answers 409 `sync_push_gap` with `push_from`. Idempotent through the unique `(node, origin_seq)`: a processed change answers `duplicate` with the stored `hub_seq`, `hash`, `code` and `was` (the original status). Each change (or each `tx` group, all or nothing, no batchguard yet) is applied in its own transaction. Result statuses: `applied`, `merged` (only counter/set operations of a lost change were applied), `superseded` (lost lww), `duplicate`, `rejected` with a code (`policy_direction`, `future_hlc`, `tombstoned`, `legal_tombstone`, `orphaned`, `validation_failed`, `unique_violation`, `rule_denied` for hook errors). `acked_through` is the contiguous `pushed_origin_seq`, advanced in the same transaction as the apply. `_sync_nodes.last_seen` is updated. The hub observes the change HLC in its clock after rejecting any HLC more than `TOKI_SYNC_MAX_DRIFT` (5 min) ahead of hub time (`future_hlc`). |
+| `GET /api/sync/pull?after&limit[&wait]` | Rows with `seq` in `(after, head]`: `applied` rows, hub-local rows (see below), and `revert` rows addressed to the node. `limit` default 500, max 1000. `wait` (0-25 s) long-polls until a newer `seq` exists (woken by a notifier on every commit of a synced hub write or push batch). `after` implicitly acks (`pulled_seq`, clamped to the head). `after < low_water` answers 410 `sync_rebootstrap_required` (`low_water` is 0 until PR6). Counter and set fields are sent as absolute values read from the current record; revert rows carry the current full record and the current record clock (op `d` when the record does not exist). `next` is the head when nothing is left, so a node advances past rows it cannot receive. Partition filters, `pull_view_rule` and `evict` are PR6, `fields` (field clocks) is PR5. |
+| `POST /api/sync/ack` | `{"pulled_through": N, "digest": {"<collection id>": "<sha256>"}}`. Updates `pulled_seq`. A digest (sha256 over the sorted `(id, hash)` pairs of `_sync_meta`) is compared only when the node has pulled up to the hub head (`digest_checked`), because otherwise it would measure lag; differing collections come back in `digest_mismatch`. Compaction is PR6. |
+
+### Conflicts (lww, design §4.2)
+
+A change is concurrent when its `base` is not the record clock `_sync_meta.hlc` on the hub. A concurrent change wins when `(hlc, node)` is greater than the record clock, and only its patch fields are applied. A concurrent loser is `superseded`: nothing is written to the record, except counter/set operations, which never conflict and are always applied (result `merged`). A delete always wins, even an older one; updates of a tombstoned record are `rejected` (`tombstoned`); deleting a record that is already gone is `superseded`. Autodate columns (`created`, `updated`) keep the origin value: the autodate interceptor regenerates them on every save, so the apply paths restore them with a direct column update afterwards (and recompute the stored hash).
+
+**Revert rows.** For every rejected change, and for every `superseded` or `merged` update, the hub writes a `_changes` row with `status=revert`, `target=<node>`, directly after the verdict row (so a `rejected` result reports the revert's `hub_seq`). The node receives the hub state of the record in its next pull. This is a deviation from the design text, which writes no revert for `superseded`: without it a node whose lost edit touched fields the winner did not touch would keep its local value forever. Rows stored by the hub: `applied` rows keep the origin node, origin_seq, hlc, base and actor and carry the effective patch (diff of the hub record before and after, so it includes the hub's resolved values); rejected and superseded verdicts are stored as `status=rejected` with `code` (`superseded` for lww losers).
+
+**Hub-local writes** (REST clients, hooks) are captured by PR1 as `status=local` rows under the hub id. They are pulled like `applied` rows. Changes whose patch is empty (a push that changed nothing) are not delivered.
+
+### Realtime poke
+
+After each committed push batch and each committed write of a synced collection on the hub, the hub sends `{"seq": N}` on the realtime topic `@sync` (through `app.SubscriptionsBroker()`). The payload has no record data. Subscribing to `@sync` through `POST /api/realtime` needs `Authorization: Bearer <node session token>`; guests and other users get 403, so only enrolled nodes ever receive it (and the payload would be harmless anyway: it only tells that something changed). An online spoke keeps one SSE connection (`GET /api/realtime`, `TOKI_SYNC_POKE=0` disables it) and runs a cycle on every poke and once after every (re)subscription. Clients that cannot hold SSE use the interval timer or `Client.Pull(wait)`.
+
+### Spoke client loop (`modules/sync/client`)
+
+`Start`, `Stop`, `SyncNow`, `Pause`, `Resume`, `SetConditions`, `Status`, `Events`, plus `RunOnce` (one synchronous cycle) and `PullOnce`. The module starts it OnServe when `TOKI_SYNC_ROLE=spoke` and the node is enrolled, and stops it OnTerminate.
+
+A cycle is: session (handshake when there is no valid token) -> push pages from `_changes` in origin_seq order -> pull pages -> apply -> ack.
+
+- **Handshake effects.** The local `_sync_policies` rows become equal to the hub's list (until schema bundles in PR8, collections still have to exist on the spoke). Rows below the hub's `push_from` become `acked`; an `acked` row at or above it (hub restored) is sent again.
+- **Push.** Pages of `TOKI_SYNC_PAGE` (500) rows and about 4 MiB; a `tx` group is never split. Rows are marked `pushed` before the request and `acked` up to `acked_through` after it. 409 `sync_push_gap` resends from `push_from`; 413 halves the page; 401 triggers a new handshake. Rejected and superseded results are reported on `Events()`.
+- **Pull apply (design §4.7).** Per page in one transaction together with `pull_after`, with `kernel.WithSyncOrigin(Mode: Pull)` (no `_changes` row is captured, `_sync_meta` and tombstones are updated). `revert`/`c`/`u` set the fields that differ, unless a pending local change (`local`/`pushed`) on that field has a higher HLC; counters become `hub value + sum of pending $inc`, sets re-apply the pending `$add/$rm` on the hub list; `d` deletes (tombstone). Changes the node itself originated are applied too, in hub order: an older foreign row pulled after the node's own newer acked change is followed by that change again, which keeps all nodes on the hub's sequence. Equal values are not written. A change that cannot be applied is reported as an `error` event and counted (`Status().ApplyErrors`); the page continues. Deviation: pending local changes are never dropped on a revert (design §4.7 says to drop those with `hlc <=` the rejected one): rows must stay contiguous for `push_from`, and by construction no such row exists.
+- **Triggers.** `TOKI_SYNC_INTERVAL` (30 s; 5 min when `Metered` or `LowPower`), local writes (debounced 2 s, hooked on `OnRecordAfter*Success` of synced collections, not for pull applies), `@sync` pokes, `SyncNow`.
+- **Backoff.** After the n-th consecutive failure the next attempt waits `1 s * 2^(n-1)` up to 5 min with +-20% jitter; a `Retry-After` header is a floor. Pokes and local writes do not break a backoff; `SyncNow` does. 403 `sync_node_revoked` stops the loop (`ErrRevoked`, state `revoked`).
+- **Conditions.** `Online=false` makes no attempt at all (`SyncNow` answers `ErrOffline`). `Metered` limits the pull page to 100 and uses the long interval. `Background` and the bounded background cycle are PR10. `Pause`/`Resume` stop and resume attempts.
+
+### `toki sync verify [--against-hub] [--json]`
+
+For every synced collection: record count, `digest` (sha256 over the sorted `(id, canonical hash)` of the stored records; equal on every converged node), `meta_digest` (the same over `_sync_meta`, what `/ack` compares) and the records whose stored row differs from `_sync_meta` (`no_meta`, `hash`, `orphan_meta`), which is how raw SQL writes and saves without a change row show up. Exit status 1 when anything differs. `--against-hub` (spoke) sends the meta digests in an `/ack` and prints the collections the hub reports as different.
+
+### Other notes
+
+- Saving a record without changing any synced field still bumps its `updated` column but writes no change row (PR1 capture). Such a node then differs from the hub in `updated` and `toki sync verify` reports a `hash` mismatch for it. Apps should not save unchanged records; a fix belongs in capture (PR1 hardening).
+- The hub applies pushes serially (one mutex); throughput is bounded by SQLite's single writer anyway.
+
 ## Env
 
 
@@ -76,6 +122,10 @@ The answer carries `session_token` (HS256 JWT keyed by the hub `session_secret`,
 | `TOKI_SYNC_INSECURE` | `1` allows an http hub url for loopback and private network hosts only |
 | `TOKI_SYNC_ENROLL_CODE` | spoke: enrollment code for `toki sync join <hub-url>` when the code argument is left out |
 | `TOKI_SYNC_MAX_DRIFT` | hub: clock drift for `clock.ok` (default `5m`) |
+| `TOKI_SYNC_MAX_DRIFT` | hub: clock drift for `clock.ok` and the `future_hlc` check of pushes (default `5m`) |
+| `TOKI_SYNC_INTERVAL` | spoke: idle sync interval (default `30s`) |
+| `TOKI_SYNC_PAGE` | spoke: changes per push/pull page (default `500`) |
+| `TOKI_SYNC_POKE` | spoke: `0` disables the realtime `@sync` subscription |
 
 The remaining `TOKI_SYNC_*` variables of the design arrive with the PRs that use them.
 
@@ -117,7 +167,7 @@ All in `data.db`, created with `IF NOT EXISTS` at bootstrap when the role is not
 
 `node_id` is derived from the node key since PR2 (see Identity). Rows written under the PR1 placeholder id (`_changes.node`, `_sync_meta.node`, `_sync_tombstones.node`) are migrated to the derived id in one transaction at the first boot with PR2.
 
-Writes by sync apply paths (`kernel.WithSyncOrigin`, mode pull/snapshot/bundle) update `_sync_meta` and tombstones only and write no `_changes` row. The push mode (hub replay) is a no-op for capture until PR3.
+Writes by sync apply paths (`kernel.WithSyncOrigin`, mode pull/snapshot/bundle) update `_sync_meta` and tombstones only and write no `_changes` row. The push mode (hub replay) is a no-op for capture: the hub apply pipeline (`hub_apply.go`) writes the `_changes` row, the record clock and the tombstone itself.
 
 ## CLI
 
@@ -128,6 +178,7 @@ toki sync enroll --name N --profile P [--param k=v]... [--actor col/id]   # hub:
 toki sync join <hub-url> [<code>|-]                                       # spoke: enroll, stores cert in _sync_cursors; '-' reads the code from stdin
 toki sync revoke <node id|name>                                           # hub
 toki sync peers [--json]                                                  # hub: id, name, profile, status, lag, last seen, schema, offset
+toki sync verify [--against-hub] [--json]                                 # per-collection digests, mismatching ids (PR3)
 ```
 
 `enroll`, `revoke` and `peers` need `TOKI_SYNC_ROLE=hub`, `join` needs `TOKI_SYNC_ROLE=spoke`. `join` requires an https hub url unless `TOKI_SYNC_INSECURE=1`.
@@ -136,13 +187,13 @@ toki sync peers [--json]                                                  # hub:
 
 `-tags no_sync` replaces the module with a stub (`Enabled()` false, `Register` no-op) and a marker that owns the tables above, the collection `_sync_policies`, `TOKI_SYNC_ROLE`, `TOKI_SYNC_HUB_URL` and the file `sync_node.key`. A `no_sync` binary refuses to start on a data dir that has these tables or when the role env is set, unless `TOKI_ALLOW_STUBBED_MODULES=1`. Sync is compiled into every profile; it is in no profile's `no_` list.
 
-## Limits (PR1)
+## Limits
 
 - Raw SQL writes (`app.DB().NewQuery("UPDATE ...")`) are not captured.
 - Files are not synced; file fields are not in patches or hashes.
-- No network, no apply, no conflict handling, no compaction: `_changes` grows until PR6.
-- Push, pull, the client loop, actor grants, schema bundles, keys and reservations are not implemented; the handshake returns those fields empty.
+- No compaction: `_changes` grows until PR6 (`low_water` stays 0).
+- Rule re-evaluation and actor grants (PR4), field-merge/hub-wins/hook strategies and `_sync_conflicts` (PR5), partitions and `evict` (PR6), snapshot bootstrap (PR7), schema bundles, reservations and clock-drift enforcement (PR8), keys (PR9) are not implemented; the handshake returns those fields empty. Spokes need the synced collections created by hand until PR8, and `sync.Client` has no snapshot fallback: a 410 or `rebootstrap` ends the cycle with `ErrRebootstrap`.
 - The hub key cannot be rotated yet (`toki sync rotate-hub-key`, design §7.9); a lost hub key means a new hub id and re-enrollment of every node. A node offline past its certificate expiry (365 d, renewed by the handshake within the last 30 d) must enroll again.
 - Several hub processes behind one URL do not share the in-memory nonce cache; the persisted `sig_ts_floor` still blocks replays of an older request.
-- A derived-only update (computed rollup) bumps the `updated` autodate locally without a change row, so `updated` and the stored hash can differ between nodes after the apply paths exist. Since `_sync_meta.hash` is refreshed for such saves, the apply side (PR3) can tell stale from diverged by comparing the hash with `RecordHash`.
+- A derived-only update (computed rollup) or a save without changes bumps the `updated` autodate locally without a change row, so `updated` and the stored hash can differ between nodes; `toki sync verify` reports it (see Push, pull and the client loop above).
 - Known gaps, planned: a policy refers to a collection or field by name (rename stops capture until the policy is fixed; no `field_types`/`exclude` name validation until PR6); `counter` deltas use float64 subtraction (exact for integers); cascade children and hook-written rows are attributed to `node`, not to the request user; a panic inside a transaction leaks one `txs` map entry; `toki sync status` runs `Init` in a second process (a first start can race on `node_id`).
