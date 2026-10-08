@@ -57,7 +57,7 @@ ACTOR="$(api POST /api/collections/gate_devices/records \
 # a superuser can never be the actor
 if "$TOKI" kiosk provision --dir "$DATA" --name bad --actor "_superusers/x" >/dev/null 2>&1; then fail "a superuser actor must be refused"; fi
 
-PAIR_URL="$("$TOKI" kiosk provision --dir "$DATA" --name gate-1 --actor "gate_devices/$ACTOR" --pin 1234 --lock-after 60 --url "$URL")" \
+PAIR_URL="$("$TOKI" kiosk provision --dir "$DATA" --name gate-1 --actor "gate_devices/$ACTOR" --pin 1234 --lock-after 60 --url "$URL" | tail -n 1)" \
   || fail "provision"
 case "$PAIR_URL" in "$URL/kiosk/pair#"*) ;; *) fail "unexpected pairing URL: $PAIR_URL" ;; esac
 CODE="${PAIR_URL#*#}"
@@ -108,7 +108,7 @@ curl -fs "$URL/kiosk/pair" | grep -q kiosk.js || fail "pair page"
 
 # CLI: list, rotate drops the paired browser, revoke
 "$TOKI" kiosk list --dir "$DATA" | grep -q '^gate-1' || fail "kiosk list"
-NEW="$("$TOKI" kiosk rotate gate-1 --dir "$DATA" --url "$URL")" || fail "rotate"
+NEW="$("$TOKI" kiosk rotate gate-1 --dir "$DATA" --url "$URL" | tail -n 1)" || fail "rotate"
 [ "$(code_of -b "$JAR" -X POST "$URL/api/kiosk/session")" = 401 ] || fail "the old cookie must stop working after rotate"
 [ "$(code_of -X POST "$URL/api/kiosk/pair" -H 'Content-Type: application/json' -d "{\"code\":\"${NEW#*#}\"}")" = 200 ] || fail "pair after rotate"
 "$TOKI" kiosk revoke gate-1 --dir "$DATA" >/dev/null || fail "revoke"
