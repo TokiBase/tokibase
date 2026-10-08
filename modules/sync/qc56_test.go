@@ -131,15 +131,6 @@ func TestSpokeCascadeOfReplicatedParentChangeIsNotCaptured(t *testing.T) {
 	}
 }
 
-func mustCol(t *testing.T, app core.App, name string) *core.Collection {
-	t.Helper()
-	c, err := app.FindCollectionByNameOrId(name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return c
-}
-
 func mustFind(app core.App, col, id string) *core.Record {
 	r, _ := app.FindRecordById(col, id)
 	return r
