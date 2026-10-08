@@ -503,7 +503,7 @@ func TestBatchCapturesAllWithSameTx(t *testing.T) {
 		t.Fatalf("op: %+v", rows[3])
 	}
 	jsonEq(t, patchOf(t, rows[3])["qty"], `{"$inc":9}`)
-	wantActor := "rec:" + e.su.Collection().Id + ":" + e.su.Id
+	wantActor := ActorNode // superusers never hold a grant
 	for _, r := range rows[1:] {
 		if r.Actor != wantActor {
 			t.Fatalf("actor = %q, want %q", r.Actor, wantActor)
@@ -526,12 +526,13 @@ func TestBatchCapturesAllWithSameTx(t *testing.T) {
 
 func TestActorFromRequest(t *testing.T) {
 	e := setup(t)
+	// a user without a grant (and every hub write) is captured as "node"
 	code, out := e.do(t, e.usr, "POST", "/api/collections/items/records", `{"title":"by user"}`)
 	if code != 200 {
 		t.Fatalf("%d %s", code, out)
 	}
 	rows := e.changes(t)
-	if len(rows) != 1 || rows[0].Actor != "rec:"+e.usr.Collection().Id+":"+e.usr.Id {
+	if len(rows) != 1 || rows[0].Actor != ActorNode {
 		t.Fatalf("actor: %+v", rows)
 	}
 	// anonymous request and Go code: "node"

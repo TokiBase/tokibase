@@ -360,11 +360,28 @@ func NewWithConfig(config Config) *PocketBase {
 	toksync.Register(pb.App.(core.App))
 	if auditLog != nil {
 		toksync.SetAuditSink(func(action, collection, record string, details map[string]any) {
+			en := &audit.Entry{ActorKind: audit.ActorSystem, Action: action, Collection: collection, Record: record}
+			// sync entries carry the ORIGINAL actor and the request that triggered them
+			if k, _ := details["actor_kind"].(string); k != "" {
+				en.ActorKind = k
+				en.ActorID, _ = details["actor_id"].(string)
+				en.ActorCollection, _ = details["actor_collection"].(string)
+			}
+			if req, ok := details["request"]; ok {
+				rb, _ := json.Marshal(req)
+				rs := string(rb)
+				en.Request = &rs
+				rest := make(map[string]any, len(details))
+				for k, v := range details {
+					if k != "request" {
+						rest[k] = v
+					}
+				}
+				details = rest
+			}
 			after, _ := json.Marshal(details)
 			afterStr := string(after)
-			en := &audit.Entry{
-				ActorKind: audit.ActorSystem, Action: action, Collection: collection, Record: record, After: &afterStr,
-			}
+			en.After = &afterStr
 			if err := auditLog.Append(en); err != nil {
 				pb.App.Logger().Warn("audit: failed to record "+action, "error", err)
 			}

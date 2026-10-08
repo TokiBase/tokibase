@@ -166,8 +166,9 @@ func canonicalHash(collectionId, id string, fields map[string]any) []byte {
 }
 
 // syncedFields lists the fields of col that travel: everything except id,
-// file, password, tokenKey, derived (computed) fields and the policy
-// `exclude` list.
+// file, password, tokenKey, hidden fields, the auth system fields email,
+// emailVisibility and verified (unless the policy has field_types
+// {"<field>":"include"}), derived (computed) fields and the policy `exclude` list.
 func syncedFields(col *core.Collection, p *policy) []core.Field {
 	out := make([]core.Field, 0, len(col.Fields))
 	for _, f := range col.Fields {
@@ -180,6 +181,10 @@ func syncedFields(col *core.Collection, p *policy) []core.Field {
 			f.Type() == kernel.FieldTypePassword,
 			kernel.IsDerived(col.Id, name):
 			continue
+		case f.GetHidden():
+			continue // hidden fields never travel (P3-10)
+		case col.IsAuth() && authSystemFields[name] && (p == nil || p.Types[name] != TypeInclude):
+			continue // email, emailVisibility and verified travel only on explicit opt-in
 		}
 		if p != nil {
 			if _, ex := p.Exclude[name]; ex {

@@ -89,6 +89,34 @@ var ddl = []string{
   key   TEXT PRIMARY KEY,
   value TEXT
 )`,
+
+	// hub: actor grants (docs/SYNC_DESIGN.md §1.6). iat/exp are unix ms.
+	`CREATE TABLE IF NOT EXISTS _sync_actor_grants (
+  aid        TEXT PRIMARY KEY,
+  node       TEXT    NOT NULL,
+  collection TEXT    NOT NULL,
+  record     TEXT    NOT NULL,
+  sid        TEXT    NOT NULL DEFAULT '',
+  tkh        TEXT    NOT NULL DEFAULT '',
+  iat        INTEGER NOT NULL,
+  exp        INTEGER NOT NULL,
+  revoked_at TEXT    NOT NULL DEFAULT '',
+  created    TEXT    NOT NULL
+)`,
+	`CREATE INDEX IF NOT EXISTS idx__sync_actor_grants_node ON _sync_actor_grants (node)`,
+	`CREATE INDEX IF NOT EXISTS idx__sync_actor_grants_rec ON _sync_actor_grants (collection, record)`,
+
+	// spoke: grants received from the hub; exp is unix ms
+	`CREATE TABLE IF NOT EXISTS _sync_actors (
+  aid        TEXT PRIMARY KEY,
+  hub_id     TEXT    NOT NULL DEFAULT '',
+  collection TEXT    NOT NULL,
+  record     TEXT    NOT NULL,
+  exp        INTEGER NOT NULL,
+  assertion  TEXT    NOT NULL DEFAULT '',
+  created    TEXT    NOT NULL
+)`,
+	`CREATE INDEX IF NOT EXISTS idx__sync_actors_rec ON _sync_actors (collection, record)`,
 }
 
 // ensureSchema creates the plain tables of the module in data.db.

@@ -51,6 +51,15 @@ const (
 // It is a process wide variable, set once at startup (see modules/sessions).
 var OnAuthTokenIssue func(record *Record, kind string, claims jwt.MapClaims, duration time.Duration) error
 
+// SessionActive is an optional seam that reports whether the server-side
+// session behind a token `sid` claim is still active (not revoked, not
+// expired, row present). It is set by modules/sessions and used by
+// modules/sync to validate actor grants at apply time. A nil value means that
+// there is no session tracking; callers then fall back to the tokenKey check.
+// An unknown sid is reported as inactive (fail closed). It is a process wide
+// variable, set once at startup.
+var SessionActive func(app App, sid string) (bool, error)
+
 // NewStaticAuthToken generates and returns a new static record authentication token.
 //
 // Static auth tokens are similar to the regular auth tokens, but are

@@ -167,6 +167,10 @@ func (c *Client) pushAll(ctx context.Context, res *Result) error {
 			case r.Status == proto.ResRejected:
 				res.Rejected++
 				c.emit(Event{Type: EventRejected, ID: r.ID, Code: r.Code})
+			case r.Status == proto.ResParked:
+				// final for the ack; waits for an admin on the hub
+				res.Rejected++
+				c.emit(Event{Type: "parked", ID: r.ID, Code: r.Code})
 			case r.Status == proto.ResSuperseded || (r.Status == proto.ResDuplicate && r.Was == proto.ResSuperseded):
 				res.Superseded++
 				c.emit(Event{Type: EventSuperseded, ID: r.ID})

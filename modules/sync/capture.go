@@ -17,6 +17,7 @@ import (
 	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/modules/sync/hlc"
 	"github.com/tokibase/tokibase/tools/hook"
+	"github.com/tokibase/tokibase/tools/types"
 )
 
 // Change operations.
@@ -49,7 +50,7 @@ func (m *Module) bindCapture() {
 	app := m.app
 	// request stash: record pointer -> actor (the same pattern as modules/wasm)
 	stash := &hook.Handler[*core.RecordRequestEvent]{Id: hookId + "stash", Priority: -1000, Func: func(e *core.RecordRequestEvent) error {
-		m.stash.Store(e.Record, actorOf(e.Auth))
+		m.stash.Store(e.Record, m.actorIDFor(e.App, e.Auth))
 		defer m.stash.Delete(e.Record)
 		return e.Next()
 	}}
@@ -60,15 +61,6 @@ func (m *Module) bindCapture() {
 	app.OnRecordCreateExecute().Bind(&hook.Handler[*core.RecordEvent]{Id: hookId, Priority: capturePriority, Func: m.onExecute(OpCreate)})
 	app.OnRecordUpdateExecute().Bind(&hook.Handler[*core.RecordEvent]{Id: hookId, Priority: capturePriority, Func: m.onExecute(OpUpdate)})
 	app.OnRecordDeleteExecute().Bind(&hook.Handler[*core.RecordEvent]{Id: hookId, Priority: capturePriority, Func: m.onExecute(OpDelete)})
-}
-
-// actorOf is the change actor of an authenticated request record. Grants
-// arrive with PR4; until then the actor is "rec:<collectionId>:<id>".
-func actorOf(auth *core.Record) string {
-	if auth == nil {
-		return ActorNode
-	}
-	return "rec:" + auth.Collection().Id + ":" + auth.Id
 }
 
 func (m *Module) actorFor(rec *core.Record) string {
@@ -103,7 +95,11 @@ func (m *Module) onExecute(op string) func(e *core.RecordEvent) error {
 		}
 		origin := kernel.SyncOriginFrom(e.Context)
 		if origin != nil && origin.Mode == kernel.SyncModePush {
-			return e.Next() // hub replay of a pushed change: PR3
+			// hub replay of a pushed change (apis.ReplayRecordRequests): the hub apply
+			// writes the hub `_changes` row itself. Origin autodate values go in
+			// the record before the autodate interceptor sees it.
+			applyOriginDates(e.Record, origin)
+			return e.Next()
 		}
 		orig := e.App
 		nested := orig.TxInfo() != nil
@@ -496,4 +492,32 @@ func randomHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// OriginFieldKey is the key of kernel.SyncOrigin.Fields for the origin value of
+// an autodate field of one record: "<collectionId>/<recordId>/<field>".
+func OriginFieldKey(colID, recID, field string) string { return colID + "/" + recID + "/" + field }
+
+// applyOriginDates puts the origin created/updated values of a replayed
+// change into rec with SetRaw, so the autodate interceptor keeps them (it only
+// regenerates a value equal to the one loaded).
+func applyOriginDates(rec *core.Record, o *kernel.SyncOrigin) {
+	if len(o.Fields) == 0 {
+		return
+	}
+	col := rec.Collection()
+	for _, f := range col.Fields {
+		if f.Type() != kernel.FieldTypeAutodate {
+			continue
+		}
+		v, ok := o.Fields[OriginFieldKey(col.Id, rec.Id, f.GetName())]
+		if !ok {
+			continue
+		}
+		if s, ok := v.(string); ok {
+			if dt, err := types.ParseDateTime(s); err == nil && !dt.IsZero() {
+				rec.SetRaw(f.GetName(), dt)
+			}
+		}
+	}
 }

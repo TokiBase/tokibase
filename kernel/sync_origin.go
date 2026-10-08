@@ -29,7 +29,9 @@ type SyncOrigin struct {
 	ChangeID string
 	// Actor is the actor grant id of the change.
 	Actor string
-	// Fields carries origin values for autodate fields (created/updated).
+	// Fields carries origin values for autodate fields (created/updated). The
+	// key is "<collectionId>/<recordId>/<field>" (a replayed tx group can touch
+	// several records); the value is the datetime string of the origin.
 	Fields map[string]any
 }
 
