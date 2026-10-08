@@ -26,9 +26,9 @@ func absPath(p string) string {
 	return p
 }
 
-// Lint finds API rules and indexes of a collection that reference one of its
-// encrypted fields. Rules compare against ciphertext and indexes cannot help,
-// so both are almost always mistakes.
+// Lint finds indexes covering an encrypted field and API rules (of any
+// collection) that use an encrypted field in an unsupported way. Rules then
+// compare against ciphertext and indexes cannot help: almost always mistakes.
 func Lint(app core.App) ([]Finding, error) {
 	cfgs, err := List(app)
 	if err != nil {
@@ -45,26 +45,6 @@ func Lint(app core.App) ([]Finding, error) {
 			out = append(out, Finding{col.Name, c.Field, "config", "unknown field"})
 			continue
 		}
-		rules := map[string]*string{
-			"listRule": col.ListRule, "viewRule": col.ViewRule, "createRule": col.CreateRule,
-			"updateRule": col.UpdateRule, "deleteRule": col.DeleteRule,
-		}
-		if col.IsAuth() {
-			rules["authRule"], rules["manageRule"] = col.AuthRule, col.ManageRule
-		}
-		for name, r := range rules {
-			if r == nil || *r == "" {
-				continue
-			}
-			for _, tok := range tokens(*r) {
-				p := stripMod(strings.SplitN(tok, ".", 2)[0])
-				if p == c.Field {
-					out = append(out, Finding{col.Name, c.Field, name,
-						fmt.Sprintf("rule references encrypted field %q: it compares against ciphertext", c.Field)})
-					break
-				}
-			}
-		}
 		for _, ix := range col.Indexes {
 			if strings.Contains(ix, "`"+c.Field+"`") || strings.Contains(ix, "["+c.Field+"]") ||
 				strings.Contains(ix, `"`+c.Field+`"`) || strings.Contains(ix, "("+c.Field+")") || strings.Contains(ix, " "+c.Field+",") {
@@ -73,6 +53,7 @@ func Lint(app core.App) ([]Finding, error) {
 			}
 		}
 	}
+	out = append(out, lintRules(app)...)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Collection < out[j].Collection })
 	return out, nil
 }
@@ -90,4 +71,42 @@ func (m *Module) bootWarn() {
 	for _, f := range fs {
 		m.app.Logger().Warn("crypto: "+f.Message, "collection", f.Collection, "field", f.Field, "where", f.Where)
 	}
+}
+
+// lintRules reports every API rule (of any collection) that uses an encrypted
+// field in a way the equality rewrite does not support. Such a rule compares
+// against ciphertext (or, for an incomplete blind index, is rejected).
+func lintRules(app core.App) []Finding {
+	m := From(app)
+	if m == nil {
+		return nil
+	}
+	cols, err := app.FindAllCollections()
+	if err != nil {
+		return nil
+	}
+	var out []Finding
+	for _, col := range cols {
+		rules := map[string]*string{
+			"listRule": col.ListRule, "viewRule": col.ViewRule, "createRule": col.CreateRule,
+			"updateRule": col.UpdateRule, "deleteRule": col.DeleteRule,
+		}
+		if col.IsAuth() {
+			rules["authRule"], rules["manageRule"] = col.AuthRule, col.ManageRule
+		}
+		for name, r := range rules {
+			if r == nil || *r == "" {
+				continue
+			}
+			if hit := m.filterViolation(col, *r); hit != "" {
+				f := hit
+				if i := strings.IndexByte(hit, '.'); i >= 0 {
+					f = hit[i+1:]
+				}
+				out = append(out, Finding{col.Name, f, name, fmt.Sprintf(
+					"rule uses encrypted field %q in an unsupported way: only `=`, `!=`, `?=`, `?!=` against a non-empty string on a blind-index field are rewritten (and @request.auth.<encrypted field> is rejected); anything else compares against ciphertext", hit)})
+			}
+		}
+	}
+	return out
 }

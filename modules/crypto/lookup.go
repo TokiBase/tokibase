@@ -14,8 +14,10 @@ import (
 	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/kernel/rule"
 	"github.com/tokibase/tokibase/tools/hook"
+	"github.com/tokibase/tokibase/tools/router"
 )
 
 const maxLookup = 100
@@ -76,7 +78,12 @@ func (m *Module) encryptedHit(col *core.Collection, tok string) (hit string, bli
 	}
 	for ; i < len(segs); i++ {
 		name := stripMod(segs[i])
-		if cfg, _ := m.fieldsFor(cur.Id); cfg != nil {
+		cfg, cerr := m.fieldsFor(cur.Id)
+		if cerr != nil {
+			// configuration unavailable: fail closed, treat the field as encrypted
+			return cur.Name + "." + name, false, false
+		}
+		if cfg != nil {
 			if mode, ok := cfg[name]; ok {
 				return cur.Name + "." + name, mode == ModeBlindIndex,
 					i == len(segs)-1 && name == segs[i]
@@ -185,7 +192,33 @@ func (m *Module) operandViolation(col *core.Collection, o rule.Operand) string {
 	return ""
 }
 
-// guardList rejects filter/sort expressions that touch an encrypted field.
+func encryptedFieldResponse(e *core.RequestEvent, param, msg string) error {
+	return e.BadRequestError("Failed to load the records.", validation.Errors{
+		param: validation.NewError(ErrCode, msg),
+	})
+}
+
+// asEncryptedFieldError finds the kernel's typed error behind err, also when a
+// handler wrapped it into a router.ApiError.
+func asEncryptedFieldError(err error) *kernel.EncryptedFieldError {
+	var ef *kernel.EncryptedFieldError
+	if errors.As(err, &ef) {
+		return ef
+	}
+	var ae *router.ApiError
+	if errors.As(err, &ae) {
+		if raw, ok := ae.RawData().(error); ok && errors.As(raw, &ef) {
+			return ef
+		}
+	}
+	return nil
+}
+
+// guardList is the HTTP pre-check of the records list endpoint. The shape rule
+// itself is enforced by the kernel field resolver (kernel.EncryptedFieldError),
+// which covers every path; this check additionally covers what the resolver
+// hook cannot see (sort, function arguments, unparsable filters) and answers
+// before any query runs.
 func (m *Module) guardList(e *core.RequestEvent, col *core.Collection) error {
 	q := e.Request.URL.Query()
 	check := func(param string, exprs []string) error {
@@ -230,7 +263,8 @@ func (m *Module) bindHTTP() {
 			se.Router.Bind(&hook.Handler[*core.RequestEvent]{
 				Id: hookId, Priority: -1 << 19,
 				Func: func(e *core.RequestEvent) error {
-					if e.Request.Method == http.MethodGet && (e.Request.URL.RawQuery != "") {
+					// GET patterns also serve HEAD
+					if (e.Request.Method == http.MethodGet || e.Request.Method == http.MethodHead) && e.Request.URL.RawQuery != "" {
 						if mm := reListPath.FindStringSubmatch(e.Request.URL.Path); mm != nil {
 							if col, err := e.App.FindCachedCollectionByNameOrId(mm[1]); err == nil && col != nil {
 								if err := m.guardList(e, col); err != nil {
@@ -239,7 +273,14 @@ func (m *Module) bindHTTP() {
 							}
 						}
 					}
-					return e.Next()
+					// the kernel resolver rejects unsupported shapes (filters of
+					// every endpoint, view/list rules, batch...) with a typed
+					// error: answer it with the documented 400 payload.
+					err := e.Next()
+					if ef := asEncryptedFieldError(err); ef != nil {
+						return encryptedFieldResponse(e, "filter", ef.Error())
+					}
+					return err
 				},
 			})
 			se.Router.POST("/api/crypto/lookup/{collection}/{field}", m.lookupHandler)
@@ -280,6 +321,9 @@ func (m *Module) lookupHandler(e *core.RequestEvent) error {
 		return e.BadRequestError("Missing value.", nil)
 	}
 	recs, err := FindByBlindIndex(e.App, col.Name, field, value)
+	if errors.Is(err, errTooManyMatches) {
+		return e.BadRequestError("Too many matches.", nil)
+	}
 	if err != nil {
 		return e.InternalServerError("", err)
 	}
@@ -332,7 +376,8 @@ func (m *Module) blindHMACs(col *core.Collection, field, value string) ([]any, e
 // (exact, case sensitive). Records are returned as stored: encrypted fields
 // still hold ciphertext until [Decrypt] is called. No collection rule is
 // applied; callers must check access themselves (the HTTP endpoint evaluates
-// the list rule per record).
+// the list rule per record). More than 1000 index rows for the value is an
+// error (errTooManyMatches), never a silent truncation.
 func FindByBlindIndex(app core.App, collection, field, value string) ([]*core.Record, error) {
 	m := From(app)
 	if m == nil || !m.Active() {
@@ -349,11 +394,17 @@ func FindByBlindIndex(app core.App, collection, field, value string) ([]*core.Re
 	if cfg[field] != ModeBlindIndex {
 		return nil, fmt.Errorf("%s.%s is not a blind-index field", col.Name, field)
 	}
-	return m.findByBlindIndex(col, field, value, 1000)
+	return m.findByBlindIndex(col, field, value, maxFilterMatches)
 }
 
+// errTooManyMatches: the value matches more index rows than allowed. The
+// message is deliberately generic (it must not reveal how many records hold
+// the value).
+var errTooManyMatches = errors.New("too many matches")
+
 // findByBlindIndex is FindByBlindIndex for an already resolved blind-index
-// field: it reads at most limit index rows and verifies every hit.
+// field. The cap is checked on the index rows (LIMIT limit+1) before any
+// record is loaded or decrypted; every hit is then verified.
 func (m *Module) findByBlindIndex(col *core.Collection, field, value string, limit int) ([]*core.Record, error) {
 	hs, err := m.blindHMACs(col, field, value)
 	if err != nil {
@@ -365,9 +416,12 @@ func (m *Module) findByBlindIndex(col *core.Collection, field, value string, lim
 	ids := []string{}
 	err = m.app.DB().Select("record").From(IndexTable).
 		Where(dbx.HashExp{"collection": col.Id, "field": field, "hmac": hs}).
-		Limit(int64(limit)).Column(&ids)
+		Limit(int64(limit) + 1).Column(&ids)
 	if err != nil {
 		return nil, err
+	}
+	if len(ids) > limit {
+		return nil, errTooManyMatches
 	}
 	if len(ids) == 0 {
 		return nil, nil
@@ -388,7 +442,7 @@ func (m *Module) findByBlindIndex(col *core.Collection, field, value string, lim
 	return out, nil
 }
 
-// maxFilterMatches bounds how many records one equality comparison of a
+// maxFilterMatches bounds how many index rows one equality comparison of a
 // filter or rule may match (the ids are inlined as bound parameters).
 const maxFilterMatches = 1000
 
@@ -397,9 +451,26 @@ const maxFilterMatches = 1000
 // to a comparison against the ids found through the index.
 type indexProvider struct{ m *Module }
 
+func (p indexProvider) IsEncrypted(collectionId, field string) (bool, error) {
+	cfg, err := p.m.fieldsFor(collectionId)
+	if err != nil {
+		return false, err
+	}
+	_, ok := cfg[field]
+	return ok, nil
+}
+
+// IsBlindIndex is true only for a blind-index field in steady state. While the
+// field is being enabled or disabled the index is incomplete, so equality
+// (and above all "!=") would give wrong answers: it is not queryable then.
 func (p indexProvider) IsBlindIndex(collectionId, field string) bool {
-	cfg, _ := p.m.fieldsFor(collectionId)
-	return cfg[field] == ModeBlindIndex
+	cfg, err := p.m.fieldsFor(collectionId)
+	return err == nil && cfg[field] == ModeBlindIndex && p.m.stateOf(collectionId, field) == ""
+}
+
+func (p indexProvider) IsBlindIndexInactive(collectionId, field string) bool {
+	cfg, err := p.m.fieldsFor(collectionId)
+	return err == nil && cfg[field] == ModeBlindIndex && p.m.stateOf(collectionId, field) != ""
 }
 
 func (p indexProvider) BlindIndexIDs(col *core.Collection, field, value string, info *core.RequestInfo, enforce bool) ([]string, error) {
@@ -407,12 +478,19 @@ func (p indexProvider) BlindIndexIDs(col *core.Collection, field, value string, 
 	if !m.Active() {
 		return nil, ErrNoMasterKey
 	}
-	recs, err := m.findByBlindIndex(col, field, value, maxFilterMatches+1)
+	fail := func(reason string) error {
+		return &kernel.EncryptedFieldError{Collection: col.Name, Field: field, Reason: reason}
+	}
+	if IsCiphertext(value) {
+		// e.g. @request.auth.<encrypted field>: the auth record is loaded raw
+		return nil, fail("the compared value is ciphertext (an encrypted field of the auth record or of a request value cannot be used)")
+	}
+	recs, err := m.findByBlindIndex(col, field, value, maxFilterMatches)
+	if errors.Is(err, errTooManyMatches) {
+		return nil, fail("too many matches")
+	}
 	if err != nil {
 		return nil, err
-	}
-	if len(recs) > maxFilterMatches {
-		return nil, fmt.Errorf("the comparison on %s.%s matches more than %d records", col.Name, field, maxFilterMatches)
 	}
 	ids := make([]string, 0, len(recs))
 	for _, r := range recs {
@@ -438,5 +516,3 @@ func (m *Module) fieldVisible(r *core.Record, field string, info *core.RequestIn
 	_, ok := r.PublicExport()[field]
 	return ok
 }
-
-var _ = errors.New
