@@ -320,9 +320,8 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 		return pc, false, nil // view rule null: superusers only, never pulled unless trusted (§7.7)
 	}
 	enter := false
+	tracked := m.sentTracked(vw, col, p)
 	if m.pullRuleOn(vw, p) && col.ViewRule != nil && *col.ViewRule != "" && r.Op == OpUpdate {
-	tracked := sentTracked(col, p)
-	if p.PullViewRule && col.ViewRule != nil && *col.ViewRule != "" && r.Op == OpUpdate {
 		// a restrictive view rule can make a record visible by an update: the node may
 		// not have it, so the update travels as the whole record (an upsert)
 		enter = true

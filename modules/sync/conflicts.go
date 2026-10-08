@@ -198,11 +198,10 @@ func (m *Module) resolveConflict(o ResolveOptions) error {
 	// the conflict plus, for a parked tx group, every other parked member: a
 	// transaction is accepted or refused as a whole
 	crs := []*core.Record{cr}
-	if op, txID, node, oseq := m.parkedOp(cr); txID != "" {
+	if _, txID, node, oseq := m.parkedOp(cr); txID != "" {
 		if o.Take == TakePatch {
 			return errors.New("a parked transaction group is resolved with --take hub or --take incoming (all members together)")
 		}
-		_ = op
 		var seqs []int64
 		if err := m.app.DB().NewQuery("SELECT origin_seq FROM _changes WHERE node={:n} AND tx={:t} AND status='parked' AND origin_seq!={:s} ORDER BY origin_seq").
 			Bind(dbx.Params{"n": node, "t": txID, "s": oseq}).Column(&seqs); err != nil {
@@ -244,65 +243,36 @@ func (m *Module) resolveConflict(o ResolveOptions) error {
 	if by == "" {
 		by = "cli"
 	}
-	return m.app.RunInTransaction(func(tx kernel.App) error {
-		// a parked change leaves `parked` here (P4-2): rejected with a revert when
-		// the operator keeps the hub state, closed as accepted when its patch (or
-		// Data) was applied as a normal hub write below
-		parkedSeq := m.parkedSeqOf(tx, cr.GetString("change"))
-		revertDone := false
-		if parkedSeq > 0 && resolution == ResolutionRejected {
-			if err := m.RejectParked(tx, parkedSeq, proto.CodeParkResolved, by); err != nil {
-				return err
-			}
-			revertDone = true
-		}
-		if len(patch) > 0 {
-			isCreate := false
-			if parkedSeq > 0 {
-				var op string
-				_ = tx.NonconcurrentDB().NewQuery("SELECT op FROM _changes WHERE seq={:s}").Bind(dbx.Params{"s": parkedSeq}).Row(&op)
-				isCreate = op == OpCreate
-			}
-			if err := m.adminWrite(tx, col, recID, node, cr.GetString("actor"), patch, isCreate); err != nil {
-				return err
-			}
-		}
-		if parkedSeq > 0 && !revertDone {
-			if _, err := tx.NonconcurrentDB().NewQuery("UPDATE _changes SET status='rejected', code={:c} WHERE seq={:s} AND status='parked'").
-				Bind(dbx.Params{"c": proto.CodeParkAccepted, "s": parkedSeq}).Execute(); err != nil {
-				return err
-			}
-		}
-		if node != "" && node != m.hub.id && !revertDone {
-			if _, err := m.insertRevert(tx, node, col.Id, recID, nil); err != nil {
-				return err
-			}
-		}
-		cr2, err := tx.FindRecordById(ConflictsCollection, o.ID)
-		if err != nil {
-			return err
-		}
-		cr2.Set("status", ConflictResolved)
-		cr2.Set("resolution", resolution)
-		cr2.Set("resolved_by", by)
-		cr2.Set("resolved_at", m.created())
-		if o.Note != "" {
-			cr2.Set("note", strings.TrimSpace(cr2.GetString("note")+" | "+o.Note))
-		}
-		return tx.SaveNoValidate(cr2)
 	err = m.app.RunInTransaction(func(tx kernel.App) error {
 		reverted := map[string]bool{}
 		for _, mb := range members {
-			c := mb.cr
+			c, col := mb.cr, mb.col
 			recID, node := c.GetString("record"), c.GetString("node")
+			// a parked change leaves `parked` here (P4-2): rejected with a revert when
+			// the operator keeps the hub state, closed as accepted when its patch (or
+			// Data) was applied as a normal hub write below
+			parkedSeq := m.parkedSeqOf(tx, c.GetString("change"))
+			revertDone := false
+			if parkedSeq > 0 && resolution == ResolutionRejected {
+				if err := m.RejectParked(tx, parkedSeq, proto.CodeParkResolved, by); err != nil {
+					return err
+				}
+				revertDone = true
+			}
 			if o.Take != TakeHub {
-				if err := m.adminWrite(tx, mb.col, mb.op, recID, node, c.GetString("actor"), mb.patch); err != nil {
+				if err := m.adminWrite(tx, col, mb.op, recID, node, c.GetString("actor"), mb.patch); err != nil {
 					return err
 				}
 			}
-			if k := node + "/" + mb.col.Id + "/" + recID; node != "" && node != m.hub.id && !reverted[k] {
+			if parkedSeq > 0 && !revertDone {
+				if _, err := tx.NonconcurrentDB().NewQuery("UPDATE _changes SET status='rejected', code={:c} WHERE seq={:s} AND status='parked'").
+					Bind(dbx.Params{"c": proto.CodeParkAccepted, "s": parkedSeq}).Execute(); err != nil {
+					return err
+				}
+			}
+			if k := node + "/" + col.Id + "/" + recID; node != "" && node != m.hub.id && !revertDone && !reverted[k] {
 				reverted[k] = true
-				if _, err := m.insertRevert(tx, node, mb.col.Id, recID, nil); err != nil {
+				if _, err := m.insertRevert(tx, node, col.Id, recID, nil); err != nil {
 					return err
 				}
 			}
@@ -372,25 +342,22 @@ func (m *Module) storedIncoming(cr *core.Record) (map[string]any, error) {
 // every node receives by pull. A grant that is no longer valid falls back to the
 // service actor of the node; without one the resolution is refused (use
 // --take hub, or fix the actor first).
-func (m *Module) adminWrite(tx kernel.App, col *core.Collection, recID, nodeID, actor string, patch map[string]any, create bool) error {
-	existing, _ := tx.FindRecordById(col.Id, recID)
-	if existing == nil && !create {
 func (m *Module) adminWrite(tx kernel.App, col *core.Collection, op, recID, nodeID, actor string, patch map[string]any) error {
 	if op == OpUpdate && len(patch) == 0 {
 		return nil
 	}
-	_, ferr := tx.FindRecordById(col.Id, recID)
-	exists := ferr == nil
+	existing, _ := tx.FindRecordById(col.Id, recID)
+	create := op == OpCreate
 	switch {
-	case op == OpCreate && exists:
+	case op == OpDelete && existing == nil:
+		return nil // already gone: nothing to apply
+	case create && existing != nil:
 		return fmt.Errorf("record %s already exists in %s", recID, col.Name)
-	case op == OpCreate:
+	case create:
 		if k := tombstoneKind(tx.NonconcurrentDB(), col.Id, recID); k != "" {
 			return fmt.Errorf("record %s was deleted or purged (%s tombstone): it cannot be created again", recID, k)
 		}
-	case op == OpDelete && !exists:
-		return nil // already gone: nothing to apply
-	case !exists:
+	case existing == nil:
 		return fmt.Errorf("record %s no longer exists in %s", recID, col.Name)
 	}
 	p, err := m.pol.For(col)
@@ -404,15 +371,16 @@ func (m *Module) adminWrite(tx kernel.App, col *core.Collection, op, recID, node
 	for _, f := range syncedFields(col, p) {
 		allowed[f.GetName()] = f
 	}
-	if existing != nil {
-		if rj := validateTyped(p.Types, allowed, patch, false); rj != nil {
 	if op != OpDelete {
-		if rj := validateTyped(p.Types, allowed, patch, op == OpCreate); rj != nil {
+		if rj := validateTyped(p.Types, allowed, patch, create); rj != nil {
 			return rj
 		}
 	}
 	body := map[string]any{}
 	for _, name := range sortedKeys(patch) {
+		if op == OpDelete {
+			break
+		}
 		f, ok := allowed[name]
 		if !ok {
 			return fmt.Errorf("field %q is not a synced field of %s", name, col.Name)
@@ -420,15 +388,15 @@ func (m *Module) adminWrite(tx kernel.App, col *core.Collection, op, recID, node
 		if f.Type() == kernel.FieldTypeAutodate {
 			continue // regenerated by the write
 		}
-		if existing == nil {
+		if create {
 			// a parked create holds the whole state: plain values, no operations
 			if !isZeroValue(patch[name]) {
 				body[name] = patch[name]
 			}
 			continue
 		}
-		if op, typed := opOf(p.Types, name, patch[name]); typed {
-			for mk, mv := range typedModifiers(name, op) {
+		if o, typed := opOf(p.Types, name, patch[name]); typed {
+			for mk, mv := range typedModifiers(name, o) {
 				body[mk] = mv
 			}
 		} else {
@@ -450,15 +418,11 @@ func (m *Module) adminWrite(tx kernel.App, col *core.Collection, op, recID, node
 	} else {
 		return fmt.Errorf("the original actor can no longer be resolved (%s) and node %s has no service actor", rj.msg, nodeID)
 	}
-	req := &core.InternalRequest{Method: http.MethodPatch, URL: "/api/collections/" + col.Id + "/records/" + recID, Body: body}
-	if existing == nil {
-		// accepting a parked create: the record is created with the id of the node
-		body["id"] = recID
-		req = &core.InternalRequest{Method: http.MethodPost, URL: "/api/collections/" + col.Id + "/records", Body: body}
 	base := "/api/collections/" + col.Id + "/records"
 	req := &core.InternalRequest{Method: http.MethodPatch, URL: base + "/" + recID, Body: body}
 	switch op {
 	case OpCreate:
+		// accepting a parked create: the record is created with the id of the node
 		body["id"] = recID
 		req = &core.InternalRequest{Method: http.MethodPost, URL: base, Body: body}
 	case OpDelete:

@@ -21,8 +21,8 @@ const stateSentInit = "sent_init"
 
 // sentTracked reports whether evict/delete rows of the collection depend on
 // the sent set.
-func sentTracked(col *core.Collection, p *policy) bool {
-	return p != nil && p.PullViewRule && col.ViewRule != nil && *col.ViewRule != ""
+func (m *Module) sentTracked(vw *viewer, col *core.Collection, p *policy) bool {
+	return p != nil && m.pullRuleOn(vw, p) && col.ViewRule != nil && *col.ViewRule != ""
 }
 
 // initSentLegacy marks the nodes that pulled before sent tracking existed. It
