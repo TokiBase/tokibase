@@ -45,7 +45,8 @@ const (
 )
 
 // configCollections are the rows shipped with a bundle (design §3.8).
-var configCollections = []string{PoliciesCollection, "_field_rules", "_batch_rules", "_computed_fields", "_crypto_fields"}
+// `_crypto_fields` is left out until the key sync (PR9): a field marked encrypted on a spoke without its key would break writes.
+var configCollections = []string{PoliciesCollection, "_field_rules", "_batch_rules", "_computed_fields"}
 
 // KindSchemaDroppedField is the conflict kind of a field removed from a patch.
 const (
@@ -505,41 +506,38 @@ func (m *Module) oldestBundle() int64 {
 // the oldest kept bundle or more than max bundles behind. A node at version 0
 // (fresh) gets the latest bundle only; being a full snapshot it needs no
 // history.
-func (m *Module) handshakeSchema(spokeVersion int64) (proto.Schema, bool) {
+func (m *Module) handshakeSchema(nodeID string, spokeVersion int64) (proto.Schema, bool) {
 	out := proto.Schema{Bundles: []proto.SchemaBundle{}}
 	if _, err := m.refreshBundle(); err != nil {
 		m.app.Logger().Error("sync: failed to refresh the schema bundle", "error", err)
 	}
 	hub := m.schemaVersion()
 	out.Version = hub
-	if hub == 0 || spokeVersion >= hub {
+	if hub == 0 || spokeVersion == hub {
 		return out, false
 	}
-	from := spokeVersion + 1
-	if spokeVersion <= 0 {
-		from = hub // fresh node: the latest full snapshot is enough
-	}
+	// every bundle is a full snapshot: only the latest travels (the history stays on
+	// the hub for the sv mapping), so the answer stays small whatever the lag
 	tooOld := false
-	if spokeVersion > 0 {
-		if oldest := m.oldestBundle(); from < oldest || hub-spokeVersion > int64(m.maxBundles()) {
-			// too far behind: the node bootstraps from a snapshot (PR7); the latest
-			// full bundle comes with the answer so that it has the schema first
-			from, tooOld = hub, true
+	if spokeVersion > 0 && spokeVersion < hub {
+		if oldest := m.oldestBundle(); spokeVersion+1 < oldest || hub-spokeVersion > int64(m.maxBundles()) {
+			tooOld = true // the node bootstraps from a snapshot (PR7), after applying the latest bundle
 		}
 	}
-	var rows []struct {
+	var r struct {
 		Version int64  `db:"version"`
 		Hash    string `db:"hash"`
 		Bundle  string `db:"bundle"`
 	}
-	if err := m.app.DB().NewQuery("SELECT version, hash, bundle FROM _sync_schema WHERE version>={:f} ORDER BY version").
-		Bind(dbx.Params{"f": from}).All(&rows); err != nil {
-		m.app.Logger().Error("sync: failed to read the schema bundles", "error", err)
+	if err := m.app.DB().NewQuery("SELECT version, hash, bundle FROM _sync_schema WHERE version={:v}").
+		Bind(dbx.Params{"v": hub}).One(&r); err != nil {
+		m.app.Logger().Error("sync: failed to read the schema bundle", "error", err)
 		return out, false
 	}
-	for _, r := range rows {
-		out.Bundles = append(out.Bundles, proto.SchemaBundle{Version: r.Version, Hash: r.Hash, Bundle: json.RawMessage(r.Bundle)})
-	}
+	out.Bundles = append(out.Bundles, proto.SchemaBundle{
+		Version: r.Version, Hash: r.Hash, Bundle: json.RawMessage(r.Bundle),
+		Sig: proto.SignBundle(m.hub.priv, nodeID, r.Version, r.Hash),
+	})
 	return out, tooOld
 }
 
@@ -603,6 +601,50 @@ func (m *Module) defsOf(tx kernel.App, version int64) (*bundleDefs, error) {
 	return d, nil
 }
 
+// remapKeys renames the keys of patch from the field names of the bundle defs
+// to the current names of col, through the field ids. Keys of fields that no
+// longer exist are removed from the patch; their values are put in dropped.
+func remapKeys(old *bundleDefs, col *core.Collection, patch map[string]any, droppedVals map[string]any) (dropped []string, changed bool) {
+	oldFields := old.byName[col.Id]
+	if oldFields == nil {
+		return nil, false
+	}
+	cur := make(map[string]string, len(col.Fields))
+	for _, f := range col.Fields {
+		cur[f.GetId()] = f.GetName()
+	}
+	renamed := map[string]string{}
+	for _, k := range sortedKeys(patch) {
+		id, ok := oldFields[k]
+		if !ok {
+			continue // unknown at that version
+		}
+		nn, ok := cur[id]
+		switch {
+		case !ok:
+			dropped = append(dropped, k)
+		case nn != k:
+			renamed[k] = nn
+		}
+	}
+	if len(dropped) == 0 && len(renamed) == 0 {
+		return nil, false
+	}
+	for _, k := range dropped {
+		droppedVals[k] = patch[k]
+		delete(patch, k)
+	}
+	moved := map[string]any{}
+	for k, nn := range renamed {
+		moved[nn] = patch[k]
+		delete(patch, k)
+	}
+	for k, v := range moved {
+		patch[k] = v
+	}
+	return dropped, true
+}
+
 // mapSchema maps the field names of a pushed patch from the schema version it
 // was captured under (c.SV) to the current ones through the field ids
 // (docs/SYNC_DESIGN.md §3.8). Fields that no longer exist are removed from the
@@ -625,45 +667,10 @@ func (m *Module) mapSchema(tx kernel.App, nodeID string, c *hubChange, col *core
 			Incoming: c.patch, Note: rj.msg}
 		return rj
 	}
-	oldFields := old.byName[col.Id]
-	if oldFields == nil {
-		return nil
-	}
-	cur := make(map[string]string, len(col.Fields))
-	for _, f := range col.Fields {
-		cur[f.GetId()] = f.GetName()
-	}
-	var dropped []string
-	renamed := map[string]any{}
-	for _, k := range sortedKeys(c.patch) {
-		id, ok := oldFields[k]
-		if !ok {
-			continue // unknown at that version: the apply loop ignores it
-		}
-		nn, ok := cur[id]
-		switch {
-		case !ok:
-			dropped = append(dropped, k)
-		case nn != k:
-			renamed[k] = nn
-		}
-	}
-	if len(dropped) == 0 && len(renamed) == 0 {
-		return nil
-	}
 	droppedVals := map[string]any{}
-	for _, k := range dropped {
-		droppedVals[k] = c.patch[k]
-		delete(c.patch, k)
-	}
-	// two passes: a rename onto the name another field just left must not clash
-	moved := map[string]any{}
-	for k, nn := range renamed {
-		moved[nn.(string)] = c.patch[k]
-		delete(c.patch, k)
-	}
-	for k, v := range moved {
-		c.patch[k] = v
+	dropped, changed := remapKeys(old, col, c.patch, droppedVals)
+	if !changed {
+		return nil
 	}
 	if len(dropped) > 0 {
 		ci := &ConflictInfo{Kind: KindSchemaDroppedField, Strategy: StratLWW, Resolution: ResolutionAutoMerge, Status: ConflictResolved,
@@ -815,11 +822,24 @@ func replaceRows(tx kernel.App, ctx context.Context, name string, rows []map[str
 	var backfill [][2]string
 	keep := map[string]struct{}{}
 	for _, row := range rows {
+		if id, _ := row["id"].(string); id != "" {
+			keep[id] = struct{}{}
+		}
+	}
+	// stale rows go first: a row of an older build has another id but the same unique
+	// key (`_sync_policies.collection`) as the bundle row that replaces it
+	for id, r := range byID {
+		if _, ok := keep[id]; !ok {
+			if err := tx.DeleteWithContext(ctx, r); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for _, row := range rows {
 		id, _ := row["id"].(string)
 		if id == "" {
 			continue
 		}
-		keep[id] = struct{}{}
 		rec := byID[id]
 		isNew := rec == nil
 		if isNew {
@@ -850,13 +870,6 @@ func replaceRows(tx kernel.App, ctx context.Context, name string, rows []map[str
 			backfill = append(backfill, [2]string{rec.GetString("collection"), rec.GetString("field")})
 		}
 	}
-	for id, r := range byID {
-		if _, ok := keep[id]; !ok {
-			if err := tx.DeleteWithContext(ctx, r); err != nil {
-				return nil, err
-			}
-		}
-	}
 	return backfill, nil
 }
 
@@ -865,4 +878,16 @@ func sameValue(a, b any) bool {
 	ja, _ := json.Marshal(a)
 	jb, _ := json.Marshal(b)
 	return string(ja) == string(jb)
+}
+
+// ImportCollections creates collections for the snapshot bootstrap (PR7) inside
+// the bundle exemption of the schema lock.
+func (b backend) ImportCollections(defs []map[string]any) error {
+	return b.m.app.RunInTransaction(func(tx kernel.App) error {
+		if info := tx.TxInfo(); info != nil {
+			b.m.p8.bundleTxs.Store(info, struct{}{})
+			defer b.m.p8.bundleTxs.Delete(info)
+		}
+		return tx.ImportCollections(defs, false)
+	})
 }

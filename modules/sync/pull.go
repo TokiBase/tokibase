@@ -146,6 +146,7 @@ type pullRow struct {
 	Code       string `db:"code"`
 	PartOld    string `db:"part_old"`
 	PartNew    string `db:"part_new"`
+	SV         int64  `db:"schema_version"`
 }
 
 // buildPull reads one page of deliverable changes with seq in (after, head].
@@ -169,7 +170,7 @@ func (m *Module) buildPull(app kernel.App, nodeID string, after, head int64, lim
 		params[k] = v
 	}
 	var rows []pullRow
-	err = app.DB().NewQuery(`SELECT seq, node, origin_seq, hlc, collection, record, op, patch, hash, status, part_old, part_new, code FROM _changes
+	err = app.DB().NewQuery(`SELECT seq, node, origin_seq, hlc, collection, record, op, patch, hash, status, part_old, part_new, code, schema_version FROM _changes
   WHERE seq > {:a} AND seq <= {:h}
     AND ((status='applied') OR (status='revert' AND target={:n}) OR (status='parked' AND node={:n}) OR (status='local' AND node={:hub}))` + pex + `
   ORDER BY seq LIMIT {:lim}`).
@@ -355,6 +356,13 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 	patch := map[string]any{}
 	if err := json.Unmarshal([]byte(r.Patch), &patch); err != nil {
 		return pc, false, err
+	}
+	if r.SV > 0 && r.SV < m.schemaVersion() {
+		// written under an older schema: a field renamed since travels under its new
+		// name (by field id), so the spoke that applied the bundle does not drop it
+		if d, derr := m.defsOf(app, r.SV); derr == nil && d != nil {
+			remapKeys(d, col, patch, map[string]any{})
+		}
 	}
 	if r.Op == OpUpdate && len(patch) == 0 && !enter {
 		return pc, false, nil // a push that changed nothing

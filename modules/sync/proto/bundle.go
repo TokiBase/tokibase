@@ -1,6 +1,11 @@
 package proto
 
-import "encoding/json"
+import (
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
+	"strconv"
+)
 
 // SchemaBundle is one schema version of the hub (docs/SYNC_DESIGN.md §3.8): a
 // full snapshot of the synced collections plus the config rows, so applying
@@ -10,6 +15,8 @@ type SchemaBundle struct {
 	Version int64           `json:"version"`
 	Hash    string          `json:"hash"`
 	Bundle  json.RawMessage `json:"bundle"`
+	// Sig is the hub signature over node|version|hash (SignBundle).
+	Sig string `json:"sig,omitempty"`
 }
 
 // BundleBody is the content of SchemaBundle.Bundle.
@@ -34,4 +41,20 @@ func CanonicalJSON(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	return encodeNoEscape(v)
+}
+
+func bundleDigest(node string, version int64, hash string) []byte {
+	return []byte("toki-sync-bundle|" + node + "|" + strconv.FormatInt(version, 10) + "|" + hash)
+}
+
+// SignBundle signs a bundle for one node with the hub key, so a spoke does not
+// depend on the transport alone to trust the schema it applies (§7.10).
+func SignBundle(priv ed25519.PrivateKey, node string, version int64, hash string) string {
+	return base64.StdEncoding.EncodeToString(ed25519.Sign(priv, bundleDigest(node, version, hash)))
+}
+
+// VerifyBundle checks SignBundle.
+func VerifyBundle(pub ed25519.PublicKey, node string, version int64, hash, sig string) bool {
+	b, err := base64.StdEncoding.DecodeString(sig)
+	return err == nil && len(pub) == ed25519.PublicKeySize && ed25519.Verify(pub, bundleDigest(node, version, hash), b)
 }

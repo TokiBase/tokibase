@@ -494,11 +494,11 @@ func reserveValue(v any) (n int64, empty, ok bool) {
 		}
 		return int64(x), false, true
 	case string:
-		if strings.TrimSpace(x) == "" {
+		if x == "" {
 			return 0, true, true
 		}
-		n, err := strconv.ParseInt(strings.TrimSpace(x), 10, 64)
-		if err != nil || n < 0 {
+		n, err := strconv.ParseInt(x, 10, 64)
+		if err != nil || n < 0 || strconv.FormatInt(n, 10) != x {
 			return 0, false, false
 		}
 		return n, false, true
@@ -652,8 +652,14 @@ func (m *Module) autofill(e *core.RecordEvent) error {
 	}
 	var todo []string
 	for _, name := range sortedKeys(rf) {
-		if _, empty, _ := reserveValue(e.Record.Get(name)); empty {
+		n, empty, ok := reserveValue(e.Record.Get(name))
+		if empty {
 			todo = append(todo, name)
+			continue
+		}
+		if m.role == RoleSpoke && !m.issuedLocally(e.App, rf[name], n, ok) {
+			// the hub would refuse the value on push and revert the record: say so now
+			return router.NewApiError(http.StatusBadRequest, "The value of "+name+" must be a number reserved for this node (leave it empty to get the next one).", nil)
 		}
 	}
 	if len(todo) == 0 {
@@ -681,4 +687,16 @@ func (m *Module) autofill(e *core.RecordEvent) error {
 		return re.apiError()
 	}
 	return err
+}
+
+// issuedLocally reports whether n was already handed out from a local range of
+// the sequence (an explicit value is only valid if it is one of ours).
+func (m *Module) issuedLocally(app kernel.App, seq string, n int64, ok bool) bool {
+	if !ok {
+		return false
+	}
+	var c int
+	err := app.NonconcurrentDB().NewQuery(`SELECT COUNT(*) FROM _sync_reserved WHERE sequence={:s} AND start<={:n} AND next>{:n} AND status!='retired'`).
+		Bind(dbx.Params{"s": seq, "n": n}).Row(&c)
+	return err == nil && c > 0
 }

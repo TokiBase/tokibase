@@ -515,7 +515,7 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 	rebootstrap := cur.GetString("status") == NodeStale || cur.GetString("status") == NodeRebootstrap || req.PullAfter < low ||
 		m.epochRequiresRebootstrap(req.HubEpoch, req.PullAfter)
 	// PR8: schema bundles newer than the node's version; a node too far behind re-bootstraps
-	schema, schemaTooOld := m.handshakeSchema(req.SchemaVersion)
+	schema, schemaTooOld := m.handshakeSchema(nodeID, req.SchemaVersion)
 	rebootstrap = rebootstrap || schemaTooOld
 
 	expires := now.Add(SessionTTL)

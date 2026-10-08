@@ -103,6 +103,11 @@ VALUES ({:id}, {:s}, {:a}, {:b}, {:a}, 'active', {:x})`).
 			Bind(dbx.Params{"id": r.ID, "s": r.Sequence, "a": r.Start, "b": r.End, "x": r.Expires}).Execute(); err != nil {
 			return err
 		}
+		// a spoke restored from an older backup must not reissue numbers the hub saw
+		if _, err := db.NewQuery(`UPDATE _sync_reserved SET next={:n} WHERE id={:id} AND status='active' AND next<{:n}`).
+			Bind(dbx.Params{"id": r.ID, "n": r.End - r.RemainingHint + 1}).Execute(); err != nil {
+			return err
+		}
 	}
 	var active []string
 	if err := db.NewQuery("SELECT id FROM _sync_reserved WHERE status='active'").Column(&active); err != nil {

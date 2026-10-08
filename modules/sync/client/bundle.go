@@ -61,6 +61,9 @@ func (c *Client) applyBundles(ctx context.Context, hs *proto.HandshakeResponse) 
 		if b.Version <= cur {
 			continue
 		}
+		if c.hubPub != nil && !proto.VerifyBundle(c.hubPub, c.nodeID, b.Version, b.Hash, b.Sig) {
+			return fmt.Errorf("sync: schema bundle %d is not signed by the hub: refused", b.Version)
+		}
 		canon, err := proto.CanonicalJSON(b.Bundle)
 		if err != nil {
 			return fmt.Errorf("sync: schema bundle %d is not valid JSON: %w", b.Version, err)

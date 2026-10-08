@@ -365,3 +365,68 @@ func TestChangeOlderThanTheOldestBundleIsOrphaned(t *testing.T) {
 		t.Fatalf("orphaned conflicts: %d", len(confs))
 	}
 }
+
+func TestBundleReplacesPolicyRowsOfAnOlderBuild(t *testing.T) {
+	h := newHub(t)
+	h.policy(t, "items", DirBoth, nil, nil)
+	s := newBareSpoke(t, h, "gate-1")
+	// a spoke enrolled before PR8 has a policy row with a random id and the same unique key
+	t.Setenv(EnvSchemaLock, "off")
+	if err := s.m.Init(); err != nil {
+		t.Fatal(err)
+	}
+	pc, _ := s.app.FindCollectionByNameOrId(PoliciesCollection)
+	r := core.NewRecord(pc)
+	r.Set("collection", "items")
+	r.Set("direction", DirBoth)
+	r.Set("enabled", true)
+	if err := s.app.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	s.sync(t) // the bundle row has the hub's id for the same collection
+	recs, _ := s.app.FindAllRecords(PoliciesCollection)
+	if len(recs) != 1 {
+		t.Fatalf("policy rows %d", len(recs))
+	}
+	hp, _ := h.app.FindFirstRecordByFilter(PoliciesCollection, "collection='items'")
+	if recs[0].Id != hp.Id {
+		t.Fatalf("the local row must be replaced by the hub's (%s != %s)", recs[0].Id, hp.Id)
+	}
+}
+
+func TestPulledRowWrittenBeforeARenameIsMappedByFieldID(t *testing.T) {
+	h, a, b := hubFixture(t)
+	rec := h.create(t, map[string]any{"title": "before the rename"})
+	// the hub renames the field before b pulls the create row
+	c, _ := h.app.FindCollectionByNameOrId("items")
+	c.Fields.GetByName("title").SetName("headline")
+	if err := h.app.Save(c); err != nil {
+		t.Fatal(err)
+	}
+	b.sync(t)
+	got, err := b.app.FindRecordById("items", rec.Id)
+	if err != nil || got.GetString("headline") != "before the rename" {
+		t.Fatalf("spoke record: %v %v", got, err)
+	}
+	a.sync(t)
+	requireConverged(t, h, a, b)
+}
+
+func TestTooOldSpokeGetsTheLatestBundleAndStopsBootstrappingForever(t *testing.T) {
+	t.Setenv(EnvMaxBundles, "2")
+	h, a, _ := hubFixture(t)
+	for i := 0; i < 4; i++ {
+		addTextField(t, h.app, "items", "h"+string(rune('a'+i)))
+	}
+	if r := a.c.RunOnce(ctxb); !errors.Is(r.Err, client.ErrRebootstrap) {
+		t.Fatalf("cycle: %v", r.Err)
+	}
+	cur, _ := client.LoadCursor(a.app)
+	if cur.SchemaVersion != hubSchemaVersion(h) {
+		t.Fatalf("schema version after the answer: %d, hub %d", cur.SchemaVersion, hubSchemaVersion(h))
+	}
+	hs, err := a.c.Handshake(ctxb)
+	if err != nil || hs.Rebootstrap {
+		t.Fatalf("second handshake: rebootstrap %v err %v", hs != nil && hs.Rebootstrap, err)
+	}
+}

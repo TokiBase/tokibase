@@ -339,3 +339,28 @@ func TestUsedValuesFreeTheOpenSlotBeforeThePushArrives(t *testing.T) {
 		t.Fatalf("hub exhausted ranges: %d", n)
 	}
 }
+
+func TestExplicitReservedValueMustBeOurOwn(t *testing.T) {
+	h := ticketsHub(t)
+	s := newBareSpoke(t, h, "gate-1")
+	s.sync(t) // 1..10
+	post := func(no string) int {
+		st, _ := s.localDo(t, "POST", "/api/collections/tickets/records", `{"no":"`+no+`","plate":"x"}`)
+		return st
+	}
+	if st := post("G-1"); st != 400 {
+		t.Fatalf("a text value: %d", st)
+	}
+	if st := post("5"); st != 400 {
+		t.Fatalf("a value not handed out yet: %d", st)
+	}
+	if st := post("007"); st != 400 {
+		t.Fatalf("a non-canonical value: %d", st)
+	}
+	if n, err := Next(s.app, "tickets"); err != nil || n != 1 {
+		t.Fatalf("Next: %d %v", n, err)
+	}
+	if st := post("1"); st != 200 {
+		t.Fatalf("a value of our own range: %d", st)
+	}
+}
