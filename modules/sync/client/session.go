@@ -39,7 +39,8 @@ func (c *Client) ensureSession(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if hs.Rebootstrap {
+	c.handleEpoch(hs)
+	if hs.Rebootstrap && !c.isBootstrapping() {
 		c.markRebootstrap(hs.LowWater)
 		return ErrRebootstrap
 	}

@@ -1,0 +1,186 @@
+//go:build !no_sync
+
+package client
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/pocketbase/dbx"
+	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
+)
+
+// parkedRow is an unpushed local change that a bootstrap parked.
+type parkedRow struct {
+	Seq     int64  `db:"origin_seq"`
+	Coll    string `db:"collection"`
+	Record  string `db:"record"`
+	Op      string `db:"op"`
+	Patch   string `db:"patch"`
+	Actor   string `db:"actor"`
+	Created string `db:"created"`
+}
+
+// rebaseParked replays the parked local changes on the data the snapshot and
+// the log delivered, as fresh local changes (new HLC, base = the new record
+// clock), in their original order. A change older than the retention, or one
+// whose record is gone, becomes an `orphaned` conflict instead (§3.9). Each
+// parked row turns into a filler (`code = rebased`) in the same transaction, so
+// the origin_seq sequence the hub tracks stays contiguous and a crash neither
+// loses nor repeats a change.
+func (c *Client) rebaseParked(ctx context.Context) (rebased, orphaned int, err error) {
+	var rows []parkedRow
+	if err := c.o.App.DB().NewQuery(`SELECT origin_seq, collection, record, op, patch, actor, created FROM _changes
+  WHERE node={:n} AND status={:s} ORDER BY origin_seq`).Bind(dbx.Params{"n": c.nodeID, "s": StatusRebase}).All(&rows); err != nil {
+		return 0, 0, err
+	}
+	cut := c.wallNow().Add(-c.retention())
+	for _, r := range rows {
+		if err := ctx.Err(); err != nil {
+			return rebased, orphaned, err
+		}
+		var note string
+		err := c.o.App.RunInTransaction(func(tx kernel.App) error {
+			var rerr error
+			if note, rerr = c.replayLocal(tx, r, cut); rerr != nil {
+				return rerr
+			}
+			if note != "" {
+				writeConflictRow(tx, conflictRow{Collection: r.Coll, Record: r.Record, Change: c.nodeID + ":" + itoa(r.Seq), Node: c.nodeID,
+					Actor: r.Actor, Kind: "orphaned", Resolution: "orphaned", Status: "open", Incoming: patchOf(r.Patch), Note: note})
+			}
+			_, rerr = tx.NonconcurrentDB().NewQuery("UPDATE _changes SET status='local', op='u', patch='{}', hash=NULL, base_hlc=0, code={:c}, part_old='', part_new='' WHERE node={:n} AND origin_seq={:s} AND status={:r}").
+				Bind(dbx.Params{"c": CodeRebased, "n": c.nodeID, "s": r.Seq, "r": StatusRebase}).Execute()
+			return rerr
+		})
+		if err != nil {
+			return rebased, orphaned, fmt.Errorf("sync: rebase of local change %s:%d failed: %w", c.nodeID, r.Seq, err)
+		}
+		if note != "" {
+			orphaned++
+		} else {
+			rebased++
+		}
+	}
+	if len(rows) > 0 && c.o.Logger != nil {
+		c.o.Logger.Info("sync: local changes rebased after the snapshot", "rebased", rebased, "orphaned", orphaned)
+	}
+	return rebased, orphaned, nil
+}
+
+func patchOf(raw string) map[string]any {
+	var p map[string]any
+	_ = json.Unmarshal([]byte(raw), &p)
+	return p
+}
+
+// replayLocal applies one parked change to the current data as a new local
+// change. It returns a note when the change cannot be kept (the orphaned reason).
+func (c *Client) replayLocal(tx kernel.App, r parkedRow, cut time.Time) (string, error) {
+	col, err := tx.FindCachedCollectionByNameOrId(r.Coll)
+	if err != nil {
+		return "the collection no longer exists on this node", nil
+	}
+	pv := c.o.Backend.Policy(col)
+	if pv == nil {
+		return "the collection is no longer replicated on this node", nil
+	}
+	if t, perr := time.Parse(dateLayout, r.Created); perr == nil && t.Before(cut) {
+		return "the change is older than the retention (" + c.retention().String() + ")", nil
+	}
+	db := tx.NonconcurrentDB()
+	var tomb int
+	_ = db.NewQuery("SELECT COUNT(*) FROM _sync_tombstones WHERE collection={:c} AND record={:r}").
+		Bind(dbx.Params{"c": col.Id, "r": r.Record}).Row(&tomb)
+	rec, _ := tx.FindRecordById(col.Id, r.Record)
+
+	var prevMax int64
+	_ = db.NewQuery("SELECT COALESCE(MAX(origin_seq),0) FROM _changes WHERE node={:n}").Bind(dbx.Params{"n": c.nodeID}).Row(&prevMax)
+	keepActor := func() {
+		if r.Actor != "" && r.Actor != "node" {
+			_, _ = db.NewQuery("UPDATE _changes SET actor={:a} WHERE node={:n} AND origin_seq>{:m} AND actor='node'").
+				Bind(dbx.Params{"a": r.Actor, "n": c.nodeID, "m": prevMax}).Execute()
+		}
+	}
+
+	switch r.Op {
+	case "d":
+		if rec == nil {
+			return "", nil // already gone: the hub deleted it too
+		}
+		if err := tx.Delete(rec); err != nil {
+			return "the delete failed: " + err.Error(), nil
+		}
+		keepActor()
+		return "", nil
+	case "c", "u":
+	default:
+		return "", nil // purge requests come from the hub only
+	}
+
+	if tomb > 0 {
+		return "the record was deleted on the hub", nil
+	}
+	isNew := rec == nil
+	if isNew {
+		if r.Op == "u" {
+			return "the record no longer exists on the hub", nil
+		}
+		rec = core.NewRecord(col)
+		rec.Set("id", r.Record)
+	}
+	patch := patchOf(r.Patch)
+	changed := isNew
+	for name, raw := range patch {
+		f, ok := isAllowedField(col, pv, name)
+		if !ok || f.Type() == kernel.FieldTypeAutodate {
+			continue // autodate fields are regenerated by the new write
+		}
+		var val any
+		switch pv.Types[name] {
+		case "counter":
+			switch x := raw.(type) {
+			case map[string]any:
+				d, _ := x["$inc"].(float64)
+				val = rec.GetFloat(name) + d
+			case float64:
+				val = x // a create carries the absolute value
+			default:
+				continue
+			}
+		case "set":
+			x, ok := raw.(map[string]any)
+			if !ok {
+				if list, isList := raw.([]any); isList {
+					val = list
+					break
+				}
+				continue
+			}
+			add, _ := x["$add"].([]any)
+			rm, _ := x["$rm"].([]any)
+			var cur []any
+			_ = json.Unmarshal([]byte(export(rec, f)), &cur)
+			p := &pending{sets: map[string][]setOp{name: {{add: add, rm: rm}}}}
+			val = p.applySet(name, cur)
+		default:
+			val = raw
+		}
+		if !isNew && export(rec, f) == canon(val) {
+			continue
+		}
+		rec.Set(name, val)
+		changed = true
+	}
+	if !changed {
+		return "", nil // the snapshot already holds this state
+	}
+	if err := tx.SaveNoValidate(rec); err != nil {
+		return "the change cannot be applied to the new data: " + err.Error(), nil
+	}
+	keepActor()
+	return "", nil
+}

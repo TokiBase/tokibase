@@ -128,3 +128,21 @@ func (m *Module) bindLoop() {
 		b().Bind(&hook.Handler[*core.RecordEvent]{Id: hookId + "write", Priority: 1000, Func: after})
 	}
 }
+
+// MetaDigests implements client.DigestBackend: the `_sync_meta` digest of every
+// collection this node pulls.
+func (b backend) MetaDigests() (map[string]string, error) {
+	ps, err := b.m.pol.pullable()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(ps))
+	for _, p := range ps {
+		d, _, err := metaDigest(b.m.app.DB(), p.ColID)
+		if err != nil {
+			return nil, err
+		}
+		out[p.ColID] = d
+	}
+	return out, nil
+}
