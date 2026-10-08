@@ -30,6 +30,7 @@ import (
 	"github.com/tokibase/tokibase/modules/mcp"
 	"github.com/tokibase/tokibase/modules/nativeauth"
 	"github.com/tokibase/tokibase/modules/passkey"
+	"github.com/tokibase/tokibase/modules/payments"
 	"github.com/tokibase/tokibase/modules/push"
 	"github.com/tokibase/tokibase/modules/roles"
 	"github.com/tokibase/tokibase/modules/ruleguard"
@@ -408,6 +409,23 @@ func NewWithConfig(config Config) *PocketBase {
 		}
 	}
 
+	// provider-neutral payments: webhooks, intents, entitlements (TOKI_PAYMENTS=off disables)
+	if payments.Enabled() {
+		payments.Register(pb.App.(core.App))
+		if auditLog != nil {
+			payments.SetAuditSink(func(action, collection, record string, details map[string]any) {
+				after, _ := json.Marshal(details)
+				afterStr := string(after)
+				if err := auditLog.Append(&audit.Entry{
+					ActorKind: "system", Action: action, Collection: collection,
+					Record: record, After: &afterStr,
+				}); err != nil {
+					pb.Logger().Warn("audit: failed to record "+action, "error", err)
+				}
+			})
+		}
+	}
+
 	// sandboxed WASM hooks from pb_hooks_wasm/ (TOKI_WASM=off or -tags no_wasm disables)
 	wasm.Register(pb.App.(core.App), pb.RootCmd)
 
@@ -537,6 +555,9 @@ func (pb *PocketBase) Start() error {
 	pb.RootCmd.AddCommand(crypto.NewCommand(pb))
 	pb.RootCmd.AddCommand(geo.NewCommand(pb))
 	pb.RootCmd.AddCommand(roles.NewCommand(pb))
+	if payments.Enabled() {
+		pb.RootCmd.AddCommand(payments.NewCommand(pb))
+	}
 	if c := wasm.NewCommand(pb); c != nil {
 		pb.RootCmd.AddCommand(c)
 	}
