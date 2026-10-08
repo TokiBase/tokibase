@@ -162,6 +162,11 @@ Every deviation must be listed here with: what changed, why, migration path.
 - Why: business logic in any language with CPU/memory/time limits, without goja.
 - Migration: nothing needed. `TOKI_WASM=off` or `-tags no_wasm` removes the feature; upstream PocketBase ignores the directory and the auxiliary tables.
 
+### New `POST /api/collections/{collection}/auth-with-native` endpoint (phase 2, `modules/nativeauth`)
+
+- What: additive endpoint for mobile apps. Body `{provider: "google"|"apple", idToken, nonce?, createData?}`; the ID token is verified server-side against the provider JWKS and the user is signed in or up with the standard auth response (`AuthMethod` `oauth2`, `meta` like authWithOAuth2 with `isNew`). Account mapping is the OAuth2 code flow's own (`apis.SubmitOAuth2User` wraps the unexported `oauth2Submit`): same `_externalAuths` row, same email matching, same sign-up through the collection create rule, and the existing `OnRecordAuthWithOAuth2Request` hook fires (with `ProviderClient` initialised from the collection config; `OAuth2User.AccessToken` is empty). Only a provider-verified email is used to match or create a record. Tokens are single use (replay cache until `exp`). New audit actions `auth.native` and `auth.native_failed`. Env: `TOKI_NATIVEAUTH=off`, `TOKI_NATIVEAUTH_GOOGLE_AUDIENCES`, `TOKI_NATIVEAUTH_APPLE_AUDIENCES`. No existing endpoint, status code or body shape changes.
+- Migration: nothing needed. Upstream PocketBase ignores the endpoint (404); the SDK reaches it with `send()`. See `docs/modules/nativeauth.md`.
+
 ### WASM batch events and `http_allow` (phase 2, `modules/wasm`)
 
 - What: a WASM module may list `batch.before`, `batch.after` or `batch.*` in its sidecar `events`; it is then called inside the `/api/batch` transaction and can reject the whole batch with a status and message of its choosing (default 400), or fails closed with `500 {"message":"Hook failed."}` (`413` when the sub-requests exceed 4 MiB; `500` when the time budget is exceeded). New sidecar key `http_allow` narrows the outbound HTTP allowlist per module.
