@@ -93,14 +93,14 @@ Exit gate: all modules on by default in profile `solo`, failover drill RTO under
 - [ ] PR10 nano/edge integration + parking prototype: `embed.Sync`, `mobile` facade, conditions/backoff, size measurement, parking e2e (48 h offline, converge with zero loss).
 - [ ] PR11 hardening / QC: fuzz decoders, race tests, rate limits, metrics in `/api/health`, threat-model tests, chaos run.
 
-## Size budgets (stripped; CI enforces the numbers in `profiles.txt`: solo 46 MiB, team 46 MiB, no_ui 43 MiB, cluster (solo+replica_s3) 55 MiB, edge 28 MiB, nano 24 MiB). The full-featured `solo` build has reached the 45 MB design budget with passkey (+2.1 MB, go-webauthn/TPM/CBOR), mcp (+2 MB) and push; the `edge`/`nano` profiles exclude these through build tags (`no_mcp`, `no_passkey`, `no_push`, `no_webhooks`, `no_crypto`, ... see `docs/PROFILES.md`).
+## Size budgets (stripped; CI enforces the numbers in `profiles.txt`: solo 47 MiB, team 47 MiB, no_ui 44 MiB, cluster (solo+replica_s3) 55 MiB, edge 28 MiB, nano 24 MiB). The full-featured `solo` build has reached the 45 MB design budget with passkey (+2.1 MB, go-webauthn/TPM/CBOR), mcp (+2 MB) and push; the `edge`/`nano` profiles exclude these through build tags (`no_mcp`, `no_passkey`, `no_push`, `no_webhooks`, `no_crypto`, ... see `docs/PROFILES.md`).
 
 | Profile | Design budget | Measured linux/amd64 (arm64) | CI budget |
 | --- | --- | --- | --- |
 | nano | 14 MB per arch | 21.1 MiB (19.9) | 22 MiB |
 | edge | 28 MB | 25.5 MiB (24.0) | 28 MiB |
-| solo | 45 MB | 42.8 MiB (40.4) | 46 MiB |
-| team | 60 MB | 42.8 MiB (= solo) | 46 MiB |
+| solo | 45 MB | 42.8 MiB (40.4) | 47 MiB |
+| team | 60 MB | 42.8 MiB (= solo) | 47 MiB |
 | cluster | 60 MB | 51.1 MiB (47.6) | 55 MiB |
 
 Edge and nano exclude the JS plugin set of `./examples/base` through `no_jsvm no_ghupdate no_migratecmd` (about 7 MiB); nano also drops `no_totp no_geo no_thumbs no_oauth2 no_s3fs` (see NANO_SIZE.md). They meet the CI budgets (edge 28 MiB, nano 22 MiB) but not the original 28/14 MB design budgets. CI budgets are measured + 2 MiB, rounded up.
