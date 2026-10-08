@@ -16,7 +16,7 @@ var (
 	ErrPaused      = errors.New("sync: paused")
 	ErrStopped     = errors.New("sync: the loop is not running")
 	ErrRevoked     = errors.New("sync: this node was revoked")
-	ErrRebootstrap = errors.New("sync: the hub requires a re-bootstrap (not supported before PR7)")
+	ErrRebootstrap = errors.New("sync: the hub requires a re-bootstrap")
 )
 
 // Conditions describe the device (docs/SYNC_DESIGN.md §6.2).
@@ -48,6 +48,14 @@ type Backend interface {
 	// Rehash recomputes `_sync_meta.hash` of rec from the stored row. The loop
 	// calls it after it corrected autodate columns by hand.
 	Rehash(tx kernel.App, rec *core.Record) error
+}
+
+// DigestBackend is implemented by a Backend that can compute the per
+// collection metadata digests compared with the hub (docs/SYNC_DESIGN.md §3.6).
+// The loop sends them only with TOKI_SYNC_AUTO_HEAL=1.
+type DigestBackend interface {
+	// MetaDigests returns collection id -> digest for the collections the node pulls.
+	MetaDigests() (map[string]string, error)
 }
 
 // Event types.
@@ -106,3 +114,6 @@ type Status struct {
 	HashStreak     int
 	DigestMismatch []string
 }
+
+// EventEpoch is emitted when the hub epoch changed.
+const EventEpoch = "epoch"

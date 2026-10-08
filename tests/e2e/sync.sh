@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sync e2e (docs/SYNC_DESIGN.md §9, PR3 + PR5 field-merge and hook/park cases + PR6 partition, purge and compaction cases): one hub and two spokes, each with its own pb_data,
+# Sync e2e (docs/SYNC_DESIGN.md §9, PR7 snapshot bootstrap / stale re-bootstrap / hub restore cases at the end, PR3 + PR5 field-merge and hook/park cases + PR6 partition, purge and compaction cases): one hub and two spokes, each with its own pb_data,
 # on random loopback ports. Writes on all three (including concurrent edits of one record),
 # converge, compare `toki sync verify` digests, SIGKILL spoke 1 in the middle of a push,
 # restart it and converge again. Everything is killed by PID file at exit.
@@ -49,7 +49,7 @@ toki() { # role dir args...
   TOKI_SYNC_ROLE="$role" TOKI_SYNC_INSECURE=1 "$TOKI" "$@" --dir "$dir"
 }
 start() { # name role dir port
-  TOKI_SYNC_ROLE="$2" TOKI_SYNC_INSECURE=1 TOKI_SYNC_INTERVAL=1s TOKI_SYNC_PAGE=25 \
+  TOKI_SYNC_ROLE="$2" TOKI_SYNC_INSECURE=1 TOKI_SYNC_INTERVAL=1s TOKI_SYNC_PAGE=25 TOKI_SYNC_SNAPSHOT_PAGE=500 \
     "$TOKI" serve --automigrate=false --dir "$3" --http "127.0.0.1:$4" >>"$TMP/$1.log" 2>&1 &
   echo $! >"$TMP/$1.pid"
 }
@@ -338,5 +338,133 @@ toki hub "$HUB" sync compact --json 2>/dev/null | grep '^{' | tail -1 >"$TMP/com
 [ -s "$TMP/compact.json" ] || fail "compact printed nothing"
 jget 'd["role"]=="hub" and d["changes_deleted"]==0 and d["stale_nodes"]==0' <"$TMP/compact.json" | grep -q True || fail "unexpected compaction report: $(cat "$TMP/compact.json")"
 curl -fsS "$URL_HUB/api/health" -H "Authorization: $TH" | jget 'd["data"]["sync"]["role"]=="hub" and d["data"]["sync"]["stale_nodes"]==0' | grep -q True || fail "health block missing"
+
+# ---- 11. snapshot bootstrap (PR7): compaction first, THEN a brand-new spoke enrolls ----
+SEED="${TOKI_E2E_SEED:-20000}"
+log "seeding $SEED records on the hub through /api/batch"
+api "$TH" PATCH "$URL_HUB" /api/settings '{"batch":{"enabled":true,"maxRequests":1000,"timeout":60,"maxBodySize":0}}' >/dev/null || fail "batch settings"
+python3 - "$SEED" "$TMP" <<'PY'
+import json, sys
+n, tmp = int(sys.argv[1]), sys.argv[2]
+per = 500
+for k in range(0, n, per):
+    reqs = [{"method": "POST", "url": "/api/collections/e2eitems/records",
+             "body": {"title": "seed %d" % i, "qty": i % 7, "note": "n" * 20}} for i in range(k, min(k + per, n))]
+    json.dump({"requests": reqs}, open("%s/batch-%05d.json" % (tmp, k // per), "w"))
+PY
+for f in "$TMP"/batch-*.json; do
+  code="$(curl -s -o "$TMP/batch.out" -w '%{http_code}' -X POST "$URL_HUB/api/batch" -H "Authorization: $TH" -H 'Content-Type: application/json' --data-binary "@$f")"
+  [ "$code" = 200 ] || fail "batch seed $f: HTTP $code $(head -c 300 "$TMP/batch.out")"
+  rm -f "$f"
+done
+LIMIT_SAVE="$LIMIT"; LIMIT=240
+wait_converged "seeded records replicated to s1 and s2"
+LIMIT="$LIMIT_SAVE"
+HUBTOTAL="$(count "$TH" "$URL_HUB")"
+[ "$HUBTOTAL" -ge "$SEED" ] || fail "hub holds only $HUBTOTAL records"
+
+# the hub forgets its whole log (MIN_KEEP=1ms), so every NEW node starts below low_water
+sleep 1
+TOKI_SYNC_MIN_KEEP=1ms toki hub "$HUB" sync compact --json 2>/dev/null | grep '^{' | tail -1 >"$TMP/compact2.json" || true
+jget 'd["changes_deleted"] > 0 and d["low_water"] > 0' <"$TMP/compact2.json" | grep -q True || fail "compaction did not raise low_water: $(cat "$TMP/compact2.json")"
+
+PORT_S3=$((PORT_HUB + 3000)); URL_S3="http://127.0.0.1:$PORT_S3"; S3="$TMP/s3"
+CODE3="$(toki hub "$HUB" sync enroll --name s3 --profile edge --actor "_superusers/$SU_ID" --allow-superuser-actor | awk '/^code:/ {print $2}')"
+[ -n "$CODE3" ] || fail "no enrollment code for s3"
+toki spoke "$S3" superuser upsert "$EMAIL" "$PASS" >/dev/null
+toki spoke "$S3" sync join "$URL_HUB" "$CODE3" >/dev/null || fail "join s3"
+# the collections do NOT exist on s3: the snapshot creates them
+start s3 spoke "$S3" "$PORT_S3"
+wait_health "$URL_S3" 30 || fail "s3 did not start"
+T3="$(token "$URL_S3")"
+
+# SIGKILL s3 in the middle of the snapshot
+KILLED=0
+for ((i = 0; i < 1200; i++)); do
+  n="$(python3 -c "
+import sqlite3,sys
+try: print(sqlite3.connect(sys.argv[1], timeout=5).execute('select count(*) from e2eitems').fetchone()[0])
+except Exception: print(0)" "$S3/data.db")"
+  if [ "${n:-0}" -gt 3000 ]; then
+    ST="$(toki spoke "$S3" sync status --json 2>/dev/null | grep '^{' | tail -1 | jget 'd.get("state","")' || true)"
+    kill_node s3
+    KILLED=1
+    log "s3 killed mid-snapshot with $n records (state $ST)"
+    break
+  fi
+  sleep 0.1
+done
+[ "$KILLED" = 1 ] || fail "s3 finished the snapshot before it could be killed (raise TOKI_E2E_SEED)"
+[ "$n" -lt "$HUBTOTAL" ] || fail "s3 was already complete when it was killed"
+[ "$ST" = bootstrapping ] || fail "s3 should be in state bootstrapping, was '$ST'"
+start s3 spoke "$S3" "$PORT_S3"
+wait_health "$URL_S3" 30 || fail "s3 did not restart"
+
+converged3() {
+  local h c
+  h="$(digest hub "$HUB")"; c="$(digest spoke "$S3")"
+  CONV="hub[$h] s3[$c]"
+  [ "${h%% *}" != "-" ] && [ "${h%% *}" = "${c%% *}" ] || return 1
+  local hd="${h#* }"; hd="${hd%% *}"; local cd="${c#* }"; cd="${cd%% *}"
+  [ "$hd" = "$cd" ] && [ "${c##* }" = 0 ]
+}
+wait_for3() {
+  local t0=$SECONDS
+  while ! converged3; do
+    [ $((SECONDS - t0)) -lt 240 ] || fail "$1: s3 did not converge: $CONV"
+    sleep 1
+  done
+  log "$1: s3 converged in $((SECONDS - t0))s ($CONV)"
+}
+wait_for3 "round 11 (snapshot resumed after SIGKILL)"
+[ "$(toki spoke "$S3" sync status --json 2>/dev/null | grep '^{' | tail -1 | jget 'd["state"]')" = idle ] || fail "s3 should be idle"
+[ "$(toki hub "$HUB" sync peers --json 2>/dev/null | grep -E '^\[(\{|\])' | tail -1 | jget "[p['status'] for p in d if p['name']=='s3'][0]")" = active ] || fail "s3 should be active on the hub"
+# it also received the schema of the collection it did not have, and keeps syncing
+[ "$(api "$T3" GET "$URL_S3" "/api/collections/e2etickets" | jget 'd["name"]')" = e2etickets ] || fail "the snapshot must create the missing collection"
+create "$TH" "$URL_HUB" "after bootstrap" >/dev/null
+wait_for3 "round 11b (live changes after the bootstrap)"
+toki spoke "$S3" sync verify --against-hub --json 2>/dev/null | grep '^{' | tail -1 >"$TMP/against3.json" || true
+jget 'd["against_hub"]["mismatch"] == []' <"$TMP/against3.json" | grep -q True || fail "s3 differs from the hub: $(cat "$TMP/against3.json")"
+
+# ---- 12. a node silent for longer than the retention (fake clock) is stale and re-bootstraps ----
+log "stale node: s3 goes offline, the hub compacts with a clock 59m50s ahead and 1h retention"
+kill_node s3
+sleep 12 # s3 has been silent for more than 10 s
+# a fresh write makes s1 and s2 pull, which refreshes their last_seen (an idle node is not touched)
+for i in 1 2 3; do create "$TH" "$URL_HUB" "while s3 was away $i" >/dev/null; done
+wait_converged "hub, s1, s2 converged while s3 is away"
+TOKI_SYNC_TEST=1 TOKI_SYNC_TEST_CLOCK_OFFSET=3590s TOKI_SYNC_RETENTION=1h TOKI_SYNC_MIN_KEEP=1ms \
+  toki hub "$HUB" sync compact --json 2>/dev/null | grep '^{' | tail -1 >"$TMP/compact3.json" || true
+jget 'd["stale_nodes"] == 1' <"$TMP/compact3.json" | grep -q True || fail "exactly s3 should be stale: $(cat "$TMP/compact3.json")"
+PEERS="$(toki hub "$HUB" sync peers --json 2>/dev/null | grep -E '^\[(\{|\])' | tail -1)"
+[ "$(echo "$PEERS" | jget "[p['status'] for p in d if p['name']=='s3'][0]")" = stale ] || fail "s3 should be stale: $PEERS"
+start s3 spoke "$S3" "$PORT_S3"
+wait_health "$URL_S3" 30 || fail "s3 did not restart"
+wait_for3 "round 12 (stale node re-bootstrapped)"
+PEERS="$(toki hub "$HUB" sync peers --json 2>/dev/null | grep -E '^\[(\{|\])' | tail -1)"
+[ "$(echo "$PEERS" | jget "[p['status'] for p in d if p['name']=='s3'][0]")" = active ] || fail "s3 should be active again: $PEERS"
+wait_converged "all four nodes agree after the stale re-bootstrap"
+
+# ---- 13. hub restore from a backup: new epoch, the spokes send their changes again, nothing is lost ----
+api "$TH" POST "$URL_HUB" /api/backups '{"name":"e2e-sync.zip"}' >/dev/null || fail "backup create"
+sleep 2
+EPOCH0="$(toki hub "$HUB" sync status --json 2>/dev/null | grep '^{' | tail -1 | jget 'd["epoch"]')"
+for i in 1 2 3 4 5; do create "$T1" "$URL_S1" "after backup s1 $i" >/dev/null; create "$T2" "$URL_S2" "after backup s2 $i" >/dev/null; done
+wait_converged "writes after the backup replicated"
+TOTAL="$(count "$TH" "$URL_HUB")"
+log "restoring the hub backup (hub holds $TOTAL records, 10 of them newer than the backup)"
+api "$TH" POST "$URL_HUB" /api/backups/e2e-sync.zip/restore '' >/dev/null || fail "restore request"
+sleep 3
+wait_health "$URL_HUB" 60 || fail "hub did not come back after the restore"
+TH="$(token "$URL_HUB")"
+EPOCH1="$(toki hub "$HUB" sync status --json 2>/dev/null | grep '^{' | tail -1 | jget 'd["epoch"]')"
+[ -n "$EPOCH1" ] && [ "$EPOCH1" != "$EPOCH0" ] || fail "the hub epoch must change after a restore ($EPOCH0 -> $EPOCH1)"
+LIMIT_SAVE="$LIMIT"; LIMIT=120
+wait_converged "round 13 (after the hub restore)"
+LIMIT="$LIMIT_SAVE"
+wait_for3 "round 13 (s3 after the hub restore)"
+[ "$(count "$TH" "$URL_HUB")" = "$TOTAL" ] || fail "records were lost by the restore: $(count "$TH" "$URL_HUB") != $TOTAL"
+log "epoch $EPOCH0 -> $EPOCH1, all $TOTAL records present on the hub again"
+
 
 log "OK"

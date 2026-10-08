@@ -22,6 +22,12 @@ func (m *Module) ackHandler(e *core.RequestEvent) error {
 		return syncErr(e, http.StatusBadRequest, proto.CodeBadRequest, "invalid request body", nil)
 	}
 	through := m.ackPulled(nodeID, req.PulledThrough)
+	if req.SnapshotID != "" {
+		// the node finished a snapshot bootstrap (§3.9): active again, pulled up to start_seq
+		if _, err := m.completeSnapshot(nodeID, req.SnapshotID); err != nil {
+			return err
+		}
+	}
 	resp := proto.AckResponse{OK: true, DigestMismatch: []string{}}
 	if len(req.Digest) > 0 && through >= m.headSeq() {
 		resp.DigestChecked = true
@@ -35,6 +41,9 @@ func (m *Module) ackHandler(e *core.RequestEvent) error {
 			if err != nil {
 				resp.DigestMismatch = append(resp.DigestMismatch, k)
 				continue
+			}
+			if p, perr := m.pol.For(col); perr == nil && p != nil && (p.PartField != "" || p.PullViewRule) {
+				continue // the node holds a subset: its digest can not equal the hub's
 			}
 			d, _, err := metaDigest(e.App.DB(), col.Id)
 			if err != nil {

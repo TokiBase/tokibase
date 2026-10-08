@@ -37,11 +37,13 @@ const (
 
 // hubIdentity is the hub key material, loaded at Init when the role is hub.
 type hubIdentity struct {
-	priv   ed25519.PrivateKey
-	pub    ed25519.PublicKey
-	id     string
-	epoch  string
-	secret []byte
+	priv  ed25519.PrivateKey
+	pub   ed25519.PublicKey
+	id    string
+	epoch string
+	// epochSeq is the hub head when the epoch began (see epoch.go).
+	epochSeq int64
+	secret   []byte
 }
 
 // getOrCreate returns the state value, generating and storing it once.

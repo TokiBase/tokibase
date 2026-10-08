@@ -35,6 +35,11 @@ const (
 	MaxWait = 25
 )
 
+// OpFiller ("n") is a push entry that carries no change: a spoke sends it in
+// place of a change it discarded (a rebase after a snapshot bootstrap), so
+// that the origin_seq sequence the hub tracks stays contiguous.
+const OpFiller = "n"
+
 // Statuses of a push result.
 const (
 	ResApplied    = "applied"
@@ -157,6 +162,9 @@ type PullResponse struct {
 type AckRequest struct {
 	PulledThrough int64             `json:"pulled_through"`
 	Digest        map[string]string `json:"digest,omitempty"`
+	// SnapshotID reports a finished snapshot bootstrap: the hub reactivates a
+	// stale node and sets its pulled_seq to the snapshot's start_seq.
+	SnapshotID string `json:"snapshot_id,omitempty"`
 }
 
 // AckResponse is the 200 body of POST /api/sync/ack.

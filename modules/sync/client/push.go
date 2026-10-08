@@ -29,6 +29,7 @@ type outRow struct {
 	SV     int64  `db:"schema_version"`
 	Actor  string `db:"actor"`
 	Tx     string `db:"tx"`
+	Code   string `db:"code"`
 }
 
 const pushBytesBudget = 4 << 20
@@ -37,7 +38,7 @@ const pushBytesBudget = 4 << 20
 // group whole.
 func (c *Client) nextPage(from int64, n int) ([]outRow, error) {
 	var rows []outRow
-	err := c.o.App.DB().NewQuery(`SELECT origin_seq, hlc, base_hlc, collection, record, op, patch, hash, schema_version, actor, tx
+	err := c.o.App.DB().NewQuery(`SELECT origin_seq, hlc, base_hlc, collection, record, op, patch, hash, schema_version, actor, tx, code
   FROM _changes WHERE node={:n} AND origin_seq>={:f} AND status IN ('local','pushed') ORDER BY origin_seq LIMIT {:l}`).
 		Bind(dbx.Params{"n": c.nodeID, "f": from, "l": n}).All(&rows)
 	if err != nil {
@@ -56,7 +57,7 @@ func (c *Client) nextPage(from int64, n int) ([]outRow, error) {
 		last := rows[len(rows)-1]
 		if last.Tx != "" {
 			var more []outRow
-			if err := c.o.App.DB().NewQuery(`SELECT origin_seq, hlc, base_hlc, collection, record, op, patch, hash, schema_version, actor, tx
+			if err := c.o.App.DB().NewQuery(`SELECT origin_seq, hlc, base_hlc, collection, record, op, patch, hash, schema_version, actor, tx, code
   FROM _changes WHERE node={:n} AND origin_seq>{:f} AND tx={:t} AND status IN ('local','pushed') ORDER BY origin_seq`).
 				Bind(dbx.Params{"n": c.nodeID, "f": last.Seq, "t": last.Tx}).All(&more); err == nil {
 				rows = append(rows, more...)
@@ -76,6 +77,9 @@ func (c *Client) postPush(ctx context.Context, rows []outRow) (*proto.PushRespon
 		pc := proto.PushChange{
 			ID: c.nodeID + ":" + itoa(r.Seq), HLC: hlc.HLC(r.HLC).String(), Collection: r.Coll, Record: r.Record,
 			Op: r.Op, Patch: json.RawMessage(r.Patch), Actor: r.Actor, Tx: r.Tx, SV: r.SV,
+		}
+		if r.Code == CodeRebased {
+			pc.Op = proto.OpFiller // a change discarded by a bootstrap rebase: only the sequence moves on
 		}
 		if r.Base != 0 {
 			pc.Base = hlc.HLC(r.Base).String()
@@ -182,6 +186,8 @@ func (c *Client) pushAll(ctx context.Context, res *Result) error {
 				res.Rejected++ // PR4 counted a parked change as rejected; Parked is the finer count
 				c.emit(Event{Type: EventParked, ID: r.ID, Code: r.Code, Message: "the change waits for an admin (toki sync conflicts)"})
 				c.recordOutcome(row, r)
+			case byID[r.ID].Code == CodeRebased:
+				// filler of a rebased change: not a push
 			default:
 				res.Pushed++
 				if r.Status == proto.ResMerged {

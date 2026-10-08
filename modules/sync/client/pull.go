@@ -52,6 +52,7 @@ func (c *Client) pullAll(ctx context.Context, res *Result) error {
 		return nil
 	}
 	pulled := false
+	refreshed := false
 	var through int64
 	for {
 		cur, err := LoadCursor(c.o.App)
@@ -68,6 +69,21 @@ func (c *Client) pullAll(ctx context.Context, res *Result) error {
 		}
 		if err != nil {
 			if IsCode(err, proto.CodeRebootstrap) {
+				if !refreshed {
+					// the session may predate a hub restore or failover: a fresh handshake
+					// shows a new epoch and takes the cursor back (§3.9) before a snapshot is needed
+					refreshed = true
+					c.dropToken()
+					c.loop.mu.Lock()
+					c.loop.needHS = true
+					c.loop.mu.Unlock()
+					if herr := c.ensureSession(ctx); herr != nil {
+						return herr
+					}
+					if now, _ := LoadCursor(c.o.App); now != nil && now.PullAfter != cur.PullAfter {
+						continue
+					}
+				}
 				c.markRebootstrap(0)
 				return ErrRebootstrap
 			}
@@ -111,17 +127,21 @@ func setPullAfter(db dbx.Builder, hubID string, n int64) error {
 
 // markRebootstrap records that the hub no longer holds the changes this node is
 // missing (compaction, a stale node): the state is `rebootstrap_required`, shown
-// by Status() and `_sync_cursors.state`, and the loop stops until the snapshot
-// bootstrap (PR7) or an operator takes over.
+// by Status() and `_sync_cursors.state`. The loop then runs the snapshot
+// bootstrap (Options.NoAutoBootstrap stops it instead). A bootstrap in progress
+// keeps its state.
 func (c *Client) markRebootstrap(lowWater int64) {
-	c.setState("rebootstrap_required")
+	if c.isBootstrapping() {
+		return
+	}
+	c.setState(StateRebootstrapRequired)
 	if c.o.App != nil {
 		msg := "the hub requires a re-bootstrap: this node is behind the retained changes (low_water " + strconv.FormatInt(lowWater, 10) + ")"
-		_, _ = c.o.App.NonconcurrentDB().NewQuery("UPDATE _sync_cursors SET state='rebootstrap_required', last_error={:e}").
-			Bind(dbx.Params{"e": msg}).Execute()
+		_, _ = c.o.App.NonconcurrentDB().NewQuery("UPDATE _sync_cursors SET state={:s}, last_error={:e} WHERE state!={:b}").
+			Bind(dbx.Params{"s": StateRebootstrapRequired, "e": msg, "b": StateBootstrapping}).Execute()
 	}
 	if c.o.Logger != nil {
-		c.o.Logger.Warn("sync: the hub requires a re-bootstrap; the client loop stops (snapshot bootstrap is not available yet)", "low_water", lowWater)
+		c.o.Logger.Warn("sync: the hub requires a re-bootstrap", "low_water", lowWater)
 	}
 	c.emit(Event{Type: EventRebootstrap})
 }
