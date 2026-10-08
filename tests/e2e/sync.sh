@@ -64,7 +64,11 @@ wait_health() { # url seconds
 token() { curl -fsS "$1/api/collections/_superusers/auth-with-password" -H 'Content-Type: application/json' \
   -d "{\"identity\":\"$EMAIL\",\"password\":\"$PASS\"}" | jget 'd["token"]'; }
 api() { # token method url path body
-  curl -fsS -X "$2" "$3$4" -H "Authorization: $1" -H 'Content-Type: application/json' -d "${5:-}"
+  local out code
+  out="$(curl -sS -w '\n%{http_code}' -X "$2" "$3$4" -H "Authorization: $1" -H 'Content-Type: application/json' -d "${5:-}")" || return 1
+  code="${out##*$'\n'}"
+  if [ "${code:0:1}" != 2 ]; then echo "[sync] HTTP $code on $2 $3$4: ${out%$'\n'*}" >&2; return 1; fi
+  printf '%s' "${out%$'\n'*}"
 }
 
 HUB="$TMP/hub"; S1="$TMP/s1"; S2="$TMP/s2"
