@@ -105,6 +105,14 @@ func (m *Module) bindRoutes() {
 				Bind(apis.SkipSuccessActivityLog(), apis.BodyLimit(16<<10), rateTag("sync:actor"), m.nodeAuth())
 			g.DELETE(proto.PathActor+"/{aid}", m.actorRevokeHandler).
 				Bind(apis.SkipSuccessActivityLog(), rateTag("sync:actor"), m.nodeAuth())
+			g.POST(proto.PathPurge, m.purgeHandler).
+				Bind(apis.BodyLimit(16<<10), rateTag("sync:purge"), apis.RequireSuperuserAuth())
+			// parked changes nobody resolved are rejected after TOKI_SYNC_PARK_TTL
+			_ = se.App.Cron().Add("__tokiSyncParkTTL", "23 * * * *", func() {
+				if _, err := m.ExpireParked(); err != nil {
+					se.App.Logger().Error("sync: expiring parked changes failed", "error", err)
+				}
+			})
 			return se.Next()
 		},
 	})
@@ -496,6 +504,11 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 		return unauth("replay_floor", nil)
 	}
 
+	// compaction (§3.6): a stale node, or a cursor older than the oldest kept
+	// change, has to re-bootstrap
+	low := m.lowWater()
+	rebootstrap := cur.GetString("status") == NodeStale || cur.GetString("status") == NodeRebootstrap || req.PullAfter < low
+
 	expires := now.Add(SessionTTL)
 	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"typ": proto.SessionTokenType, "sub": nodeID, "iss": m.hub.id,
@@ -513,16 +526,15 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 		HubEpoch:     m.hub.epoch,
 		ServerTime:   serverTime,
 		// TODO(PR8): clock.ok is computed here but enforced (409 sync_clock_drift on push) only in PR8.
-		Clock:  proto.Clock{Ok: clockOK, OffsetMs: offset, MaxDriftMs: drift.Milliseconds()},
-		Schema: proto.Schema{Version: 0, Bundles: []any{}}, // TODO(PR8): schema versions and bundles
-		// TODO(PR6): strategy, partition and crypto come from the full policy model.
+		Clock:        proto.Clock{Ok: clockOK, OffsetMs: offset, MaxDriftMs: drift.Milliseconds()},
+		Schema:       proto.Schema{Version: 0, Bundles: []any{}}, // TODO(PR8): schema versions and bundles
 		Policies:     m.handshakePolicies(),
 		Params:       params,
 		Keys:         []any{}, // TODO(PR9): wrapped collection keys
 		PushFrom:     int64(cur.GetFloat("pushed_origin_seq")) + 1,
-		LowWater:     0,       // TODO(PR6): lowest retained hub seq
-		Rebootstrap:  false,   // TODO(PR7): snapshot bootstrap decision
-		Reservations: []any{}, // TODO(PR8): sequence reservations
+		LowWater:     low,
+		Rebootstrap:  rebootstrap, // the snapshot itself is PR7: the spoke stops with state rebootstrap_required
+		Reservations: []any{},     // TODO(PR8): sequence reservations
 		PollMs:       DefaultPollMs,
 	})
 }
@@ -548,10 +560,17 @@ func (m *Module) handshakePolicies() []proto.Policy {
 		}
 		p := proto.Policy{
 			Collection: r.GetString("collection"), Direction: r.GetString("direction"),
-			Strategy: "lww", FieldTypes: map[string]string{}, Exclude: []string{}, Crypto: "ciphertext",
+			Strategy: r.GetString("strategy"), Partition: strings.TrimSpace(r.GetString("partition")),
+			FieldTypes: map[string]string{}, Exclude: []string{}, Crypto: r.GetString("crypto"),
 		}
 		if p.Direction == "" {
 			p.Direction = DirBoth
+		}
+		if p.Strategy == "" {
+			p.Strategy = "lww"
+		}
+		if p.Crypto == "" {
+			p.Crypto = "ciphertext"
 		}
 		if raw := rawJSON(r, "field_types"); raw != nil {
 			_ = json.Unmarshal(raw, &p.FieldTypes)

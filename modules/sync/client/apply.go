@@ -109,9 +109,19 @@ func (c *Client) applyChange(tx kernel.App, ch *proto.PullChange) (bool, error) 
 	if pv == nil {
 		return false, nil // not replicated on this node
 	}
+	if ch.Notice != "" {
+		// informational row of the hub: no data, the local value stays
+		return false, c.markReview(tx, col, ch)
+	}
 	h, err := hlc.Parse(ch.HLC)
 	if err != nil {
 		return false, err
+	}
+	if ch.Revert || ch.Evict || ch.Op == "d" || ch.Op == "p" || ch.Op == "x" {
+		// the hub decided about this record: it is no longer pending review
+		if err := clearReview(tx.NonconcurrentDB(), col.Id, ch.Record); err != nil {
+			return false, err
+		}
 	}
 	if c.o.Clock != nil {
 		c.o.Clock.Observe(h)
@@ -123,8 +133,12 @@ func (c *Client) applyChange(tx kernel.App, ch *proto.PullChange) (bool, error) 
 		Mode: kernel.SyncModePull, Node: ch.Node, HLC: uint64(h), ChangeID: ch.ID,
 	})
 	switch ch.Op {
-	case "d", "p":
+	case "d":
 		return c.applyDelete(tx, ctx, col, ch, h)
+	case "p":
+		return c.applyPurge(tx, ctx, col, ch, h)
+	case "x":
+		return c.applyEvict(tx, ctx, col, ch)
 	case "c", "u":
 		return c.applyUpsert(tx, ctx, col, pv, ch, h)
 	}

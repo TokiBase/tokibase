@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -523,8 +524,10 @@ func (e *Env) Backup() error {
 		return fmt.Sprintf("err=%v ok=%v", err, strings.Contains(out, `"integrityOk": true`))
 	})
 	phase("4-api-backup", func() string {
-		_, err := e.A.Call("POST", "/api/backups", e.A.SU, map[string]string{"name": "loadbk-api.zip"}, nil)
-		return fmt.Sprintf("err=%v", err)
+		// long client timeout: measure how long the call really takes instead of cutting it at 120 s
+		long := &API{Base: e.A.Base, C: &http.Client{Timeout: 15 * time.Minute}, SU: e.A.SU}
+		code, err := long.Call("POST", "/api/backups", long.SU, map[string]string{"name": "loadbk-api.zip"}, nil)
+		return fmt.Sprintf("status=%d err=%v", code, err)
 	})
 	phase("5-after", func() string { time.Sleep(e.Cfg.Dur / 3); return "" })
 	cancel()

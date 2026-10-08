@@ -173,6 +173,7 @@ func (m *Module) capture(tx kernel.App, e *core.RecordEvent, op string, p *polic
 
 	var pre map[string]any
 	var baseHLC int64
+	partOld := ""
 	switch op {
 	case OpCreate:
 		if !replica {
@@ -189,6 +190,7 @@ func (m *Module) capture(tx kernel.App, e *core.RecordEvent, op string, p *polic
 			if pre, err = fieldValues(old, fields, p.Types); err != nil {
 				return err
 			}
+			partOld = partValue(old, p)
 		}
 		var err error
 		if baseHLC, err = metaHLC(db, col.Id, id); err != nil {
@@ -199,6 +201,7 @@ func (m *Module) capture(tx kernel.App, e *core.RecordEvent, op string, p *polic
 		if baseHLC, err = metaHLC(db, col.Id, id); err != nil {
 			return err
 		}
+		partOld = partValue(rec, p)
 	}
 
 	if err := e.Next(); err != nil {
@@ -241,9 +244,13 @@ func (m *Module) capture(tx kernel.App, e *core.RecordEvent, op string, p *polic
 	if err != nil {
 		return err
 	}
+	partNew := ""
+	if op != OpDelete {
+		partNew = partValue(rec, p)
+	}
 	if err := m.insertChange(tx, &change{
 		node: node, hlc: h, baseHLC: baseHLC, collection: col.Id, record: id, op: op,
-		patch: enc, hash: hash, actor: m.actorFor(rec),
+		patch: enc, hash: hash, actor: m.actorFor(rec), partOld: partOld, partNew: partNew,
 	}); err != nil {
 		return err
 	}
@@ -261,9 +268,11 @@ func (m *Module) capture(tx kernel.App, e *core.RecordEvent, op string, p *polic
 		if p.Strategy == StratFieldMerge {
 			// a local write on the hub raises the clock of the plain fields it
 			// changed, so that a concurrent push cannot silently overwrite it
-			return bumpFieldClocks(db, col.Id, id, plainFields(p.Types, patch), hlc.HLC(h))
+			if err := bumpFieldClocks(db, col.Id, id, plainFields(p.Types, patch), hlc.HLC(h)); err != nil {
+				return err
+			}
 		}
-		return nil
+		return setMetaPart(db, col.Id, id, partNew)
 	}
 }
 
@@ -383,6 +392,9 @@ type change struct {
 	patch      string
 	hash       []byte
 	actor      string
+	// partOld / partNew: partition key before and after (hub, partitioned policies)
+	partOld string
+	partNew string
 }
 
 // insertChange appends the row, assigns the atomic group id and persists the
@@ -427,12 +439,12 @@ func (m *Module) insertChange(tx kernel.App, c *change) error {
 		hashArg = c.hash
 	}
 	_, err := db.NewQuery(`INSERT INTO _changes
-  (seq, node, origin_seq, hlc, base_hlc, collection, record, op, patch, hash, schema_version, actor, tx, status, created)
-  VALUES ({:seq}, {:node}, {:seq}, {:hlc}, {:base}, {:col}, {:rec}, {:op}, {:patch}, {:hash}, {:sv}, {:actor}, {:tx}, {:status}, {:created})`).
+  (seq, node, origin_seq, hlc, base_hlc, collection, record, op, patch, hash, schema_version, actor, tx, status, created, part_old, part_new)
+  VALUES ({:seq}, {:node}, {:seq}, {:hlc}, {:base}, {:col}, {:rec}, {:op}, {:patch}, {:hash}, {:sv}, {:actor}, {:tx}, {:status}, {:created}, {:po}, {:pn})`).
 		Bind(dbx.Params{
 			"seq": seq, "node": c.node, "hlc": c.hlc, "base": c.baseHLC, "col": c.collection, "rec": c.record,
 			"op": c.op, "patch": c.patch, "hash": hashArg, "sv": schemaVersion, "actor": c.actor, "tx": txid,
-			"status": StatusLocal, "created": m.created(),
+			"status": StatusLocal, "created": m.created(), "po": c.partOld, "pn": c.partNew,
 		}).Execute()
 	if err != nil {
 		return err

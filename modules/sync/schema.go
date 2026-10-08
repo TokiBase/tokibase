@@ -129,8 +129,8 @@ func ensureSchema(app core.App) error {
 	return nil
 }
 
-// PoliciesCollection is the system collection that chooses what is synced.
-// PR1 only has the fields that capture needs; the rest arrives with PR6.
+// PoliciesCollection is the system collection that chooses what is synced
+// (docs/SYNC_DESIGN.md §2.6; the full field list is policyFullFields).
 const PoliciesCollection = "_sync_policies"
 
 // Policy directions.
@@ -141,21 +141,12 @@ const (
 	DirNone = "none"
 )
 
-// policyStrategyFields are the PR5 fields of `_sync_policies`: they are added
-// to a collection that an older build created.
-func policyStrategyFields() []core.Field {
-	return []core.Field{
-		&core.SelectField{Name: "strategy", MaxSelect: 1, Values: []string{StratLWW, StratHubWins, StratFieldMerge, StratHook}},
-		&core.TextField{Name: "hook", Max: 100},
-		&core.BoolField{Name: "review"},
-	}
-}
-
-// EnsurePolicyCollection creates the minimal `_sync_policies` system collection.
+// EnsurePolicyCollection creates the `_sync_policies` system collection, or adds
+// the fields that a collection created by an older build lacks. It is idempotent.
 func EnsurePolicyCollection(app core.App) error {
 	if c, _ := app.FindCollectionByNameOrId(PoliciesCollection); c != nil {
 		changed := false
-		for _, f := range policyStrategyFields() {
+		for _, f := range policyFullFields() {
 			if c.Fields.GetByName(f.GetName()) == nil {
 				c.Fields.Add(f)
 				changed = true
@@ -168,16 +159,11 @@ func EnsurePolicyCollection(app core.App) error {
 	}
 	c := core.NewBaseCollection(PoliciesCollection)
 	c.System = true
+	c.Fields.Add(policyFullFields()...)
 	c.Fields.Add(
-		&core.TextField{Name: "collection", Required: true, Max: 100},
-		&core.SelectField{Name: "direction", MaxSelect: 1, Values: []string{DirBoth, DirPush, DirPull, DirNone}},
-		&core.JSONField{Name: "field_types", MaxSize: 16384},
-		&core.JSONField{Name: "exclude", MaxSize: 16384},
-		&core.BoolField{Name: "enabled"},
 		&core.AutodateField{Name: "created", OnCreate: true},
 		&core.AutodateField{Name: "updated", OnCreate: true, OnUpdate: true},
 	)
-	c.Fields.Add(policyStrategyFields()...)
 	c.AddIndex("idx_sync_policies_collection", true, "[[collection]]", "")
 	return app.Save(c)
 }

@@ -6,9 +6,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/spf13/cast"
@@ -374,6 +377,11 @@ func logRequest(event *core.RequestEvent, err error) {
 		return
 	}
 
+	// TOKI_LOGS_SAMPLE_OK: keep only 1 of N successful GET requests
+	if err == nil && !keepSampledSuccessLog(event) {
+		return
+	}
+
 	attrs := make([]any, 0, 15)
 
 	attrs = append(attrs, slog.String("type", "request"))
@@ -469,4 +477,48 @@ func cutStr(str string, max int) string {
 		return str[:max] + "..."
 	}
 	return str
+}
+
+// SyncNodeHeader is the header the sync hub replay sets to the id of the
+// pushing node. Rules may read it as @request.headers.x_toki_sync_node, but only
+// together with @request.context = "sync": every other request has it stripped
+// (see stripSyncNodeHeader), so a REST client cannot forge it.
+const SyncNodeHeader = "X-Toki-Sync-Node"
+
+// DefaultStripSyncNodeHeaderMiddlewareId is the id of the stripSyncNodeHeader middleware.
+const DefaultStripSyncNodeHeaderMiddlewareId = "tokiStripSyncNodeHeader"
+
+// stripSyncNodeHeader removes the sync node header from incoming requests. The
+// hub replay does not pass through the router, so it is the only source left.
+func stripSyncNodeHeader() *hook.Handler[*core.RequestEvent] {
+	return &hook.Handler[*core.RequestEvent]{
+		Id:       DefaultStripSyncNodeHeaderMiddlewareId,
+		Priority: DefaultWWWRedirectMiddlewarePriority + 1,
+		Func: func(e *core.RequestEvent) error {
+			e.Request.Header.Del(SyncNodeHeader)
+			return e.Next()
+		},
+	}
+}
+
+// EnvLogsSampleOK keeps 1 of every N successful (status < 400) GET request
+// logs. 1 (default) logs all of them; errors and non-GET requests are always logged.
+const EnvLogsSampleOK = "TOKI_LOGS_SAMPLE_OK"
+
+var (
+	logSampleOKN       = sync.OnceValue(func() uint64 { return uint64(max(1, cast.ToInt(strings.TrimSpace(os.Getenv(EnvLogsSampleOK))))) })
+	logSampleOKCounter atomic.Uint64
+)
+
+func keepSampledSuccessLog(event *core.RequestEvent) bool {
+	n := logSampleOKN()
+	if n <= 1 || event.Request.Method != http.MethodGet {
+		return true
+	}
+
+	if status := event.Status(); status >= 400 {
+		return true
+	}
+
+	return logSampleOKCounter.Add(1)%n == 1
 }

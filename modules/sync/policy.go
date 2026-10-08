@@ -22,6 +22,11 @@ const policyTTL = 5 * time.Second
 // policy is the parsed `_sync_policies` row of one collection.
 type policy struct {
 	Direction string
+	Types     map[string]string
+	Exclude   map[string]struct{}
+
+	// ColID is the id of the collection ("" while the collection does not exist).
+	ColID string
 	// Strategy is lww (default), hub-wins, field-merge or hook.
 	Strategy string
 	// Hook is the WASM module that decides conflicts (strategy hook); "" = any
@@ -29,9 +34,25 @@ type policy struct {
 	Hook string
 	// Review makes the conflicts that field-merge resolves automatically stay
 	// open for an admin (docs/SYNC_DESIGN.md §4.4).
-	Review  bool
-	Types   map[string]string
-	Exclude map[string]struct{}
+	Review bool
+	Crypto string
+	Order  int
+	// PartField and PartParam are the parsed `partition` ("<field> = @node.<param>");
+	// both are "" without partition.
+	PartField string
+	PartParam string
+	// PullViewRule additionally requires the view rule of the collection for the
+	// service actor of the node on pull (design §7.7).
+	PullViewRule bool
+	// Trusted lets a collection whose view rule is null (superusers only) be
+	// pulled while PullViewRule is on.
+	Trusted bool
+	// SkipViewRule turns the default view rule check of pulled rows off for this
+	// collection (default: enforced for the service actor of the node, see pullRuleOn).
+	SkipViewRule bool
+	// EvictInvisible makes the revert of a record outside the view rule evict
+	// the local copy instead of only a notice (default: TOKI_SYNC_EVICT_INVISIBLE).
+	EvictInvisible bool
 }
 
 type policyCache struct {
@@ -115,6 +136,15 @@ func (c *policyCache) load() (map[string]*policy, error) {
 		if p.Strategy == "" {
 			p.Strategy = StratLWW
 		}
+		p.Crypto = r.GetString("crypto")
+		if p.Crypto == "" {
+			p.Crypto = "ciphertext"
+		}
+		p.Order = r.GetInt("order")
+		p.PullViewRule, p.Trusted = r.GetBool("pull_view_rule"), r.GetBool("trusted")
+		if pf, pp, perr := parsePartition(r.GetString("partition")); perr == nil {
+			p.PartField, p.PartParam = pf, pp
+		}
 		if raw := rawJSON(r, "field_types"); raw != nil {
 			_ = json.Unmarshal(raw, &p.Types)
 		}
@@ -129,11 +159,28 @@ func (c *policyCache) load() (map[string]*policy, error) {
 		ref := r.GetString("collection")
 		out[ref] = p
 		if col, err := c.m.app.FindCachedCollectionByNameOrId(ref); err == nil && col != nil {
+			p.ColID = col.Id
 			out[col.Id] = p
 			out[col.Name] = p
 		}
 	}
 	c.rows, c.loaded, c.stale = out, time.Now(), false
+	return out, nil
+}
+
+// partitioned returns the enabled policies that have a partition and an existing
+// collection (each policy once).
+func (c *policyCache) partitioned() ([]*policy, error) {
+	rows, err := c.load()
+	if err != nil {
+		return nil, err
+	}
+	var out []*policy
+	for k, p := range rows {
+		if p.PartField != "" && p.ColID != "" && k == p.ColID && p.Direction != DirNone {
+			out = append(out, p)
+		}
+	}
 	return out, nil
 }
 

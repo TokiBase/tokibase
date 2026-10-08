@@ -45,7 +45,9 @@ func baseEnv() []string {
 		}
 		env = append(env, e)
 	}
-	return append(env, "TOKI_TLS_CHECK=off")
+	env = append(env, "TOKI_TLS_CHECK=off")
+	// LOAD_SERVER_ENV="K=V K2=V2": extra env for the servers under test (tuning experiments)
+	return append(env, strings.Fields(os.Getenv("LOAD_SERVER_ENV"))...)
 }
 
 // Start launches the server for a variant and waits for /api/health.

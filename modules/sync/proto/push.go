@@ -7,6 +7,8 @@ const (
 	PathPush = "/api/sync/push"
 	PathPull = "/api/sync/pull"
 	PathAck  = "/api/sync/ack"
+	// PathPurge is POST /api/sync/purge (superusers; legal erasure of one record).
+	PathPurge = "/api/sync/purge"
 )
 
 // Topic is the realtime topic on which the hub pokes online spokes. The
@@ -51,6 +53,7 @@ const (
 	CodeTombstoned       = "tombstoned"
 	CodeLegalTombstone   = "legal_tombstone"
 	CodePolicyDirection  = "policy_direction"
+	CodePolicyPartition  = "policy_partition"
 	CodeFutureHLC        = "future_hlc"
 	CodeSuperseded       = "superseded"
 	CodeOrphaned         = "orphaned"
@@ -100,20 +103,44 @@ type PushResponse struct {
 	Results      []PushResult `json:"results"`
 }
 
+// Pull notices.
+const (
+	// NoticeParked: the hub parked the node's change of this record for review.
+	NoticeParked = "parked"
+	// NoticeInvisible: the node's change was reverted, but the record is outside
+	// the view rule of its actor; the hub sends no data and the node keeps its copy.
+	NoticeInvisible = "invisible"
+)
+
+// Codes of a parked change settled by an operator (`toki sync conflicts --resolve`).
+const (
+	CodeParkResolved = "park_resolved" // --take hub: rejected, the node gets a revert
+	CodeParkAccepted = "park_accepted" // --take incoming|patch: applied as a hub write
+)
+
+// CodeParkExpired is the code of a parked change that nobody resolved within
+// TOKI_SYNC_PARK_TTL and was rejected.
+const CodeParkExpired = "park_expired"
+
 // PullChange is one change of a pull page.
 type PullChange struct {
-	Seq        int64             `json:"seq"`
-	ID         string            `json:"id"`
-	Node       string            `json:"node"`
-	HLC        string            `json:"hlc"`
-	Collection string            `json:"collection"`
-	Record     string            `json:"record"`
-	Op         string            `json:"op"`
-	Patch      json.RawMessage   `json:"patch,omitempty"`
-	Hash       string            `json:"hash,omitempty"`
-	Revert     bool              `json:"revert,omitempty"`
-	Evict      bool              `json:"evict,omitempty"`
-	Fields     map[string]string `json:"fields,omitempty"`
+	Seq        int64           `json:"seq"`
+	ID         string          `json:"id"`
+	Node       string          `json:"node"`
+	HLC        string          `json:"hlc"`
+	Collection string          `json:"collection"`
+	Record     string          `json:"record"`
+	Op         string          `json:"op"`
+	Patch      json.RawMessage `json:"patch,omitempty"`
+	Hash       string          `json:"hash,omitempty"`
+	Revert     bool            `json:"revert,omitempty"`
+	Evict      bool            `json:"evict,omitempty"`
+	// Notice marks an informational row without data (NoticeParked,
+	// NoticeInvisible): the node keeps its local value and marks the record.
+	Notice string `json:"notice,omitempty"`
+	// Code is the reason of a notice (e.g. actor_revoked).
+	Code   string            `json:"code,omitempty"`
+	Fields map[string]string `json:"fields,omitempty"`
 }
 
 // PullResponse is the 200 body of GET /api/sync/pull.

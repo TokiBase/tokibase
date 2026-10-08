@@ -105,6 +105,8 @@ type Module struct {
 	// loop is the spoke client loop (nil unless role spoke and enrolled).
 	loop atomic.Pointer[client.Client]
 
+	// timeouts counts replay timeouts per group (node:origin_seq), see isReplayTimeout.
+	timeouts stdsync.Map
 	// stash maps the record of a client request to its actor (see actor.go).
 	stash stdsync.Map // *core.Record -> string
 	// txs holds the tx group state per open transaction.
@@ -175,6 +177,10 @@ func RegisterRole(app core.App, role Role) *Module {
 	})
 	m.bindCapture()
 	m.pol.bind()
+	m.pol.bindPolicyModel()
+	app.Store().Set(moduleStoreKey, m)
+	m.bindCompaction()
+	m.bindHealth()
 	m.bindRoutes()
 	m.bindHubNotify()
 	m.bindLoop()

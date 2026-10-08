@@ -17,6 +17,7 @@ import (
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/modules/sync/client"
+	"github.com/tokibase/tokibase/modules/sync/hlc"
 	"github.com/tokibase/tokibase/modules/sync/proto"
 )
 
@@ -235,24 +236,32 @@ func TestActorWithoutServiceActorIsRejected(t *testing.T) {
 }
 
 func TestActorExpiredWindow(t *testing.T) {
-	t.Setenv(EnvActorTTL, "1h")
 	h, a, _ := actorHub(t)
 	aid := grant(t, a, h.usr)
 	cid := h.items.Id
+	// a fixed window [base-10m, base+1h] set in the grant row: no dependence on
+	// how long the test takes or on the second the grant was truncated to
+	base := time.Now()
+	iat, exp := base.Add(-10*time.Minute), base.Add(time.Hour)
+	if _, err := h.app.DB().NewQuery("UPDATE _sync_actor_grants SET iat={:i}, exp={:e} WHERE aid={:a}").
+		Bind(dbx.Params{"i": iat.UnixMilli(), "e": exp.UnixMilli(), "a": aid}).Execute(); err != nil {
+		t.Fatal(err)
+	}
+	at := func(t time.Time, l uint16) hlc.HLC { return hlc.Make(t.UnixMilli(), l) }
 	// older than iat - 5 min
-	c := pc(a.m.NodeID(), 1, nowHLC(-2*3600*1000, 0), 0, cid, "recordaaaaaaaa1", "c", map[string]any{"title": "old"})
+	c := pc(a.m.NodeID(), 1, at(iat.Add(-6*time.Minute), 0), 0, cid, "recordaaaaaaaa1", "c", map[string]any{"title": "old"})
 	c.Actor = aid
 	if r := pushOne(t, h, a, c); r.Code != proto.CodeActorExpired || r.Status != proto.ResRejected {
 		t.Fatalf("before the grant: %+v", r)
 	}
 	// after exp
-	c = pc(a.m.NodeID(), 2, nowHLC(2*3600*1000, 0), 0, cid, "recordaaaaaaaa2", "c", map[string]any{"title": "late"})
+	c = pc(a.m.NodeID(), 2, at(exp.Add(time.Minute), 0), 0, cid, "recordaaaaaaaa2", "c", map[string]any{"title": "late"})
 	c.Actor = aid
 	if r := pushOne(t, h, a, c); r.Code != proto.CodeActorExpired {
 		t.Fatalf("after exp: %+v", r)
 	}
 	// inside the window
-	c = pc(a.m.NodeID(), 3, nowHLC(-1000, 0), 0, cid, "recordaaaaaaaa3", "c", map[string]any{"title": "ok"})
+	c = pc(a.m.NodeID(), 3, at(base.Add(-time.Second), 0), 0, cid, "recordaaaaaaaa3", "c", map[string]any{"title": "ok"})
 	c.Actor = aid
 	if r := pushOne(t, h, a, c); r.Status != proto.ResApplied {
 		t.Fatalf("inside: %+v", r)
@@ -427,7 +436,7 @@ func TestRevertCarriesNoDataOutsideTheViewRule(t *testing.T) { // P3-2
 	hidden := h.create(t, map[string]any{"title": "secret", "qty": 7})
 	h.setRules(t, sp(""), sp("title != 'secret'"), sp(""), sp("title != 'secret'"))
 	tok := a.token(t)
-	c := pc(a.m.NodeID(), 1, nowHLC(0, 60000), 0, h.items.Id, hidden.Id, "u", map[string]any{"title": "probe"})
+	c := pc(a.m.NodeID(), 1, nowHLC(1000, 0), 0, h.items.Id, hidden.Id, "u", map[string]any{"title": "probe"})
 	if r := pushOne(t, h, a, c); r.Status != proto.ResRejected || r.Code != proto.CodeRuleDenied {
 		t.Fatalf("probe: %+v", r)
 	}
@@ -439,7 +448,8 @@ func TestRevertCarriesNoDataOutsideTheViewRule(t *testing.T) { // P3-2
 	for _, ch := range pr.Changes {
 		if ch.Revert && ch.Record == hidden.Id {
 			found = true
-			if ch.Op != OpDelete || strings.Contains(string(ch.Patch), "secret") || strings.Contains(string(ch.Patch), "qty") {
+			// P4-6: a verdict without data, never an op d (it would delete the device copy)
+			if ch.Op == OpDelete || ch.Notice != proto.NoticeInvisible || strings.Contains(string(ch.Patch), "secret") || strings.Contains(string(ch.Patch), "qty") {
 				t.Fatalf("the revert leaks the record: %+v %s", ch, ch.Patch)
 			}
 		}

@@ -37,10 +37,20 @@ type groupState struct {
 	exists map[gkey]bool
 	meta   map[gkey]gmeta
 	tomb   map[gkey]string
+	// part is the partition key of a record as the earlier changes of the group
+	// leave it
+	part   map[gkey]string
+	params map[string]string // partition parameters of the pushing node (lazy)
 }
 
 func newGroupState() *groupState {
-	return &groupState{exists: map[gkey]bool{}, meta: map[gkey]gmeta{}, tomb: map[gkey]string{}}
+	return &groupState{exists: map[gkey]bool{}, meta: map[gkey]gmeta{}, tomb: map[gkey]string{}, part: map[gkey]string{}}
+}
+
+// replayRun is one request of the replay with the actor it runs as.
+type replayRun struct {
+	actor *actorCtx
+	req   *core.InternalRequest
 }
 
 // prepared is one change ready to be finished after the replay.
@@ -62,6 +72,12 @@ type prepared struct {
 	clockFields []string // plain fields written (field-merge clocks)
 	nh          int64
 	nn          string
+	actor       *actorCtx // who the change replays as (the user, or the service actor for hook-written members)
+
+	// partBefore / partAfter are the partition key of the record before and after
+	// this change (policies with a partition only)
+	partBefore string
+	partAfter  string
 }
 
 // applyFault is a test seam: a non-nil error aborts the apply of a group like an
@@ -78,8 +94,9 @@ func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange
 			}
 		}
 	}
-	// ---- the actor of the group (a hook-written change of a user request has
-	// actor "node" but belongs to the user's request: the group runs as the user)
+	// ---- the actor of the group: the user of its changes (one grant). Members
+	// with actor "node" were written by hooks on the spoke; they replay as the
+	// service actor, not as the user (P4-10).
 	groupAID := ""
 	for _, c := range group {
 		a := c.Actor
@@ -110,6 +127,24 @@ func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange
 		}
 		return nil, rj
 	}
+	// Changes of the group written by hooks on the spoke (actor "node") are not
+	// the user's: they replay as the service actor of the node, or the group is
+	// refused when the node has none (P4-10).
+	svc := actor
+	if groupAID != "" {
+		for _, c := range group {
+			if c.Actor == "" || c.Actor == ActorNode {
+				var rj2 *rejection
+				if svc, rj2 = m.resolveActor(tx, nodeID, "", nil); rj2 != nil {
+					if rj2.internal {
+						return nil, errors.New(rj2.msg)
+					}
+					return nil, rj2
+				}
+				break
+			}
+		}
+	}
 
 	gs := newGroupState()
 	preps := make([]*prepared, 0, len(group))
@@ -117,6 +152,10 @@ func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange
 		p, err := m.prepare(tx, nodeID, c, gs)
 		if err != nil {
 			return nil, err
+		}
+		p.actor = actor
+		if groupAID != "" && (c.Actor == "" || c.Actor == ActorNode) {
+			p.actor = svc
 		}
 		preps = append(preps, p)
 	}
@@ -127,6 +166,7 @@ func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange
 	existedBefore := map[gkey]bool{}
 	last := map[gkey]int{}
 	var reqs []*core.InternalRequest
+	var runs []replayRun
 	fixAuto := map[gkey]map[string]string{}
 	origin := &kernel.SyncOrigin{Mode: kernel.SyncModePush, Node: nodeID, HLC: uint64(group[len(group)-1].hlc), ChangeID: group[0].ID, Actor: groupAID, Fields: map[string]any{}}
 	for i, p := range preps {
@@ -135,6 +175,7 @@ func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange
 			continue
 		}
 		reqs = append(reqs, p.req)
+		runs = append(runs, replayRun{actor: p.actor, req: p.req})
 		if _, seen := existedBefore[p.key]; !seen {
 			rec, _ := tx.FindRecordById(p.col.Id, p.key.rec)
 			existedBefore[p.key] = rec != nil
@@ -157,9 +198,22 @@ func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange
 
 	if len(reqs) > 0 {
 		ctx := kernel.WithSyncOrigin(context.Background(), origin)
-		_, err := apis.ReplayRecordRequestsFrom(ctx, core.AsApp(tx), actor.rec, ip, map[string]string{proto.HeaderSyncNode: nodeID}, reqs)
-		if err != nil {
-			return nil, classify(err)
+		// consecutive requests of the same actor replay together (one batch, so
+		// batchguard still sees them as a group); all runs share the transaction
+		for i := 0; i < len(runs); {
+			j := i + 1
+			for j < len(runs) && runs[j].actor == runs[i].actor {
+				j++
+			}
+			var part []*core.InternalRequest
+			for _, r := range runs[i:j] {
+				part = append(part, r.req)
+			}
+			_, err := apis.ReplayRecordRequestsFrom(ctx, core.AsApp(tx), runs[i].actor.rec, ip, map[string]string{proto.HeaderSyncNode: nodeID}, part)
+			if err != nil {
+				return nil, classify(err)
+			}
+			i = j
 		}
 	}
 	for k, want := range fixAuto {
@@ -178,11 +232,11 @@ func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange
 	// ---- finish: hub rows, record clocks, tombstones
 	outs := make([]*outcome, 0, len(preps))
 	for i, p := range preps {
-		o, err := m.finish(tx, db, nodeID, p, i == last[p.key], pre[p.key], existedBefore[p.key], actor.rec)
+		o, err := m.finish(tx, db, nodeID, p, i == last[p.key], pre[p.key], existedBefore[p.key], p.actor.rec)
 		if err != nil {
 			return nil, err
 		}
-		o.actor = actor
+		o.actor = p.actor
 		outs = append(outs, o)
 	}
 	return outs, nil
@@ -225,6 +279,22 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 		exists = rec != nil
 	}
 
+	if exists {
+		if v, ok := gs.part[key]; ok {
+			pr.partBefore = v
+		} else if rec != nil {
+			pr.partBefore = partValue(rec, p)
+		}
+	}
+	nodePart, partOK := "", true
+	if p.PartField != "" {
+		if gs.params == nil {
+			gs.params = nodeParams(tx, nodeID)
+		}
+		nodePart = gs.params[p.PartParam]
+		partOK = nodePart != ""
+	}
+
 	base := "/api/collections/" + col.Id + "/records"
 	switch c.Op {
 	case OpPurge:
@@ -234,6 +304,10 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 			pr.skip = true
 			return pr, nil
 		}
+		if p.PartField != "" && (!partOK || pr.partBefore != nodePart) {
+			return nil, reject(proto.CodePolicyPartition, "the record is outside the partition of the node")
+		}
+		gs.part[key] = ""
 		// deletes are final (§4.2): a delete older than a concurrent update still deletes
 		pr.req = &core.InternalRequest{Method: http.MethodDelete, URL: base + "/" + c.Record}
 		gs.exists[key], gs.tomb[key] = false, "delete"
@@ -257,6 +331,23 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 	}
 	if rj := validateTyped(p.Types, allowed, c.patch, !exists); rj != nil {
 		return nil, rj
+	}
+	// partition (§7.1): the record must be inside the partition of the node before
+	// the change AND after it; a node can neither touch records of another
+	// partition nor move one into or out of its own
+	pr.partAfter = pr.partBefore
+	if p.PartField != "" {
+		if exists && (!partOK || pr.partBefore != nodePart) {
+			return nil, reject(proto.CodePolicyPartition, "the record is outside the partition of the node")
+		}
+		if _, ok := allowed[p.PartField]; ok {
+			if v, has := c.patch[p.PartField]; has {
+				pr.partAfter = partString(v)
+			}
+		}
+		if !partOK || pr.partAfter != nodePart {
+			return nil, reject(proto.CodePolicyPartition, "the change would put the record outside the partition of the node")
+		}
 	}
 	patch := c.patch
 	pr.clockFields = plainFields(p.Types, c.patch)
@@ -333,6 +424,7 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 	}
 	gs.exists[key] = true
 	gs.meta[key] = gmeta{pr.nh, pr.nn, true}
+	gs.part[key] = pr.partAfter
 	return pr, nil
 }
 
@@ -345,7 +437,7 @@ func (m *Module) finish(tx kernel.App, db dbx.Builder, nodeID string, p *prepare
 	if c.Op == OpDelete {
 		seq, err := m.insertHubRow(db, &hubRow{
 			node: nodeID, oseq: c.oseq, hlc: int64(c.hlc), base: int64(c.base), col: col.Id, rec: c.Record, op: OpDelete,
-			patch: "{}", actor: c.Actor, tx: c.Tx, status: StatusApplied,
+			patch: "{}", actor: c.Actor, tx: c.Tx, status: StatusApplied, partOld: p.partBefore,
 		})
 		if err != nil {
 			return nil, err
@@ -384,9 +476,13 @@ func (m *Module) finish(tx kernel.App, db dbx.Builder, nodeID string, p *prepare
 			return nil, err
 		}
 	}
+	partNew := p.partAfter
+	if isLast && fresh != nil {
+		partNew = partValue(fresh, p.pol) // the stored record is the authority
+	}
 	seq, err := m.insertHubRow(db, &hubRow{
 		node: nodeID, oseq: c.oseq, hlc: int64(c.hlc), base: int64(c.base), col: col.Id, rec: c.Record, op: c.Op,
-		patch: enc, hash: hash, actor: c.Actor, tx: c.Tx, status: StatusApplied,
+		patch: enc, hash: hash, actor: c.Actor, tx: c.Tx, status: StatusApplied, partOld: p.partBefore, partNew: partNew,
 	})
 	if err != nil {
 		return nil, err
@@ -405,6 +501,9 @@ func (m *Module) finish(tx kernel.App, db dbx.Builder, nodeID string, p *prepare
 			if err := bumpFieldClocks(db, col.Id, c.Record, written, c.hlc); err != nil {
 				return nil, err
 			}
+		}
+		if err := setMetaPart(db, col.Id, c.Record, partNew); err != nil {
+			return nil, err
 		}
 	}
 	st := proto.ResApplied
@@ -495,7 +594,7 @@ func isZeroValue(v any) bool {
 	case nil:
 		return true
 	case string:
-		return x == "" || x == "null"
+		return x == ""
 	case bool:
 		return !x
 	case float64:

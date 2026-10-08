@@ -3,6 +3,7 @@
 package sync
 
 import (
+	"time"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -269,6 +270,8 @@ func TestCaptureCreateUpdateDelete(t *testing.T) {
 
 	// update: changed fields only, counter delta, set diff
 	r, _ = e.app.FindRecordById("items", r.Id)
+	// the update must land in a later millisecond than the create so `updated` changes
+	time.Sleep(2 * time.Millisecond)
 	r.Set("title", "Ticket 1b")
 	r.Set("qty", 8)
 	r.Set("tags", []string{"b", "c"})

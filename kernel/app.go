@@ -293,6 +293,10 @@ type App interface {
 	// AuxVacuum executes VACUUM on the auxiliary.db in order to reclaim unused auxiliary db disk space.
 	AuxVacuum() error
 
+	// DBStatus returns the connection pool and WAL maintenance status of the
+	// "data" and "auxiliary" databases (empty before the bootstrap).
+	DBStatus() map[string]DBStatus
+
 	// ---------------------------------------------------------------
 
 	// ModelQuery creates a new preconfigured select data.db query with preset

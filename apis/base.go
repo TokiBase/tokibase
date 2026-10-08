@@ -27,6 +27,7 @@ func NewRouter(app core.App) (*router.Router[*core.RequestEvent], error) {
 	})
 
 	// register default middlewares
+	pbRouter.Bind(stripSyncNodeHeader())
 	pbRouter.Bind(activityLogger())
 	pbRouter.Bind(panicRecover())
 	pbRouter.Bind(rateLimit())

@@ -62,6 +62,9 @@ type viewer struct {
 	nodeID string
 	actor  *core.Record
 	cache  map[viewKey]*viewResult
+
+	params       map[string]string // partition parameters of the node (lazy)
+	paramsLoaded bool
 }
 
 func newViewer(app kernel.App, nodeID string, actor *core.Record) *viewer {
@@ -78,7 +81,8 @@ func (v *viewer) view(rec *core.Record, p *policy, checkRule bool) (*viewResult,
 	}
 	ri := syncRequestInfo(v.actor, v.nodeID, http.MethodGet)
 	res := &viewResult{visible: true, hidden: map[string]struct{}{}}
-	if checkRule {
+	// a trusted policy lets a null view rule (superusers only) through
+	if checkRule && !(col.ViewRule == nil && p != nil && p.Trusted) {
 		ok, err := v.app.CanAccessRecord(rec, ri, col.ViewRule)
 		if err != nil {
 			return nil, err

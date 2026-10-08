@@ -3,11 +3,39 @@ package apis
 import (
 	"net/http"
 	"slices"
+	"sync"
 
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/modules/walreplica"
 	"github.com/tokibase/tokibase/tools/router"
 )
+
+const healthExtrasKey = "__tokiHealthExtras__"
+
+var healthExtrasMu sync.Mutex
+
+// SetHealthExtra adds a named block to the superuser-only `data` of
+// GET /api/health (modules use it for their own status, for example
+// modules/sync). fn runs on every superuser request and must be cheap; a nil
+// result is left out. Registering a name twice replaces the first function.
+func SetHealthExtra(app core.App, name string, fn func(app core.App) any) {
+	healthExtrasMu.Lock()
+	defer healthExtrasMu.Unlock()
+	m, _ := app.Store().Get(healthExtrasKey).(map[string]func(core.App) any)
+	next := make(map[string]func(core.App) any, len(m)+1)
+	for k, v := range m {
+		next[k] = v
+	}
+	next[name] = fn
+	app.Store().Set(healthExtrasKey, next)
+}
+
+func healthExtras(app core.App) map[string]func(core.App) any {
+	healthExtrasMu.Lock()
+	defer healthExtrasMu.Unlock()
+	m, _ := app.Store().Get(healthExtrasKey).(map[string]func(core.App) any)
+	return m
+}
 
 // bindHealthApi registers the health api endpoint.
 func bindHealthApi(app core.App, rg *router.RouterGroup[*core.RequestEvent]) {
@@ -48,6 +76,9 @@ func healthCheck(e *core.RequestEvent) error {
 		}
 		resp.Data["possibleProxyHeader"] = possibleProxyHeader
 
+		// pool and WAL maintenance status of the databases (capacity monitoring)
+		resp.Data["db"] = e.App.DBStatus()
+
 		// only present when WAL replication is active (modules/walreplica)
 		if walreplica.Active(e.App) {
 			healthy, reason := walreplica.Healthy(e.App)
@@ -62,6 +93,11 @@ func healthCheck(e *core.RequestEvent) error {
 				replica["lease"] = lease
 			}
 			resp.Data["replica"] = replica
+		}
+		for name, fn := range healthExtras(e.App) {
+			if v := fn(e.App); v != nil {
+				resp.Data[name] = v
+			}
 		}
 	} else {
 		resp.Data = map[string]any{} // ensure that it is returned as object
