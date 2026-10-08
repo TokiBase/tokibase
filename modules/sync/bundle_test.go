@@ -150,7 +150,7 @@ func TestSpokeAppliesBundlesAndTheyAreIdempotent(t *testing.T) {
 
 	// a field added on the hub reaches the spoke before any data does
 	addTextField(t, h.app, "items", "extra")
-	rec := core.NewRecord(mustCol(t, h.app, "items"))
+	rec := core.NewRecord(pr8Col(t, h.app, "items"))
 	rec.Set("title", "t")
 	rec.Set("extra", "e")
 	if err := h.app.Save(rec); err != nil {

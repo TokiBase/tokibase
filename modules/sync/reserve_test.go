@@ -294,7 +294,7 @@ func TestHubNextDrawsFromTheSequence(t *testing.T) {
 		}
 	}
 	// a hub-local record gets a number from the sequence too
-	r := core.NewRecord(mustCol(t, h.app, "tickets"))
+	r := core.NewRecord(pr8Col(t, h.app, "tickets"))
 	r.Set("plate", "H1")
 	if err := h.app.Save(r); err != nil || r.GetString("no") != "4" {
 		t.Fatalf("hub autofill: %q %v", r.GetString("no"), err)
@@ -307,7 +307,7 @@ func TestHubNextDrawsFromTheSequence(t *testing.T) {
 	}
 }
 
-func mustCol(t *testing.T, app core.App, name string) *core.Collection {
+func pr8Col(t *testing.T, app core.App, name string) *core.Collection {
 	t.Helper()
 	c, err := app.FindCollectionByNameOrId(name)
 	if err != nil {
