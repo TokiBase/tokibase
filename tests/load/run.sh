@@ -2,12 +2,14 @@
 # Load/soak harness driver. Copies a pb_data with `sqlite3 .backup` (never touches the source),
 # builds toki, runs tests/load and writes tests/load/results/<date>-<tag>.{md,json}.
 # NOT run in CI. usage: tests/load/run.sh [--src DIR (env LOAD_SRC)] [--work DIR (env LOAD_WORK)]
-#                       [--scenarios all] [--tag wpe] [--quick] [-- extra flags for the Go tool]
+#                       [--scenarios all] [--tag wpe] [--addr 127.0.0.1:8097] [--quick]
+# LOAD_SERVER_ENV="TOKI_X=1 TOKI_Y=2" adds env vars to every server started by the harness.
+# [-- extra flags for the Go tool]
 set -eu
-SRC=${LOAD_SRC:-/opt/pocketbase-fgr/pb_data}; WORK=${LOAD_WORK:-/root/tokibase-load}; SCN=all; TAG=wpe; EXTRA=()
+SRC=${LOAD_SRC:-/opt/pocketbase-fgr/pb_data}; WORK=${LOAD_WORK:-/root/tokibase-load}; SCN=all; TAG=wpe; ADDR=${LOAD_ADDR:-127.0.0.1:8097}; EXTRA=()
 while [ $# -gt 0 ]; do case "$1" in
   --src) SRC=$2; shift 2;; --work) WORK=$2; shift 2;; --scenarios) SCN=$2; shift 2;;
-  --tag) TAG=$2; shift 2;; --quick) EXTRA+=(-quick); shift;; --) shift; EXTRA+=("$@"); break;;
+  --tag) TAG=$2; shift 2;; --addr) ADDR=$2; shift 2;; --quick) EXTRA+=(-quick); shift;; --) shift; EXTRA+=("$@"); break;;
   *) echo "unknown arg $1"; exit 2;; esac; done
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 [ -d /root/gotmp ] && export GOTMPDIR=${GOTMPDIR:-/root/gotmp}
@@ -33,4 +35,4 @@ export TOKI_VERSION_INFO="$("$WORK/toki" --version 2>&1 | head -1) $(cd "$REPO" 
 echo "toki: $TOKI_VERSION_INFO"
 
 cd "$REPO"
-go run ./tests/load -bin "$WORK/toki" -work "$WORK" -addr 127.0.0.1:8097 -scenarios "$SCN" -tag "$TAG" -out "$REPO/tests/load/results" ${EXTRA[@]+"${EXTRA[@]}"}
+go run ./tests/load -bin "$WORK/toki" -work "$WORK" -addr "$ADDR" -scenarios "$SCN" -tag "$TAG" -out "$REPO/tests/load/results" ${EXTRA[@]+"${EXTRA[@]}"}

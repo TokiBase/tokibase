@@ -235,10 +235,10 @@ func NewBaseApp(config BaseAppConfig) *BaseApp {
 
 	// apply config defaults
 	if app.config.DataMaxOpenConns <= 0 {
-		app.config.DataMaxOpenConns = DefaultDataMaxOpenConns
+		app.config.DataMaxOpenConns = defaultDataMaxOpenConns()
 	}
 	if app.config.DataMaxIdleConns <= 0 {
-		app.config.DataMaxIdleConns = DefaultDataMaxIdleConns
+		app.config.DataMaxIdleConns = min(DefaultDataMaxIdleConns, app.config.DataMaxOpenConns)
 	}
 	if app.config.AuxMaxOpenConns <= 0 {
 		app.config.AuxMaxOpenConns = DefaultAuxMaxOpenConns
