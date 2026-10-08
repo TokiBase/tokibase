@@ -619,3 +619,36 @@ func TestStrategySwitchToFieldMergeDoesNotLetOldEditsThrough(t *testing.T) {
 		t.Fatal("hub value overwritten")
 	}
 }
+
+// A node that bootstraps from a snapshot under a restrictive view rule gets
+// evict and delete rows for the records the snapshot delivered.
+func TestSnapshotFillsTheSentSet(t *testing.T) {
+	h, a := viewHub(t)
+	h.setRules(t, sp(""), sp(""), sp(""), sp("qty < 100"))
+	vis := h.create(t, map[string]any{"title": "visible", "qty": 5})
+	vis2 := h.create(t, map[string]any{"title": "visible2", "qty": 6})
+	hid := h.create(t, map[string]any{"title": "hidden", "qty": 500})
+	if err := a.c.Bootstrap(ctxb); err != nil {
+		t.Fatal(err)
+	}
+	if a.has(vis.Id) == nil || a.has(hid.Id) != nil {
+		t.Fatal("the snapshot delivers only visible records")
+	}
+	if n := countRows(t, h.app, "SELECT COUNT(*) FROM _sync_sent WHERE node={:n}", dbx.Params{"n": a.m.NodeID()}); n != 2 {
+		t.Fatalf("sent set has %d entries, want 2", n)
+	}
+	vis.Set("qty", 500) // evict
+	if err := h.app.Save(vis); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.app.Delete(vis2); err != nil { // delete
+		t.Fatal(err)
+	}
+	if err := h.app.Delete(hid); err != nil { // never sent: silent
+		t.Fatal(err)
+	}
+	a.sync(t)
+	if a.has(vis.Id) != nil || a.has(vis2.Id) != nil {
+		t.Fatal("evict and delete must reach a bootstrapped node")
+	}
+}
