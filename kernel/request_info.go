@@ -8,6 +8,7 @@ const (
 	RequestInfoContextRealtime      = "realtime"
 	RequestInfoContextProtectedFile = "protectedFile"
 	RequestInfoContextBatch         = "batch"
+	RequestInfoContextSync          = "sync"
 	RequestInfoContextOAuth2        = "oauth2"
 	RequestInfoContextOTP           = "otp"
 	RequestInfoContextPasswordAuth  = "password"

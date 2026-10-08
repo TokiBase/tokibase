@@ -36,6 +36,7 @@ import (
 	"github.com/tokibase/tokibase/modules/ruleguard"
 	"github.com/tokibase/tokibase/modules/sessions"
 	"github.com/tokibase/tokibase/modules/store/sqlite"
+	toksync "github.com/tokibase/tokibase/modules/sync"
 	"github.com/tokibase/tokibase/modules/timelint"
 	"github.com/tokibase/tokibase/modules/tlscheck"
 	"github.com/tokibase/tokibase/modules/totp"
@@ -355,6 +356,9 @@ func NewWithConfig(config Config) *PocketBase {
 		})
 	}
 
+	// hub/spoke change capture (TOKI_SYNC_ROLE=off|hub|spoke, default off, see docs/modules/sync.md)
+	toksync.Register(pb.App.(core.App))
+
 	// warn when serving plain HTTP on a reachable address without trusted proxy headers (TOKI_TLS_CHECK=warn|strict|off)
 	tlscheck.Register(pb.App.(core.App))
 
@@ -551,6 +555,7 @@ func (pb *PocketBase) Start() error {
 	pb.RootCmd.AddCommand(cmd.NewDenyCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewFieldPermCommand(pb))
 	pb.RootCmd.AddCommand(computed.NewCommand(pb))
+	pb.RootCmd.AddCommand(toksync.NewCommand(pb))
 	pb.RootCmd.AddCommand(batchguard.NewCommand(pb))
 	pb.RootCmd.AddCommand(crypto.NewCommand(pb))
 	pb.RootCmd.AddCommand(geo.NewCommand(pb))

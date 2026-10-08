@@ -138,6 +138,12 @@ type Module struct {
 
 	// parentWrites counts parent saves made by the module (tests, metrics).
 	parentWrites counter
+
+	// derived mirrors the target fields into the kernel registry that
+	// modules/sync consults (derived fields are recomputed on every node and
+	// never replicated).
+	derivedMu sync.Mutex
+	derived   map[string]map[string]bool
 }
 
 type counter struct {
@@ -213,6 +219,42 @@ func (m *Module) Invalidate() {
 	m.invalid = true
 	m.gen++
 	m.mu.Unlock()
+	if m.app != nil && m.app.IsBootstrapped() {
+		// keep the kernel registry current without waiting for the next lookup
+		if defs, err := List(m.app, ""); err == nil {
+			m.syncDerived(defs)
+		}
+	}
+}
+
+// syncDerived mirrors the target fields of defs into the kernel registry
+// ([kernel.RegisterDerivedField]) and drops the ones that no longer exist.
+func (m *Module) syncDerived(defs []Def) {
+	m.derivedMu.Lock()
+	defer m.derivedMu.Unlock()
+	want := map[string]map[string]bool{}
+	for _, d := range defs {
+		if d.CollectionId == "" {
+			continue
+		}
+		if want[d.CollectionId] == nil {
+			want[d.CollectionId] = map[string]bool{}
+		}
+		want[d.CollectionId][d.Field] = true
+	}
+	for id, fields := range want {
+		for f := range fields {
+			kernel.RegisterDerivedField(id, f)
+		}
+	}
+	for id, fields := range m.derived {
+		for f := range fields {
+			if !want[id][f] {
+				kernel.UnregisterDerivedField(id, f)
+			}
+		}
+	}
+	m.derived = want
 }
 
 // collRef resolves a stored collection reference (id; a name is accepted for
@@ -271,6 +313,9 @@ func (m *Module) refresh() {
 		return
 	}
 	defs, err := List(m.app, "")
+	if err == nil {
+		m.syncDerived(defs)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err != nil {
@@ -519,3 +564,6 @@ func find(app core.App, collection, field string) ([]Def, error) {
 func differs(stored, want float64) bool {
 	return math.Abs(stored-want) > 1e-9*math.Max(1, math.Abs(want))
 }
+
+// unregisterAll removes everything this module put in the kernel derived registry.
+func (m *Module) unregisterAll() { m.syncDerived(nil) }
