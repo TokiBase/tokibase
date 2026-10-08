@@ -25,6 +25,26 @@ func normalize(v any) (any, error) {
 		return float64(t), nil
 	case int64:
 		return float64(t), nil
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, x := range t {
+			n, err := normalize(x)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = n
+		}
+		return out, nil
+	case []any:
+		out := make([]any, len(t))
+		for i, x := range t {
+			n, err := normalize(x)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = n
+		}
+		return out, nil
 	}
 	b, err := json.Marshal(v)
 	if err != nil {
