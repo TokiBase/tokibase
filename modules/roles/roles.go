@@ -14,6 +14,7 @@ import (
 	"github.com/pocketbase/dbx"
 	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/types"
 )
@@ -137,7 +138,7 @@ func Register(app core.App) *Module {
 }
 
 // cascade deletes the memberships held by rec (when it is an auth record) or scoped to rec.
-func cascade(app core.App, rec *core.Record, m *Module) error {
+func cascade(app kernel.App, rec *core.Record, m *Module) error {
 	col := rec.Collection()
 	ids := []string{}
 	q := app.DB().NewQuery("SELECT id FROM {{" + MembershipsName + "}} WHERE (scope_collection = {:c} AND scope = {:i})" +
