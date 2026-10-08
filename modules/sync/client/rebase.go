@@ -17,6 +17,8 @@ type setOp struct {
 // pending is what the node has changed locally on a record and not yet
 // handed to the hub (status local or pushed), see docs/SYNC_DESIGN.md §4.5.
 type pending struct {
+	// any: at least one pending local change exists for the record.
+	any       bool
 	hasDelete bool
 	hlc       map[string]int64   // plain field -> highest pending hlc
 	inc       map[string]float64 // counter field -> sum of pending $inc
@@ -35,6 +37,7 @@ func loadPending(db dbx.Builder, nodeID, colID, recID string) (*pending, error) 
 	if err != nil {
 		return nil, err
 	}
+	p.any = len(rows) > 0
 	for _, r := range rows {
 		if r.Op == "d" || r.Op == "p" {
 			p.hasDelete = true

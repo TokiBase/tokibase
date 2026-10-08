@@ -22,8 +22,16 @@ const policyTTL = 5 * time.Second
 // policy is the parsed `_sync_policies` row of one collection.
 type policy struct {
 	Direction string
-	Types     map[string]string
-	Exclude   map[string]struct{}
+	// Strategy is lww (default), hub-wins, field-merge or hook.
+	Strategy string
+	// Hook is the WASM module that decides conflicts (strategy hook); "" = any
+	// module subscribed to the collection.
+	Hook string
+	// Review makes the conflicts that field-merge resolves automatically stay
+	// open for an admin (docs/SYNC_DESIGN.md §4.4).
+	Review  bool
+	Types   map[string]string
+	Exclude map[string]struct{}
 }
 
 type policyCache struct {
@@ -99,9 +107,13 @@ func (c *policyCache) load() (map[string]*policy, error) {
 		if !r.GetBool("enabled") {
 			continue
 		}
-		p := &policy{Direction: r.GetString("direction"), Types: map[string]string{}, Exclude: map[string]struct{}{}}
+		p := &policy{Direction: r.GetString("direction"), Types: map[string]string{}, Exclude: map[string]struct{}{},
+			Strategy: r.GetString("strategy"), Hook: r.GetString("hook"), Review: r.GetBool("review")}
 		if p.Direction == "" {
 			p.Direction = DirBoth
+		}
+		if p.Strategy == "" {
+			p.Strategy = StratLWW
 		}
 		if raw := rawJSON(r, "field_types"); raw != nil {
 			_ = json.Unmarshal(raw, &p.Types)

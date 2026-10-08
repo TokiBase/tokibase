@@ -45,7 +45,10 @@ type loopState struct {
 	lastErr  string
 	lastOK   time.Time
 	applyErr int64
-	mismatch []string
+	// hashMis counts hash_mismatch occurrences, hashStreak those in a row
+	hashMis    int64
+	hashStreak int
+	mismatch   []string
 
 	kick     chan struct{}
 	reqs     chan syncReq
@@ -262,7 +265,7 @@ func (c *Client) Status() Status {
 	st := Status{
 		State: c.loop.state, Online: c.loop.cond.Online, Paused: c.loop.paused, Running: c.loop.running,
 		LastOK: c.loop.lastOK, LastError: c.loop.lastErr, Failures: c.loop.failures, NextAttempt: c.loop.next,
-		ApplyErrors: c.loop.applyErr, DigestMismatch: append([]string(nil), c.loop.mismatch...),
+		ApplyErrors: c.loop.applyErr, HashMismatches: c.loop.hashMis, HashStreak: c.loop.hashStreak, DigestMismatch: append([]string(nil), c.loop.mismatch...),
 	}
 	c.loop.mu.Unlock()
 	st.OffsetMs = c.Offset().Milliseconds()

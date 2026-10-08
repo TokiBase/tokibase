@@ -59,6 +59,13 @@ func (c *Client) pullAll(ctx context.Context, res *Result) error {
 			return errors.New("sync: the node is not enrolled")
 		}
 		pr, err := c.Pull(ctx, cur.PullAfter, c.pullLimit(), 0)
+		if err != nil && IsCode(err, proto.CodeResponseTooLarge) && c.pullLimit() > 1 {
+			half := max(c.pullLimit()/2, 1)
+			c.loop.mu.Lock()
+			c.loop.page = half
+			c.loop.mu.Unlock()
+			continue
+		}
 		if err != nil {
 			if IsCode(err, proto.CodeRebootstrap) {
 				c.setState("rebootstrap_required")
@@ -68,18 +75,22 @@ func (c *Client) pullAll(ctx context.Context, res *Result) error {
 			return err
 		}
 		applied, errs, err := c.applyPage(cur.HubID, pr)
-		if err != nil {
+		var ae *ApplyError
+		if err != nil && !errors.As(err, &ae) {
 			return err
 		}
 		res.Pulled += len(pr.Changes)
 		res.Applied += applied
-		through = max(through, pr.Next)
-		pulled = pulled || len(pr.Changes) > 0 || pr.Next > cur.PullAfter
 		if errs > 0 {
 			c.loop.mu.Lock()
 			c.loop.applyErr += int64(errs)
 			c.loop.mu.Unlock()
 		}
+		if ae != nil {
+			return ae // the cursor stopped before the failing change
+		}
+		through = max(through, pr.Next)
+		pulled = pulled || len(pr.Changes) > 0 || pr.Next > cur.PullAfter
 		if !pr.More {
 			break
 		}

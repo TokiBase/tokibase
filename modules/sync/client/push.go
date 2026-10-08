@@ -162,20 +162,30 @@ func (c *Client) pushAll(ctx context.Context, res *Result) error {
 			}
 			return err
 		}
+		byID := make(map[string]outRow, len(rows))
+		for _, row := range rows {
+			byID[c.nodeID+":"+itoa(row.Seq)] = row
+		}
 		for _, r := range resp.Results {
+			row := byID[r.ID]
 			switch {
 			case r.Status == proto.ResRejected:
 				res.Rejected++
 				c.emit(Event{Type: EventRejected, ID: r.ID, Code: r.Code})
-			case r.Status == proto.ResParked:
-				// final for the ack; waits for an admin on the hub
-				res.Rejected++
-				c.emit(Event{Type: "parked", ID: r.ID, Code: r.Code})
+				c.recordOutcome(row, r)
 			case r.Status == proto.ResSuperseded || (r.Status == proto.ResDuplicate && r.Was == proto.ResSuperseded):
 				res.Superseded++
 				c.emit(Event{Type: EventSuperseded, ID: r.ID})
+				c.recordOutcome(row, r)
+			case r.Status == proto.ResParked || (r.Status == proto.ResDuplicate && r.Was == proto.ResParked):
+				res.Parked++
+				c.emit(Event{Type: EventParked, ID: r.ID, Code: r.Code, Message: "the change waits for an admin (toki sync conflicts)"})
+				c.recordOutcome(row, r)
 			default:
 				res.Pushed++
+				if r.Status == proto.ResMerged {
+					c.recordOutcome(row, r)
+				}
 			}
 		}
 		if resp.AckedThrough < rows[len(rows)-1].Seq {

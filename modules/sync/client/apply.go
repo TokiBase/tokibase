@@ -4,9 +4,11 @@ package client
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pocketbase/dbx"
@@ -18,26 +20,68 @@ import (
 
 const dateLayout = "2006-01-02 15:04:05.000Z"
 
+// ApplyError is returned by a sync cycle when a pulled change could not be
+// applied. The cursor stays below it, so the change is retried (with the loop's
+// backoff) instead of being skipped; the failure is also a local conflict row
+// (kind apply_error) and shows in `toki sync status` as the last error.
+type ApplyError struct {
+	ID  string
+	Seq int64
+	Err error
+}
+
+func (e *ApplyError) Error() string {
+	return fmt.Sprintf("sync: pulled change %s (hub seq %d) cannot be applied, retrying: %v", e.ID, e.Seq, e.Err)
+}
+
+func (e *ApplyError) Unwrap() error { return e.Err }
+
+var applySP atomic.Uint64
+
 // applyPage applies one pull page and moves `pull_after` in the same
-// transaction (docs/SYNC_DESIGN.md §6.2). A change that cannot be applied is
-// reported and counted; it does not stop the page.
+// transaction (docs/SYNC_DESIGN.md §6.2). Every change runs in its own
+// savepoint, so a failing one leaves no partial write. At a failing change the
+// page stops: the changes before it stay applied, the cursor stops just before
+// it, and an *ApplyError comes back (after the commit) so that the cycle fails
+// and retries it with backoff.
 func (c *Client) applyPage(hubID string, pr *proto.PullResponse) (applied, failed int, err error) {
 	var events []Event
+	var failure *ApplyError
 	err = c.o.App.RunInTransaction(func(tx kernel.App) error {
-		applied, failed, events = 0, 0, events[:0]
+		applied, failed, events, failure = 0, 0, events[:0], nil
+		next := pr.Next
+		db := tx.NonconcurrentDB()
 		for i := range pr.Changes {
-			ok, aerr := c.applyChange(tx, &pr.Changes[i])
+			ch := &pr.Changes[i]
+			sp := fmt.Sprintf("sync_pull_%d", applySP.Add(1))
+			if _, serr := db.NewQuery("SAVEPOINT " + sp).Execute(); serr != nil {
+				return serr
+			}
+			ok, aerr := c.applyChange(tx, ch)
 			if aerr != nil {
+				if _, rerr := db.NewQuery("ROLLBACK TO " + sp).Execute(); rerr != nil {
+					return rerr
+				}
+				_, _ = db.NewQuery("RELEASE " + sp).Execute()
 				failed++
-				events = append(events, Event{Type: EventError, ID: pr.Changes[i].ID, Collection: pr.Changes[i].Collection,
-					Record: pr.Changes[i].Record, Message: "apply failed: " + aerr.Error()})
-				continue
+				events = append(events, Event{Type: EventError, ID: ch.ID, Collection: ch.Collection,
+					Record: ch.Record, Message: "apply failed: " + aerr.Error()})
+				applyFailureRow(tx, ch, aerr)
+				failure = &ApplyError{ID: ch.ID, Seq: ch.Seq, Err: aerr}
+				next = 0
+				if i > 0 {
+					next = pr.Changes[i-1].Seq
+				}
+				break
+			}
+			if _, rerr := db.NewQuery("RELEASE " + sp).Execute(); rerr != nil {
+				return rerr
 			}
 			if ok {
 				applied++
 			}
 		}
-		return setPullAfter(tx.NonconcurrentDB(), hubID, pr.Next)
+		return setPullAfter(db, hubID, next)
 	})
 	if err != nil {
 		return 0, 0, err
@@ -47,6 +91,9 @@ func (c *Client) applyPage(hubID string, pr *proto.PullResponse) (applied, faile
 	}
 	if applied > 0 {
 		c.emit(Event{Type: EventApplied, Message: fmt.Sprintf("%d changes", applied)})
+	}
+	if failure != nil {
+		return applied, failed, failure
 	}
 	return applied, failed, nil
 }
@@ -84,7 +131,46 @@ func (c *Client) applyChange(tx kernel.App, ch *proto.PullChange) (bool, error) 
 	return false, fmt.Errorf("unknown op %q", ch.Op)
 }
 
+// discardPending retires the local changes that a delete (or a revert to
+// "deleted") makes pointless: they are marked acked with code `discarded` so
+// they are not pushed, and a conflict row keeps what they contained. Newer
+// local edits of a record the hub deleted or refused are lost by design
+// (deletes are final), but never silently.
+func (c *Client) discardPending(tx kernel.App, col *core.Collection, ch *proto.PullChange) error {
+	db := tx.NonconcurrentDB()
+	var rows []struct {
+		Seq   int64  `db:"origin_seq"`
+		Patch string `db:"patch"`
+	}
+	if err := db.NewQuery("SELECT origin_seq, patch FROM _changes WHERE node={:n} AND collection={:c} AND record={:r} AND status IN ('local','pushed') ORDER BY origin_seq").
+		Bind(dbx.Params{"n": c.nodeID, "c": col.Id, "r": ch.Record}).All(&rows); err != nil || len(rows) == 0 {
+		return err
+	}
+	if _, err := db.NewQuery("UPDATE _changes SET status='acked', code='discarded' WHERE node={:n} AND collection={:c} AND record={:r} AND status IN ('local','pushed')").
+		Bind(dbx.Params{"n": c.nodeID, "c": col.Id, "r": ch.Record}).Execute(); err != nil {
+		return err
+	}
+	var all []any
+	for _, r := range rows {
+		var p map[string]any
+		_ = json.Unmarshal([]byte(r.Patch), &p)
+		all = append(all, p)
+	}
+	why := "the hub deleted the record"
+	if ch.Revert {
+		why = "the hub refused a change and reverted the record to deleted"
+	}
+	c.o.App.Logger().Warn("sync: local changes discarded", "collection", col.Name, "record", ch.Record, "changes", len(rows), "reason", why)
+	writeConflictRow(tx, conflictRow{Collection: col.Id, Record: ch.Record, Change: ch.ID, Node: c.nodeID,
+		Kind: "orphaned", Resolution: "reverted", Status: "resolved", Incoming: all,
+		Note: "local edits discarded: " + why})
+	return nil
+}
+
 func (c *Client) applyDelete(tx kernel.App, ctx context.Context, col *core.Collection, ch *proto.PullChange, h hlc.HLC) (bool, error) {
+	if err := c.discardPending(tx, col, ch); err != nil {
+		return false, err
+	}
 	rec, _ := tx.FindRecordById(col.Id, ch.Record)
 	if rec != nil {
 		return true, tx.DeleteWithContext(ctx, rec)
@@ -215,6 +301,7 @@ func (c *Client) applyUpsert(tx kernel.App, ctx context.Context, col *core.Colle
 	}
 
 	if !isNew && !changed {
+		c.mirrorClocks(db, col.Id, ch)
 		// same values: only align the record clock
 		res, err := db.NewQuery("UPDATE _sync_meta SET hlc={:h}, node={:n} WHERE collection={:c} AND record={:r} AND (hlc!={:h} OR node!={:n})").
 			Bind(dbx.Params{"h": int64(h), "n": ch.Node, "c": col.Id, "r": ch.Record}).Execute()
@@ -259,7 +346,52 @@ func (c *Client) applyUpsert(tx kernel.App, ctx context.Context, col *core.Colle
 		if err != nil {
 			return true, err
 		}
-		return true, c.o.Backend.Rehash(tx, fresh)
+		if err := c.o.Backend.Rehash(tx, fresh); err != nil {
+			return true, err
+		}
 	}
+	c.mirrorClocks(db, col.Id, ch)
+	c.checkHash(db, col, pv, pend, ch)
 	return true, nil
+}
+
+// mirrorClocks stores the field clocks the hub sent (field-merge collections,
+// informational: the hub decides every conflict).
+func (c *Client) mirrorClocks(db dbx.Builder, colId string, ch *proto.PullChange) {
+	if len(ch.Fields) == 0 {
+		return
+	}
+	b, err := json.Marshal(ch.Fields)
+	if err != nil {
+		return
+	}
+	_, _ = db.NewQuery("UPDATE _sync_meta SET fields=json_patch(fields,{:p}) WHERE collection={:c} AND record={:r}").
+		Bind(dbx.Params{"p": string(b), "c": colId, "r": ch.Record}).Execute()
+}
+
+// checkHash implements the hash_mismatch check of docs/SYNC_DESIGN.md §4.7:
+// after a pulled change is applied to a record without pending local changes,
+// the local canonical hash must equal the hub's. Collections with counter/set
+// fields are skipped: the hub sends their CURRENT absolute value with a
+// historic hash, so the two legitimately differ while the node catches up.
+// A mismatch is counted, logged and reported; two in a row mark the node as
+// drifting (status), the auto-heal re-fetch is not implemented yet.
+func (c *Client) checkHash(db dbx.Builder, col *core.Collection, pv *PolicyView, pend *pending, ch *proto.PullChange) {
+	if ch.Hash == "" || pend.any || len(pv.Types) > 0 {
+		return
+	}
+	var local []byte
+	if db.NewQuery("SELECT hash FROM _sync_meta WHERE collection={:c} AND record={:r}").
+		Bind(dbx.Params{"c": col.Id, "r": ch.Record}).Row(&local) != nil {
+		return
+	}
+	c.loop.mu.Lock()
+	defer c.loop.mu.Unlock()
+	if hex.EncodeToString(local) == ch.Hash {
+		c.loop.hashStreak = 0
+		return
+	}
+	c.loop.hashMis++
+	c.loop.hashStreak++
+	c.o.App.Logger().Warn("sync: hash_mismatch", "collection", col.Name, "record", ch.Record, "change", ch.ID, "in_a_row", c.loop.hashStreak)
 }

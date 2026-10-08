@@ -141,9 +141,29 @@ const (
 	DirNone = "none"
 )
 
+// policyStrategyFields are the PR5 fields of `_sync_policies`: they are added
+// to a collection that an older build created.
+func policyStrategyFields() []core.Field {
+	return []core.Field{
+		&core.SelectField{Name: "strategy", MaxSelect: 1, Values: []string{StratLWW, StratHubWins, StratFieldMerge, StratHook}},
+		&core.TextField{Name: "hook", Max: 100},
+		&core.BoolField{Name: "review"},
+	}
+}
+
 // EnsurePolicyCollection creates the minimal `_sync_policies` system collection.
 func EnsurePolicyCollection(app core.App) error {
 	if c, _ := app.FindCollectionByNameOrId(PoliciesCollection); c != nil {
+		changed := false
+		for _, f := range policyStrategyFields() {
+			if c.Fields.GetByName(f.GetName()) == nil {
+				c.Fields.Add(f)
+				changed = true
+			}
+		}
+		if changed {
+			return app.Save(c)
+		}
 		return nil
 	}
 	c := core.NewBaseCollection(PoliciesCollection)
@@ -157,6 +177,7 @@ func EnsurePolicyCollection(app core.App) error {
 		&core.AutodateField{Name: "created", OnCreate: true},
 		&core.AutodateField{Name: "updated", OnCreate: true, OnUpdate: true},
 	)
+	c.Fields.Add(policyStrategyFields()...)
 	c.AddIndex("idx_sync_policies_collection", true, "[[collection]]", "")
 	return app.Save(c)
 }
