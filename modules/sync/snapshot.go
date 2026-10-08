@@ -145,7 +145,7 @@ func (m *Module) snapshotScope(app kernel.App) ([]*core.Collection, []*policy, e
 func (m *Module) snapshotStartHandler(e *core.RequestEvent) error {
 	nodeID := NodeFrom(e)
 	start := m.headSeq() // before any page is read
-	cols, pols, err := m.snapshotScope(e.App)
+	cols, _, err := m.snapshotScope(e.App)
 	if err != nil {
 		return err
 	}
