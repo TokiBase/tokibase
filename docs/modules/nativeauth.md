@@ -27,7 +27,7 @@ A token minted for one app is therefore never accepted by another collection tha
 | `TOKI_NATIVEAUTH_GOOGLE_AUDIENCES_<COLLECTION>` | Extra accepted Google `aud` values for that collection. |
 | `TOKI_NATIVEAUTH_APPLE_AUDIENCES_<COLLECTION>` | Extra accepted Apple `aud` values (bundle id for native iOS) for that collection. |
 
-Build tag `no_nativeauth` removes the module (stub). All profiles include it.
+Build tag `no_nativeauth` removes the module (stub; the boot guard cannot enumerate the per-collection variable names, so it does not flag them). All profiles include it.
 
 Rate limiting: 20 failed attempts per minute per client address answer `429` (`Retry-After: 60`). The address is `RealIP()`, so configure the trusted proxy headers correctly; behind a proxy without that setting every user shares the proxy address (one noisy client can then lock out everyone), and with a wrong header setting a client could choose its own key. IPv6 clients are keyed by their /64. When the table is full the oldest 10% of keys are dropped (never the whole table). The check and the count are not atomic, so the limit is approximate under concurrency; successful sign-ins are not limited.
 
