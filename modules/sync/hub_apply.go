@@ -605,4 +605,3 @@ func fixAutodates(tx kernel.App, col *core.Collection, id string, want map[strin
 	}
 	return nil
 }
-
