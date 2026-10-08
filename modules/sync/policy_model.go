@@ -3,11 +3,13 @@
 package sync
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
+	stdsync "sync"
 
 	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/tokibase/tokibase/core"
@@ -258,8 +260,11 @@ func checkPolicy(app kernel.App, rec *core.Record) []policyIssue {
 			if t := types[pf]; t == TypeCounter || t == TypeSet {
 				add("error", "partition", "partition field %q must not be a counter or set", pf)
 			}
-			if f.GetHidden() {
-				add("warning", "partition", "partition field %q is hidden and never travels to the spokes", pf)
+			if f.GetHidden() || kernel.IsDerived(col.Id, pf) || (col.IsAuth() && isAuthSystemName(pf)) {
+				// hidden, derived and auth-system fields are never synced: the node
+				// could neither see nor set the key, and changes of it would not
+				// produce a change row
+				add("error", "partition", "partition field %q is hidden, derived or an auth system field and never travels to the spokes", pf)
 			}
 			if !indexedFirst(col, pf) {
 				add("warning", "partition", "partition field %q is not indexed (pull and push check it on every change)", pf)
@@ -280,6 +285,9 @@ func checkPolicy(app kernel.App, rec *core.Record) []policyIssue {
 	}
 	if col.ViewRule == nil && rec.GetBool("pull_view_rule") && !rec.GetBool("trusted") && dir != DirPush && dir != DirNone {
 		add("warning", "trusted", "viewRule is null (superusers only): the collection is never pulled unless trusted=true or pull_view_rule=false")
+	}
+	if !rec.GetBool("pull_view_rule") && col.ViewRule != nil && *col.ViewRule != "" && dir != DirPush && dir != DirNone {
+		add("warning", "pull_view_rule", "pull_view_rule is off but viewRule is set: every record of the collection is pulled whatever the viewRule says")
 	}
 	if rec.GetBool("trusted") && col.ViewRule != nil {
 		add("warning", "trusted", "trusted only matters for a collection whose viewRule is null")
@@ -325,14 +333,45 @@ func (c *policyCache) bindPolicyModel() {
 			return e.Next()
 		},
 	})
+	// pull_view_rule defaults to true on EVERY creation path. A bool field cannot
+	// tell "absent" from "false", so a creator that really wants false states it:
+	// the REST body carries the key, SetPolicy (CLI) saves with
+	// [withExplicitViewRule]; a Go caller does the same or updates the record
+	// after creating it.
 	app.OnRecordCreateRequest(PoliciesCollection).Bind(&hook.Handler[*core.RecordRequestEvent]{
 		Id: hookId + "poldef", Func: func(e *core.RecordRequestEvent) error {
 			if ri, err := e.RequestInfo(); err == nil {
-				if _, has := ri.Body["pull_view_rule"]; !has {
-					e.Record.Set("pull_view_rule", true)
+				if _, has := ri.Body["pull_view_rule"]; has {
+					explicitViewRule.Store(e.Record, struct{}{})
 				}
 			}
 			return e.Next()
 		},
 	})
+	app.OnRecordCreate(PoliciesCollection).Bind(&hook.Handler[*core.RecordEvent]{
+		Id: hookId + "poldefm", Priority: -1000, Func: func(e *core.RecordEvent) error {
+			_, explicit := explicitViewRule.LoadAndDelete(e.Record)
+			if !explicit && (e.Context == nil || e.Context.Value(explicitViewRuleKey{}) == nil) {
+				e.Record.Set("pull_view_rule", true)
+			}
+			return e.Next()
+		},
+	})
+}
+
+type explicitViewRuleKey struct{}
+
+var explicitViewRule stdsync.Map
+
+// withExplicitViewRule marks a save whose pull_view_rule value is deliberate.
+func withExplicitViewRule(ctx context.Context) context.Context {
+	return context.WithValue(ctx, explicitViewRuleKey{}, true)
+}
+
+func isAuthSystemName(n string) bool {
+	switch n {
+	case kernel.FieldNameId, kernel.FieldNameTokenKey, kernel.FieldNamePassword, "email", "emailVisibility", "verified":
+		return true
+	}
+	return false
 }

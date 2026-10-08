@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -137,6 +139,38 @@ func ResolveConflict(app core.App, o ResolveOptions) error {
 	return m.resolveConflict(o)
 }
 
+// resolveMember is one conflict of a resolution (a tx group has several).
+type resolveMember struct {
+	cr    *core.Record
+	col   *core.Collection
+	op    string // c, u or d: what the parked change did
+	patch map[string]any
+}
+
+// parkedOp returns the op and tx group of the parked change a conflict row
+// refers to ("u" and no group for every other conflict).
+func (m *Module) parkedOp(cr *core.Record) (op, txID, node string, oseq int64) {
+	op = OpUpdate
+	ch := cr.GetString("change")
+	i := strings.LastIndexByte(ch, ':')
+	if i <= 0 || cr.GetString("resolution") != ResolutionParked {
+		return
+	}
+	var row struct {
+		Op string `db:"op"`
+		Tx string `db:"tx"`
+	}
+	n, err := strconv.ParseInt(ch[i+1:], 10, 64)
+	if err != nil {
+		return
+	}
+	if m.app.DB().NewQuery("SELECT op, tx FROM _changes WHERE node={:n} AND origin_seq={:o} AND status='parked'").
+		Bind(dbx.Params{"n": ch[:i], "o": n}).One(&row) != nil {
+		return
+	}
+	return row.Op, row.Tx, ch[:i], n
+}
+
 func (m *Module) resolveConflict(o ResolveOptions) error {
 	m.applyMu.Lock()
 	defer m.applyMu.Unlock()
@@ -147,85 +181,134 @@ func (m *Module) resolveConflict(o ResolveOptions) error {
 	if cr.GetString("status") != ConflictOpen {
 		return fmt.Errorf("conflict %s is already %s", o.ID, cr.GetString("status"))
 	}
-	col, err := m.app.FindCachedCollectionByNameOrId(cr.GetString("collection"))
-	if err != nil {
-		return fmt.Errorf("collection %q no longer exists", cr.GetString("collection"))
-	}
-	recID, node := cr.GetString("record"), cr.GetString("node")
-
-	var patch map[string]any
 	resolution := ResolutionRejected
 	switch o.Take {
 	case TakeHub:
 	case TakeIncoming:
-		if patch, err = m.storedIncoming(cr); err != nil {
-			return err
-		}
 		resolution = ResolutionAccepted
 	case TakePatch:
 		if o.Data == nil {
 			return errors.New("no patch given")
 		}
-		patch, resolution = o.Data, ResolutionAccepted
+		resolution = ResolutionAccepted
 	default:
 		return fmt.Errorf("unknown --take %q (want hub, incoming or a patch.json file)", o.Take)
 	}
-	for k, v := range patch {
-		if s, ok := v.(string); ok && s == kernel.SensitiveMarker {
-			return fmt.Errorf("field %q is redacted in the conflict row; resolve with --take <patch.json> that holds the real value", k)
+
+	// the conflict plus, for a parked tx group, every other parked member: a
+	// transaction is accepted or refused as a whole
+	crs := []*core.Record{cr}
+	if _, txID, node, oseq := m.parkedOp(cr); txID != "" {
+		if o.Take == TakePatch {
+			return errors.New("a parked transaction group is resolved with --take hub or --take incoming (all members together)")
 		}
+		var seqs []int64
+		if err := m.app.DB().NewQuery("SELECT origin_seq FROM _changes WHERE node={:n} AND tx={:t} AND status='parked' AND origin_seq!={:s} ORDER BY origin_seq").
+			Bind(dbx.Params{"n": node, "t": txID, "s": oseq}).Column(&seqs); err != nil {
+			return err
+		}
+		for _, sq := range seqs {
+			other, err := m.app.FindFirstRecordByFilter(ConflictsCollection, "change={:c} && status='open'", dbx.Params{"c": node + ":" + strconv.FormatInt(sq, 10)})
+			if err == nil && other != nil {
+				crs = append(crs, other)
+			}
+		}
+		sort.SliceStable(crs, func(i, j int) bool { return changeSeq(crs[i]) < changeSeq(crs[j]) })
+	}
+
+	members := make([]resolveMember, 0, len(crs))
+	for _, c := range crs {
+		col, err := m.app.FindCachedCollectionByNameOrId(c.GetString("collection"))
+		if err != nil {
+			return fmt.Errorf("collection %q no longer exists", c.GetString("collection"))
+		}
+		mb := resolveMember{cr: c, col: col}
+		mb.op, _, _, _ = m.parkedOp(c)
+		switch o.Take {
+		case TakeIncoming:
+			if mb.patch, err = m.storedIncoming(c); err != nil {
+				return err
+			}
+		case TakePatch:
+			mb.patch = o.Data
+		}
+		for k, v := range mb.patch {
+			if s, ok := v.(string); ok && s == kernel.SensitiveMarker {
+				return fmt.Errorf("field %q is redacted in the conflict row; resolve with --take <patch.json> that holds the real value", k)
+			}
+		}
+		members = append(members, mb)
 	}
 	by := o.By
 	if by == "" {
 		by = "cli"
 	}
-	return m.app.RunInTransaction(func(tx kernel.App) error {
-		// a parked change leaves `parked` here (P4-2): rejected with a revert when
-		// the operator keeps the hub state, closed as accepted when its patch (or
-		// Data) was applied as a normal hub write below
-		parkedSeq := m.parkedSeqOf(tx, cr.GetString("change"))
-		revertDone := false
-		if parkedSeq > 0 && resolution == ResolutionRejected {
-			if err := m.RejectParked(tx, parkedSeq, proto.CodeParkResolved, by); err != nil {
+	err = m.app.RunInTransaction(func(tx kernel.App) error {
+		reverted := map[string]bool{}
+		for _, mb := range members {
+			c, col := mb.cr, mb.col
+			recID, node := c.GetString("record"), c.GetString("node")
+			// a parked change leaves `parked` here (P4-2): rejected with a revert when
+			// the operator keeps the hub state, closed as accepted when its patch (or
+			// Data) was applied as a normal hub write below
+			parkedSeq := m.parkedSeqOf(tx, c.GetString("change"))
+			revertDone := false
+			if parkedSeq > 0 && resolution == ResolutionRejected {
+				if err := m.RejectParked(tx, parkedSeq, proto.CodeParkResolved, by); err != nil {
+					return err
+				}
+				revertDone = true
+			}
+			if o.Take != TakeHub {
+				if err := m.adminWrite(tx, col, mb.op, recID, node, c.GetString("actor"), mb.patch); err != nil {
+					return err
+				}
+			}
+			if parkedSeq > 0 && !revertDone {
+				if _, err := tx.NonconcurrentDB().NewQuery("UPDATE _changes SET status='rejected', code={:c} WHERE seq={:s} AND status='parked'").
+					Bind(dbx.Params{"c": proto.CodeParkAccepted, "s": parkedSeq}).Execute(); err != nil {
+					return err
+				}
+			}
+			if k := node + "/" + col.Id + "/" + recID; node != "" && node != m.hub.id && !revertDone && !reverted[k] {
+				reverted[k] = true
+				if _, err := m.insertRevert(tx, node, col.Id, recID, nil); err != nil {
+					return err
+				}
+			}
+			cr2, err := tx.FindRecordById(ConflictsCollection, c.Id)
+			if err != nil {
 				return err
 			}
-			revertDone = true
-		}
-		if len(patch) > 0 {
-			isCreate := false
-			if parkedSeq > 0 {
-				var op string
-				_ = tx.NonconcurrentDB().NewQuery("SELECT op FROM _changes WHERE seq={:s}").Bind(dbx.Params{"s": parkedSeq}).Row(&op)
-				isCreate = op == OpCreate
+			cr2.Set("status", ConflictResolved)
+			cr2.Set("resolution", resolution)
+			cr2.Set("resolved_by", by)
+			cr2.Set("resolved_at", m.created())
+			if o.Note != "" {
+				cr2.Set("note", strings.TrimSpace(cr2.GetString("note")+" | "+o.Note))
 			}
-			if err := m.adminWrite(tx, col, recID, node, cr.GetString("actor"), patch, isCreate); err != nil {
+			if err := tx.SaveNoValidate(cr2); err != nil {
 				return err
 			}
 		}
-		if parkedSeq > 0 && !revertDone {
-			if _, err := tx.NonconcurrentDB().NewQuery("UPDATE _changes SET status='rejected', code={:c} WHERE seq={:s} AND status='parked'").
-				Bind(dbx.Params{"c": proto.CodeParkAccepted, "s": parkedSeq}).Execute(); err != nil {
-				return err
-			}
-		}
-		if node != "" && node != m.hub.id && !revertDone {
-			if _, err := m.insertRevert(tx, node, col.Id, recID, nil); err != nil {
-				return err
-			}
-		}
-		cr2, err := tx.FindRecordById(ConflictsCollection, o.ID)
-		if err != nil {
-			return err
-		}
-		cr2.Set("status", ConflictResolved)
-		cr2.Set("resolution", resolution)
-		cr2.Set("resolved_by", by)
-		cr2.Set("resolved_at", m.created())
-		if o.Note != "" {
-			cr2.Set("note", strings.TrimSpace(cr2.GetString("note")+" | "+o.Note))
-		}
-		return tx.SaveNoValidate(cr2)
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+	for _, mb := range members {
+		emit(AuditConflictResolve, mb.col.Id, mb.cr.GetString("record"), map[string]any{
+			"conflict": mb.cr.Id, "take": o.Take, "resolution": resolution, "op": mb.op, "by": by, "node": mb.cr.GetString("node"),
+		})
+	}
+	return nil
+}
+
+// changeSeq is the origin_seq of the change a conflict row refers to.
+func changeSeq(cr *core.Record) int64 {
+	ch := cr.GetString("change")
+	n, _ := strconv.ParseInt(ch[strings.LastIndexByte(ch, ':')+1:], 10, 64)
+	return n
 }
 
 // storedIncoming returns the real pushed patch of a conflict: the one kept in
@@ -259,9 +342,22 @@ func (m *Module) storedIncoming(cr *core.Record) (map[string]any, error) {
 // every node receives by pull. A grant that is no longer valid falls back to the
 // service actor of the node; without one the resolution is refused (use
 // --take hub, or fix the actor first).
-func (m *Module) adminWrite(tx kernel.App, col *core.Collection, recID, nodeID, actor string, patch map[string]any, create bool) error {
+func (m *Module) adminWrite(tx kernel.App, col *core.Collection, op, recID, nodeID, actor string, patch map[string]any) error {
+	if op == OpUpdate && len(patch) == 0 {
+		return nil
+	}
 	existing, _ := tx.FindRecordById(col.Id, recID)
-	if existing == nil && !create {
+	create := op == OpCreate
+	switch {
+	case op == OpDelete && existing == nil:
+		return nil // already gone: nothing to apply
+	case create && existing != nil:
+		return fmt.Errorf("record %s already exists in %s", recID, col.Name)
+	case create:
+		if k := tombstoneKind(tx.NonconcurrentDB(), col.Id, recID); k != "" {
+			return fmt.Errorf("record %s was deleted or purged (%s tombstone): it cannot be created again", recID, k)
+		}
+	case existing == nil:
 		return fmt.Errorf("record %s no longer exists in %s", recID, col.Name)
 	}
 	p, err := m.pol.For(col)
@@ -275,13 +371,16 @@ func (m *Module) adminWrite(tx kernel.App, col *core.Collection, recID, nodeID, 
 	for _, f := range syncedFields(col, p) {
 		allowed[f.GetName()] = f
 	}
-	if existing != nil {
-		if rj := validateTyped(p.Types, allowed, patch, false); rj != nil {
+	if op != OpDelete {
+		if rj := validateTyped(p.Types, allowed, patch, create); rj != nil {
 			return rj
 		}
 	}
 	body := map[string]any{}
 	for _, name := range sortedKeys(patch) {
+		if op == OpDelete {
+			break
+		}
 		f, ok := allowed[name]
 		if !ok {
 			return fmt.Errorf("field %q is not a synced field of %s", name, col.Name)
@@ -289,22 +388,22 @@ func (m *Module) adminWrite(tx kernel.App, col *core.Collection, recID, nodeID, 
 		if f.Type() == kernel.FieldTypeAutodate {
 			continue // regenerated by the write
 		}
-		if existing == nil {
+		if create {
 			// a parked create holds the whole state: plain values, no operations
 			if !isZeroValue(patch[name]) {
 				body[name] = patch[name]
 			}
 			continue
 		}
-		if op, typed := opOf(p.Types, name, patch[name]); typed {
-			for mk, mv := range typedModifiers(name, op) {
+		if o, typed := opOf(p.Types, name, patch[name]); typed {
+			for mk, mv := range typedModifiers(name, o) {
 				body[mk] = mv
 			}
 		} else {
 			body[name] = patch[name]
 		}
 	}
-	if len(body) == 0 {
+	if len(body) == 0 && op == OpUpdate {
 		return nil
 	}
 	aid := actor
@@ -319,11 +418,15 @@ func (m *Module) adminWrite(tx kernel.App, col *core.Collection, recID, nodeID, 
 	} else {
 		return fmt.Errorf("the original actor can no longer be resolved (%s) and node %s has no service actor", rj.msg, nodeID)
 	}
-	req := &core.InternalRequest{Method: http.MethodPatch, URL: "/api/collections/" + col.Id + "/records/" + recID, Body: body}
-	if existing == nil {
+	base := "/api/collections/" + col.Id + "/records"
+	req := &core.InternalRequest{Method: http.MethodPatch, URL: base + "/" + recID, Body: body}
+	switch op {
+	case OpCreate:
 		// accepting a parked create: the record is created with the id of the node
 		body["id"] = recID
-		req = &core.InternalRequest{Method: http.MethodPost, URL: "/api/collections/" + col.Id + "/records", Body: body}
+		req = &core.InternalRequest{Method: http.MethodPost, URL: base, Body: body}
+	case OpDelete:
+		req = &core.InternalRequest{Method: http.MethodDelete, URL: base + "/" + recID}
 	}
 	_, err = apis.ReplayRecordRequestsFrom(context.Background(), core.AsApp(tx), arec, "",
 		map[string]string{proto.HeaderSyncNode: nodeID}, []*core.InternalRequest{req})

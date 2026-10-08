@@ -75,6 +75,9 @@ func (h *Host) onSyncConflict(e *kernel.SyncConflictEvent) error {
 	}
 	in := buildSyncIn(e)
 	dl := time.Now().Add(syncConflictBudget)
+	if !e.Deadline.IsZero() && e.Deadline.Before(dl) {
+		dl = e.Deadline // the budget of the whole push
+	}
 	for _, m := range mods {
 		ev := &EventIn{Event: "sync.conflict." + e.Collection.Name, Kind: "sync", Phase: "before",
 			Collection: e.Collection.Name, Sync: in, Actor: Actor{Kind: "system"}}

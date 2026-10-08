@@ -113,6 +113,11 @@ func (m *Module) pullHandler(e *core.RequestEvent) error {
 			e.App.Logger().Error("sync: pull failed", "node", nodeID, "error", err)
 			return syncErr(e, http.StatusInternalServerError, "sync_internal", "pull failed", nil)
 		}
+		if low := m.lowWater(); after < low {
+			// a compaction committed between the check above and the page query: the
+			// page may lack deleted rows, the cursor must not move past them (P56-13)
+			return syncErr(e, http.StatusGone, proto.CodeRebootstrap, "The cursor is older than the retained changes; re-bootstrap.", map[string]any{"low_water": low})
+		}
 		if wait == 0 || len(resp.Changes) > 0 || resp.More || resp.Next > after {
 			return e.JSON(http.StatusOK, resp)
 		}
@@ -151,6 +156,7 @@ func (m *Module) buildPull(app kernel.App, nodeID string, after, head int64, lim
 	if head <= after {
 		return resp, nil
 	}
+	m.sentOnce.Do(m.initSentLegacy)
 	vw := newViewer(app, nodeID, serviceActor(app, nodeID))
 	// partitions (§3.5): rows of other partitions never leave the database
 	pex, pparams, err := m.partitionExclusion(vw)
@@ -300,7 +306,7 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 		if hasMeta {
 			pc.HLC, pc.Node = hlc.HLC(mh).String(), mn
 		}
-		pc.Fields = m.fieldClockWire(db, col, p, r.Record, nil)
+		pc.Fields = m.fieldClockWire(db, col, p, r.Record, vals) // only fields the node may read (P56-18)
 		return pc, true, nil
 	}
 
@@ -314,6 +320,7 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 		return pc, false, nil // view rule null: superusers only, never pulled unless trusted (§7.7)
 	}
 	enter := false
+	tracked := m.sentTracked(vw, col, p)
 	if m.pullRuleOn(vw, p) && col.ViewRule != nil && *col.ViewRule != "" && r.Op == OpUpdate {
 		// a restrictive view rule can make a record visible by an update: the node may
 		// not have it, so the update travels as the whole record (an upsert)
@@ -329,12 +336,18 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 		case !newIn && !oldIn:
 			return pc, false, nil
 		case oldIn && !newIn && r.Op != OpDelete:
+			if tracked && !m.wasSent(vw.nodeID, col.Id, r.Record) {
+				return pc, false, nil
+			}
 			return evictChange(pc), true, nil // the record left the partition
 		case newIn && !oldIn && r.Op == OpUpdate:
 			enter = true // the record entered the partition: send it whole
 		}
 	}
 	if r.Op == OpDelete {
+		if tracked && !m.wasSent(vw.nodeID, col.Id, r.Record) {
+			return pc, false, nil // the node never had it: it learns nothing
+		}
 		pc.Patch = json.RawMessage(`{}`)
 		return pc, true, nil
 	}
@@ -342,7 +355,7 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 	if err := json.Unmarshal([]byte(r.Patch), &patch); err != nil {
 		return pc, false, err
 	}
-	if r.Op == OpUpdate && len(patch) == 0 {
+	if r.Op == OpUpdate && len(patch) == 0 && !enter {
 		return pc, false, nil // a push that changed nothing
 	}
 	// only synced, readable fields travel (P3-10): fields that left the sync set
@@ -358,10 +371,13 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 		return pc, false, err
 	}
 	if !vr.visible {
-		if r.Op == OpUpdate {
-			return evictChange(pc), true, nil // it may have been sent before: drop it
+		if r.Op == OpUpdate && (!tracked || m.wasSent(vw.nodeID, col.Id, r.Record)) {
+			return evictChange(pc), true, nil // it was sent before: drop it
 		}
 		return pc, false, nil
+	}
+	if tracked {
+		m.markSent(vw.nodeID, col.Id, r.Record)
 	}
 	if enter {
 		vals, err := fieldValues(rec, fields, p.Types)

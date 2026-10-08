@@ -3,10 +3,12 @@
 package sync
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
@@ -17,6 +19,13 @@ import (
 // The glue between the hub apply pipeline and the pure resolver (resolve.go):
 // it gathers the inputs of a concurrent change, runs the `hook` strategy
 // through kernel.OnSyncConflictFor, and writes the `_sync_conflicts` rows.
+
+var errHookBudget = errors.New("the hook time budget of this push is used up")
+
+// hookPushBudget is the total time the guests may spend on the conflicts of
+// ONE push (the hub holds applyMu meanwhile). A guest cannot run before the
+// lock is taken: its input is the stored state, which only the lock fixes.
+var hookPushBudget = 10 * time.Second // a variable for tests
 
 var errNoHookHandler = errors.New("no handler answered the sync conflict (is the wasm module loaded and subscribed?)")
 
@@ -95,6 +104,15 @@ func (m *Module) decide(tx kernel.App, nodeID string, c *hubChange, col *core.Co
 			return Resolution{}, err
 		}
 	}
+	if p.Strategy == StratFieldMerge && len(in.Clocks) == 0 && metaH > 0 {
+		// the policy was switched to field-merge after the record was last written:
+		// no field has a clock yet, and "clock 0 <= base" would let every old edit
+		// through. The record clock stands in for them (lww until clocks exist).
+		in.Clocks = map[string]hlc.HLC{}
+		for name := range c.patch {
+			in.Clocks[name] = hlc.HLC(metaH)
+		}
+	}
 	if p.Strategy == StratHook {
 		in.Hook = func() (d HookDecision) {
 			defer func() {
@@ -106,6 +124,12 @@ func (m *Module) decide(tx kernel.App, nodeID string, c *hubChange, col *core.Co
 			if hooks.Length() == 0 {
 				return HookDecision{Err: errNoHookHandler}
 			}
+			// the apply lock is held: all hook conflicts of one push share one
+			// budget, and after the first timeout the rest is parked unasked
+			if m.hookTripped || (!m.hookDeadline.IsZero() && !time.Now().Before(m.hookDeadline)) {
+				m.hookTripped = true
+				return HookDecision{Err: errHookBudget}
+			}
 			kind, aid, acol := actorInfo(tx, c.Actor)
 			clocks := make(map[string]uint64, len(in.Clocks))
 			for f, h := range in.Clocks {
@@ -116,9 +140,12 @@ func (m *Module) decide(tx kernel.App, nodeID string, c *hubChange, col *core.Co
 				Current: redactValues(col.Id, cur), CurrentHLC: uint64(metaH), CurrentNode: metaNode,
 				Incoming: kernel.SyncIncoming{Op: c.Op, Node: nodeID, HLC: uint64(c.hlc), BaseHLC: uint64(c.base),
 					Patch: redactValues(col.Id, c.patch), ActorKind: kind, ActorID: aid, ActorCollection: acol},
-				FieldClocks: clocks,
+				FieldClocks: clocks, Deadline: m.hookDeadline,
 			}
 			if err := hooks.Trigger(ev); err != nil {
+				if errors.Is(err, context.DeadlineExceeded) || (!m.hookDeadline.IsZero() && !time.Now().Before(m.hookDeadline)) {
+					m.hookTripped = true
+				}
 				return HookDecision{Err: err}
 			}
 			if ev.Resolution == "" {

@@ -90,6 +90,17 @@ var ddl = []string{
   value TEXT
 )`,
 
+	// hub: records that were delivered to a node while the collection has a
+	// restrictive view rule with pull_view_rule on (docs/SYNC_DESIGN.md §3.5):
+	// evict and delete rows are only sent for records the node ever received.
+	`CREATE TABLE IF NOT EXISTS _sync_sent (
+  node       TEXT NOT NULL,
+  collection TEXT NOT NULL,
+  record     TEXT NOT NULL,
+  PRIMARY KEY (node, collection, record)
+) WITHOUT ROWID`,
+	`CREATE INDEX IF NOT EXISTS idx__sync_sent_rec ON _sync_sent (collection, record)`,
+
 	// hub: actor grants (docs/SYNC_DESIGN.md §1.6). iat/exp are unix ms.
 	`CREATE TABLE IF NOT EXISTS _sync_actor_grants (
   aid        TEXT PRIMARY KEY,

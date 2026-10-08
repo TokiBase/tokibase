@@ -42,7 +42,7 @@ func (m *Module) ackHandler(e *core.RequestEvent) error {
 				resp.DigestMismatch = append(resp.DigestMismatch, k)
 				continue
 			}
-			if p, perr := m.pol.For(col); perr == nil && p != nil && (p.PartField != "" || p.PullViewRule) {
+			if p, perr := m.pol.For(col); perr == nil && p != nil && (p.PartField != "" || m.viewScoped(col, p)) {
 				continue // the node holds a subset: its digest can not equal the hub's
 			}
 			d, _, err := metaDigest(e.App.DB(), col.Id)

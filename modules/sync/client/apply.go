@@ -144,7 +144,7 @@ func (c *Client) applyChangeMode(tx kernel.App, ch *proto.PullChange, mode kerne
 	case "p":
 		return c.applyPurge(tx, ctx, col, ch, h)
 	case "x":
-		return c.applyEvict(tx, ctx, col, ch)
+		return c.applyEvict(tx, ctx, col, ch, h)
 	case "c", "u":
 		return c.applyUpsert(tx, ctx, col, pv, ch, h)
 	}

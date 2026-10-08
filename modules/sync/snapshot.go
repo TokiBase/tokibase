@@ -154,6 +154,12 @@ func (m *Module) snapshotStartHandler(e *core.RequestEvent) error {
 	if err != nil {
 		return err
 	}
+	m.sentOnce.Do(m.initSentLegacy)
+	// a bootstrap starts the node over: the pages below fill `_sync_sent` with what
+	// it receives, so the node is no longer "legacy" (sent.go)
+	db := m.app.NonconcurrentDB()
+	_, _ = db.NewQuery("DELETE FROM _sync_sent WHERE node={:n}").Bind(dbx.Params{"n": nodeID}).Execute()
+	_, _ = db.NewQuery("DELETE FROM _sync_state WHERE key={:k}").Bind(dbx.Params{"k": "sent_legacy:" + nodeID}).Execute()
 	resp := proto.SnapshotStart{
 		SnapshotID: id, StartSeq: start, ServerTime: now.UTC().Format(proto.TimeLayout),
 		Expires: exp.UTC().Format(proto.TimeLayout), HubEpoch: m.hub.epoch,
@@ -210,11 +216,11 @@ func (m *Module) snapshotPageHandler(e *core.RequestEvent) error {
 // recordScope is the single filter that decides what a node may receive of a
 // record (partition, view rule, hidden fields). The snapshot uses it; pull
 // applies the same rules row by row in pullChange.
-func (v *viewer) recordScope(rec *core.Record, p *policy) (bool, map[string]struct{}, error) {
+func (m *Module) recordScope(v *viewer, rec *core.Record, p *policy) (bool, map[string]struct{}, error) {
 	if !v.inPartition(rec, p) {
 		return false, nil, nil
 	}
-	vr, err := v.view(rec, p, p.PullViewRule)
+	vr, err := m.visibleForNode(v, p, rec)
 	if err != nil {
 		return false, nil, err
 	}
@@ -247,7 +253,7 @@ func (m *Module) buildSnapshotPage(app kernel.App, nodeID string, col *core.Coll
 			}
 			for _, rec := range batch {
 				scanned = rec.Id
-				ok, hidden, err := vw.recordScope(rec, p)
+				ok, hidden, err := m.recordScope(vw, rec, p)
 				if err != nil {
 					return nil, err
 				}
@@ -295,7 +301,7 @@ func (m *Module) buildSnapshotPage(app kernel.App, nodeID string, col *core.Coll
 		tq += " AND record <= {:u}"
 		params["u"] = upper
 	}
-	scoped := p.PartField != "" || p.PullViewRule
+	scoped := p.PartField != "" || m.sentTracked(vw, col, p) // an open or trusted-null view rule hides nothing
 	if scoped {
 		// a deleted record can not be checked against the partition or the view
 		// rule of the node: its id, clock and origin must not leak (review P56-3)
@@ -335,6 +341,12 @@ func (m *Module) buildSnapshotPage(app kernel.App, nodeID string, col *core.Coll
 			}
 		}
 		page.Records = keep
+	}
+	if m.sentTracked(vw, col, p) {
+		// the node now holds these records: later evict/delete rows may name them
+		for _, r := range page.Records {
+			m.markSent(nodeID, col.Id, r.ID)
+		}
 	}
 	page.More = recMore || tombMore
 	switch {

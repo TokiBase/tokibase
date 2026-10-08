@@ -4,6 +4,8 @@ package sync
 
 import (
 	"encoding/json"
+	"slices"
+	"strings"
 	stdsync "sync"
 	"time"
 
@@ -142,19 +144,39 @@ func (c *policyCache) load() (map[string]*policy, error) {
 		}
 		p.Order = r.GetInt("order")
 		p.PullViewRule, p.Trusted = r.GetBool("pull_view_rule"), r.GetBool("trusted")
+		// fail closed: a row that cannot be parsed (SaveNoValidate, import, restore,
+		// manual SQL, a spoke that got the row from the hub) must not widen what
+		// travels, so the collection is not synced at all until the row is fixed
+		var bad []string
 		if pf, pp, perr := parsePartition(r.GetString("partition")); perr == nil {
 			p.PartField, p.PartParam = pf, pp
+		} else {
+			bad = append(bad, "partition: "+perr.Error())
 		}
 		if raw := rawJSON(r, "field_types"); raw != nil {
-			_ = json.Unmarshal(raw, &p.Types)
+			if err := json.Unmarshal(raw, &p.Types); err != nil {
+				bad = append(bad, "field_types: "+err.Error())
+			}
 		}
 		if raw := rawJSON(r, "exclude"); raw != nil {
 			var ex []string
-			if json.Unmarshal(raw, &ex) == nil {
-				for _, f := range ex {
-					p.Exclude[f] = struct{}{}
-				}
+			if err := json.Unmarshal(raw, &ex); err != nil {
+				bad = append(bad, "exclude: "+err.Error())
 			}
+			for _, f := range ex {
+				p.Exclude[f] = struct{}{}
+			}
+		}
+		if !slices.Contains(policyStrategies, p.Strategy) {
+			bad = append(bad, "unknown strategy "+p.Strategy)
+		}
+		if !slices.Contains(policyDirections, p.Direction) {
+			bad = append(bad, "unknown direction "+p.Direction)
+		}
+		if len(bad) > 0 {
+			c.m.app.Logger().Error("sync: invalid policy row, the collection is NOT synced until it is fixed (see `toki sync policies lint`)",
+				"collection", r.GetString("collection"), "problems", strings.Join(bad, "; "))
+			p.Direction, p.PartField, p.PartParam = DirNone, "", ""
 		}
 		ref := r.GetString("collection")
 		out[ref] = p

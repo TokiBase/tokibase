@@ -230,9 +230,11 @@ func (m *Module) capture(tx kernel.App, e *core.RecordEvent, op string, p *polic
 	case OpUpdate:
 		var meaningful bool
 		patch, meaningful = diffPatch(fields, p, pre, post)
-		if !meaningful {
+		if !meaningful && partValue(rec, p) == partOld {
 			// nothing but derived/autodate changes: no change row, but the
-			// stored row did change, so keep _sync_meta.hash equal to its hash
+			// stored row did change, so keep _sync_meta.hash equal to its hash.
+			// A change of the partition key alone still gets a row: nodes have
+			// to evict / receive the record (P56-4).
 			return refreshMetaHash(db, col.Id, id, hash)
 		}
 	}

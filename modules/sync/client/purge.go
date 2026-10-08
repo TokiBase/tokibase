@@ -4,6 +4,7 @@ package client
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/pocketbase/dbx"
@@ -41,15 +42,45 @@ func (c *Client) applyPurge(tx kernel.App, ctx context.Context, col *core.Collec
 	}
 	// erasure also reaches the local log: pending changes keep their place in the
 	// sequence but carry no data (the hub refuses them with legal_tombstone)
-	_, err := db.NewQuery("UPDATE _changes SET patch='{}', hash=NULL WHERE collection={:c} AND record={:r} AND (patch!='{}' OR hash IS NOT NULL)").
-		Bind(dbx.Params{"c": col.Id, "r": ch.Record}).Execute()
-	return deleted, err
+	_, err := db.NewQuery("UPDATE _changes SET patch='{}', hash=NULL WHERE collection IN ({:c},{:n}) AND record={:r} AND (patch!='{}' OR hash IS NOT NULL)").
+		Bind(dbx.Params{"c": col.Id, "n": col.Name, "r": ch.Record}).Execute()
+	if err != nil {
+		return deleted, err
+	}
+	// the local copies of the data in `_sync_conflicts` (pushed patches that were
+	// superseded or rejected, edits discarded by a revert) are erased too (P56-6)
+	return deleted, blankLocalConflicts(tx, col, ch.Record)
+}
+
+// blankLocalConflicts erases every JSON copy and the note of the spoke-local
+// `_sync_conflicts` rows of a record (matched by collection id and name).
+func blankLocalConflicts(tx kernel.App, col *core.Collection, record string) error {
+	cc, err := tx.FindCachedCollectionByNameOrId(conflictsCollection)
+	if err != nil || cc == nil {
+		return nil
+	}
+	var sets []string
+	for _, f := range cc.Fields {
+		if f.Type() == kernel.FieldTypeJSON {
+			sets = append(sets, "[["+f.GetName()+"]]=NULL")
+		}
+	}
+	if cc.Fields.GetByName("note") != nil {
+		sets = append(sets, "[[note]]=''")
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+	_, err = tx.NonconcurrentDB().NewQuery("UPDATE {{" + conflictsCollection + "}} SET " + strings.Join(sets, ", ") +
+		" WHERE [[collection]] IN ({:c},{:n}) AND [[record]]={:r}").
+		Bind(dbx.Params{"c": col.Id, "n": col.Name, "r": record}).Execute()
+	return err
 }
 
 // applyEvict applies op "x": the record left the partition (or the view rule) of
 // this node. The local copy is deleted WITHOUT a tombstone, so the record can
 // come back when it re-enters.
-func (c *Client) applyEvict(tx kernel.App, ctx context.Context, col *core.Collection, ch *proto.PullChange) (bool, error) {
+func (c *Client) applyEvict(tx kernel.App, ctx context.Context, col *core.Collection, ch *proto.PullChange, h hlc.HLC) (bool, error) {
 	rec, _ := tx.FindRecordById(col.Id, ch.Record)
 	if rec == nil {
 		return false, nil
@@ -57,8 +88,10 @@ func (c *Client) applyEvict(tx kernel.App, ctx context.Context, col *core.Collec
 	if err := tx.DeleteWithContext(ctx, rec); err != nil {
 		return false, err
 	}
-	// the replica capture wrote a delete tombstone; an eviction is not a delete
-	_, err := tx.NonconcurrentDB().NewQuery("DELETE FROM _sync_tombstones WHERE collection={:c} AND record={:r} AND kind='delete'").
-		Bind(dbx.Params{"c": col.Id, "r": ch.Record}).Execute()
+	// the replica capture wrote a delete tombstone for the record and for every
+	// cascade child (they carry the HLC and node of this change); an eviction is
+	// not a delete, so none of them may stay
+	_, err := tx.NonconcurrentDB().NewQuery("DELETE FROM _sync_tombstones WHERE kind='delete' AND ((collection={:c} AND record={:r}) OR (hlc={:h} AND node={:n}))").
+		Bind(dbx.Params{"c": col.Id, "r": ch.Record, "h": int64(h), "n": ch.Node}).Execute()
 	return true, err
 }

@@ -3,6 +3,7 @@
 package sync
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -174,7 +175,11 @@ func SetPolicy(app core.App, ref string, ch PolicyChange) (*core.Record, error) 
 	if ch.Exclude != nil {
 		rec.Set("exclude", ch.Exclude)
 	}
-	if err := app.Save(rec); err != nil {
+	ctx := context.Background()
+	if ch.PullViewRule != nil {
+		ctx = withExplicitViewRule(ctx)
+	}
+	if err := app.SaveWithContext(ctx, rec); err != nil {
 		return nil, err
 	}
 	return rec, nil

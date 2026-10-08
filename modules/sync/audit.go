@@ -19,6 +19,10 @@ const (
 	AuditReject          = "sync.reject"
 	AuditActorGrant      = "sync.actor.grant"
 	AuditActorRevoke     = "sync.actor.revoke"
+	// AuditConflictResolve is a resolved conflict (--take hub|incoming|patch);
+	// AuditCompact is one compaction run that deleted something or marked nodes stale.
+	AuditConflictResolve = "sync.conflict.resolve"
+	AuditCompact         = "sync.compact"
 )
 
 var (

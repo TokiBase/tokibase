@@ -364,6 +364,23 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 		if derr != nil {
 			return nil, derr
 		}
+		if d.Verdict == VerdictApply && p.Strategy == StratHook && d.Merged {
+			// the patch of a hook merge is guest output: it gets the same checks as
+			// a pushed patch (typed fields, partition) before anything is written
+			if rj := validateTyped(p.Types, allowed, d.Patch, false); rj != nil {
+				return nil, rj
+			}
+			if p.PartField != "" {
+				if _, ok := allowed[p.PartField]; ok {
+					if v, has := d.Patch[p.PartField]; has {
+						pr.partAfter = partString(v)
+					}
+				}
+				if !partOK || pr.partAfter != nodePart {
+					return nil, reject(proto.CodePolicyPartition, "the merged change would put the record outside the partition of the node")
+				}
+			}
+		}
 		if err := m.settle(tx, nodeID, c, col, d); err != nil {
 			return nil, err
 		}
