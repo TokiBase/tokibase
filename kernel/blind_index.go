@@ -171,6 +171,12 @@ func (r *runner) attachBlindIndex(collection *Collection, fieldName, modifier st
 		}
 
 		if !literal {
+			// ciphertexts carry a random nonce: two encrypted columns (also
+			// @request.auth.<encrypted field>, a join to the auth record) never
+			// compare equal, so "!=" would be true for everybody.
+			if eqOp && other.BeforeBuild != nil {
+				return fail("cannot be compared with another encrypted field (including @request.auth.<encrypted field>)")
+			}
 			if strict {
 				return fail("only = != ?= ?!= against a non-empty string are supported on a blind-index field")
 			}
