@@ -76,6 +76,10 @@ wait_health "https://127.0.0.1:$TLS_HUB" 20 --cacert "$TMP/root.pem" || fail "hu
 if curl -fs "https://127.0.0.1:$TLS_HUB/api/health" >/dev/null 2>&1; then fail "the TLS listener must not verify without the private root"; fi
 log "hub TLS ok"
 
+# the deny list reaches the spoke through a pull-only policy on _device_certs
+# (set before the spoke handshakes: a node reads the policies at its handshake)
+toki hub "$HUB" "$TLS_HUB" sync policies set _device_certs --direction pull >/dev/null || fail "policy on _device_certs"
+
 # ---- spoke ----
 SU_ID="$(curl -fsS "$URL_HUB/api/collections/_superusers/auth-with-password" -H 'Content-Type: application/json' \
   -d "{\"identity\":\"$EMAIL\",\"password\":\"$PASS\"}" | jget 'd["record"]["id"]')"
@@ -120,8 +124,6 @@ TOK="$(curl -fsS "$URL_S1/api/collections/_superusers/auth-with-password" -H 'Co
 curl -fsS "$URL_S1/api/health" -H "Authorization: $TOK" | jget 'd["data"]["devicecert"]["listening"]' | grep -q True || fail "health extra"
 
 # ---- PR 7: client certificates, route scope, revocation through the deny list ----
-# the deny list reaches the spoke through a pull-only policy on _device_certs
-toki hub "$HUB" "$TLS_HUB" sync policies set _device_certs --direction pull >/dev/null || fail "policy on _device_certs"
 OUT="$TMP/peer"
 toki hub "$HUB" "$TLS_HUB" devicecert issue --name gate-ctrl-1 --days 90 --scope /api/scan --out "$OUT" >"$TMP/issue.txt" || fail "issue"
 [ -f "$OUT/gate-ctrl-1.key.pem" ] && [ -f "$OUT/gate-ctrl-1.crt.pem" ] && [ -f "$OUT/ca.pem" ] || fail "issue wrote no files"
