@@ -51,24 +51,29 @@ type viewResult struct {
 	hidden  map[string]struct{} // synced fields the actor may not read
 }
 
+type viewKey struct {
+	gkey
+	rule bool
+}
+
 // viewer evaluates visibility with a per page cache.
 type viewer struct {
 	app    kernel.App
 	nodeID string
 	actor  *core.Record
-	cache  map[gkey]*viewResult
+	cache  map[viewKey]*viewResult
 }
 
 func newViewer(app kernel.App, nodeID string, actor *core.Record) *viewer {
-	return &viewer{app: app, nodeID: nodeID, actor: actor, cache: map[gkey]*viewResult{}}
+	return &viewer{app: app, nodeID: nodeID, actor: actor, cache: map[viewKey]*viewResult{}}
 }
 
 // view reports whether the actor can view rec (view rule, when checkRule) and
 // which synced fields fieldperm hides from it.
 func (v *viewer) view(rec *core.Record, p *policy, checkRule bool) (*viewResult, error) {
 	col := rec.Collection()
-	k := gkey{col.Id, rec.Id}
-	if r, ok := v.cache[k]; ok && (r.visible || !checkRule) {
+	k := viewKey{gkey{col.Id, rec.Id}, checkRule}
+	if r, ok := v.cache[k]; ok {
 		return r, nil
 	}
 	ri := syncRequestInfo(v.actor, v.nodeID, http.MethodGet)
