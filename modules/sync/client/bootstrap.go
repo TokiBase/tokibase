@@ -29,9 +29,9 @@ import (
 // resumes at the next page. snapshot_after is "<collection id>/<last record id>"
 // while pages are applied, then one of the phase markers below:
 //
-//	!pull    all pages applied, pull_after = start_seq, pulling the log from there
+//	!ack     all pages applied, pull_after = start_seq: the hub is told (it reactivates a stale node)
+//	!pull    acked, pulling the log from start_seq
 //	!rebase  pulled, now the unpushed local changes are rebased onto the new state
-//	!ack     rebased, the hub is told that the bootstrap is complete
 //
 // A local change that was not pushed yet is never lost: before the first page it
 // is parked (status `rebase`, same row, same origin_seq), after the pull it is
@@ -281,7 +281,7 @@ func (c *Client) beginSnapshot(ctx context.Context) (*snapState, error) {
 	if len(cols) > 0 {
 		first = cols[0].ID + "/"
 	} else {
-		first = phasePull
+		first = phaseAck
 	}
 	err = c.o.App.RunInTransaction(func(tx kernel.App) error {
 		db := tx.NonconcurrentDB()
@@ -302,7 +302,7 @@ func (c *Client) beginSnapshot(ctx context.Context) (*snapState, error) {
 		if err := stateSet(db, stateKeyCols, string(colsJSON)); err != nil {
 			return err
 		}
-		if first == phasePull {
+		if first == phaseAck {
 			if _, err := db.NewQuery("UPDATE _sync_cursors SET pull_after={:s}").Bind(dbx.Params{"s": start.StartSeq}).Execute(); err != nil {
 				return err
 			}
@@ -385,7 +385,7 @@ func (c *Client) runSnapshot(ctx context.Context, st *snapState) error {
 			if idx+1 < len(st.Cols) {
 				next = st.Cols[idx+1].ID + "/"
 			} else {
-				next, last = phasePull, true
+				next, last = phaseAck, true
 			}
 		}
 		if err := c.applySnapshotPage(col, after, page, next, last, st.Start); err != nil {
@@ -397,6 +397,16 @@ func (c *Client) runSnapshot(ctx context.Context, st *snapState) error {
 	for {
 		_, _, phase := splitAfter(st.After)
 		switch phase {
+		case phaseAck:
+			// the node holds the snapshot: it is active again and has pulled start_seq
+			// (the pull below needs that, a node flagged stale is refused)
+			if _, err := c.ackWith(ctx, st.Start, nil, st.ID); err != nil {
+				return err
+			}
+			st.After = phasePull
+			if err := c.setCursorAfter(st.After); err != nil {
+				return err
+			}
 		case phasePull:
 			var res Result
 			if err := c.pullAll(ctx, &res); err != nil {
@@ -408,14 +418,6 @@ func (c *Client) runSnapshot(ctx context.Context, st *snapState) error {
 			}
 		case phaseRebase:
 			if _, _, err := c.rebaseParked(ctx); err != nil {
-				return err
-			}
-			st.After = phaseAck
-			if err := c.setCursorAfter(st.After); err != nil {
-				return err
-			}
-		case phaseAck:
-			if _, err := c.ackWith(ctx, st.Start, nil, st.ID); err != nil {
 				return err
 			}
 			return c.finishSnapshot()

@@ -52,6 +52,7 @@ func (c *Client) pullAll(ctx context.Context, res *Result) error {
 		return nil
 	}
 	pulled := false
+	refreshed := false
 	var through int64
 	for {
 		cur, err := LoadCursor(c.o.App)
@@ -68,6 +69,21 @@ func (c *Client) pullAll(ctx context.Context, res *Result) error {
 		}
 		if err != nil {
 			if IsCode(err, proto.CodeRebootstrap) {
+				if !refreshed {
+					// the session may predate a hub restore or failover: a fresh handshake
+					// shows a new epoch and takes the cursor back (§3.9) before a snapshot is needed
+					refreshed = true
+					c.dropToken()
+					c.loop.mu.Lock()
+					c.loop.needHS = true
+					c.loop.mu.Unlock()
+					if herr := c.ensureSession(ctx); herr != nil {
+						return herr
+					}
+					if now, _ := LoadCursor(c.o.App); now != nil && now.PullAfter != cur.PullAfter {
+						continue
+					}
+				}
 				c.markRebootstrap(0)
 				return ErrRebootstrap
 			}

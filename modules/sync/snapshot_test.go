@@ -83,6 +83,7 @@ func TestSnapshotBootstrapsANewNodeAfterCompaction(t *testing.T) {
 	h.create(t, map[string]any{"title": "after"})
 	c.sync(t)
 	a.sync(t)
+	b.sync(t)
 	requireConverged(t, h, a, b, c)
 }
 
@@ -105,11 +106,12 @@ func (f *failAfter) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func TestSnapshotResumesAfterANetworkLoss(t *testing.T) {
 	t.Setenv(client.EnvSnapshotPage, "10")
-	h, a, _ := hubFixture(t)
+	h, a, b := hubFixture(t)
 	for i := 0; i < 55; i++ {
 		h.create(t, map[string]any{"title": "rec " + strconv.Itoa(i)})
 	}
 	a.sync(t)
+	b.sync(t)
 	compactEverything(t, h)
 
 	s := newItemsSpoke(t, h, "gate-3")
