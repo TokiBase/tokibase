@@ -523,16 +523,17 @@ func TestPrune(t *testing.T) {
 		}
 	}
 	n, err := Prune(e.app, time.Now(), 14*24*time.Hour)
-	if err != nil || n != 1 {
+	if err != nil || n != 2 {
 		t.Fatalf("pruned %d, %v", n, err)
 	}
 	if _, err := e.app.FindRecordById(JobsCollection, oldDone); err == nil {
 		t.Fatal("old done job survived")
 	}
-	for _, id := range []string{newDone, oldDead} {
-		if _, err := e.app.FindRecordById(JobsCollection, id); err != nil {
-			t.Fatalf("job %s was pruned", id)
-		}
+	if _, err := e.app.FindRecordById(JobsCollection, oldDead); err == nil {
+		t.Fatal("old dead job survived")
+	}
+	if _, err := e.app.FindRecordById(JobsCollection, newDone); err != nil {
+		t.Fatal("a recent job was pruned")
 	}
 }
 

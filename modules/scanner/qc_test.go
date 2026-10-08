@@ -4,6 +4,8 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -137,7 +139,10 @@ func TestE9PublishIsOrdered(t *testing.T) {
 	}
 }
 
-func TestE9StalledClientIsDisconnected(t *testing.T) {
+func TestE9StalledClientIsBounded(t *testing.T) {
+	old := senderIdle
+	senderIdle = 50 * time.Millisecond
+	t.Cleanup(func() { senderIdle = old })
 	e := setup(t)
 	su, _ := e.app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test@example.com")
 	cl := subscriptions.NewDefaultClient()
@@ -146,19 +151,38 @@ func TestE9StalledClientIsDisconnected(t *testing.T) {
 	e.app.SubscriptionsBroker().Register(cl)
 	sc := defaultWeb()
 	sc.DedupeMs = -1
-	for i := 0; i < 3*senderQueue; i++ { // nobody reads the channel
-		_, _ = e.m.Ingest(context.Background(), sc, "STALL"+time.Duration(i).String(), IngestOptions{Source: "web"})
+	const total = 3 * senderQueue
+	for i := 0; i < total; i++ { // nobody reads the channel yet
+		_, _ = e.m.Ingest(context.Background(), sc, fmt.Sprintf("STALL%04d", i), IngestOptions{Source: "web"})
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	for !cl.IsDiscarded() && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+	e.m.sendMu.Lock()
+	n := len(e.m.senders)
+	e.m.sendMu.Unlock()
+	if n != 1 {
+		t.Fatalf("%d sender goroutines for one client", n)
 	}
-	if !cl.IsDiscarded() {
-		t.Fatal("a client that never reads must be disconnected")
+	// the client wakes up: it gets a bounded backlog that ends with the newest scan
+	var last string
+	count := 0
+	for {
+		select {
+		case msg := <-cl.Channel():
+			var o map[string]any
+			_ = json.Unmarshal(msg.Data, &o)
+			last = o["code"].(string)
+			count++
+			continue
+		case <-time.After(400 * time.Millisecond):
+		}
+		break
 	}
+	if count > senderQueue+2 || last != fmt.Sprintf("STALL%04d", total-1) {
+		t.Fatalf("received %d events, last %q", count, last)
+	}
+	cl.Discard()
 	for i := 0; i < 100; i++ {
 		e.m.sendMu.Lock()
-		n := len(e.m.senders)
+		n = len(e.m.senders)
 		e.m.sendMu.Unlock()
 		if n == 0 {
 			return

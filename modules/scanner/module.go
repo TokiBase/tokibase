@@ -211,18 +211,20 @@ func (m *Module) stillExists(rec *core.Record) bool {
 	return err == nil
 }
 
-const (
-	senderQueue = 64
-	senderIdle  = 30 * time.Second
-)
+const senderQueue = 64
+
+// senderIdle is how often an idle sender checks whether its client is gone.
+var senderIdle = 30 * time.Second
 
 // sender delivers the messages of one client in order, from one goroutine.
 type sender struct {
 	q chan subscriptions.Message
 }
 
-// send queues msg for c. A client that does not read (the queue is full) is
-// disconnected: it catches up with GET /api/scan/events?since=.
+// send queues msg for c. When a client does not read and its queue is full,
+// the oldest queued event is dropped: the client catches up with
+// GET /api/scan/events?since=. At most one goroutine and senderQueue events
+// are held per client.
 func (m *Module) send(c subscriptions.Client, msg subscriptions.Message) {
 	m.sendMu.Lock()
 	s := m.senders[c.Id()]
@@ -232,11 +234,17 @@ func (m *Module) send(c subscriptions.Client, msg subscriptions.Message) {
 		go m.runSender(c, s)
 	}
 	m.sendMu.Unlock()
-	select {
-	case s.q <- msg:
-	default:
-		m.app.Logger().Warn("scanner: a realtime client does not read, disconnecting it", "client", c.Id())
-		c.Discard() // unblocks its sender goroutine
+	for {
+		select {
+		case s.q <- msg:
+			return
+		default:
+		}
+		select {
+		case <-s.q: // drop the oldest
+			m.app.Logger().Warn("scanner: a realtime client does not read, dropping its oldest scan", "client", c.Id())
+		default:
+		}
 	}
 }
 
@@ -256,7 +264,7 @@ func (m *Module) runSender(c subscriptions.Client, s *sender) {
 			if c.IsDiscarded() {
 				return
 			}
-			c.Send(msg) // blocks while the client is busy; Discard ends it
+			c.Send(msg) // blocks while the client is busy; its Discard ends it
 		case <-t.C:
 			if c.IsDiscarded() {
 				return

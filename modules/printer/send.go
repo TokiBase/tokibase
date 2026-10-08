@@ -232,9 +232,10 @@ func (m *Module) transmit(ctx context.Context, p *Printer, payload []byte, copie
 	if hasStatus {
 		st, ok, err := queryStatus(conn, p.statusTimeout())
 		if err != nil {
-			// the data is out: do not print it a second time
+			// the connection broke after the write: the print may or may not
+			// have happened; retry (a duplicate is possible, see the docs)
 			m.setStatus(p.Name, "offline", err.Error())
-			return outUnconfirmed, "status unreadable after the write", nil
+			return outDone, "", err
 		}
 		if ok && (st.PaperEndStop || st.ErrorStop || st.MechError || st.CutterError || st.Unrecovered || st.CoverOpen) {
 			m.setStatus(p.Name, "paper", describe(st))
