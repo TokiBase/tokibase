@@ -620,7 +620,8 @@ func (pb *PocketBase) Start() error {
 	if printer.Enabled() {
 		pb.RootCmd.AddCommand(printer.NewCommand(pb))
 	}
-	pb.RootCmd.AddCommand(devicecert.NewCommand(pb))
+	// the providers are keyed by the base app, not by the PocketBase wrapper
+	pb.RootCmd.AddCommand(devicecert.NewCommand(pb.App.(core.App)))
 	pb.RootCmd.AddCommand(cmd.NewLockoutCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewSessionsCommand(pb))
 	pb.RootCmd.AddCommand(passkey.NewCommand(pb))
