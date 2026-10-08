@@ -50,6 +50,10 @@ type replicator struct {
 	dbs       []*dbState
 	startedAt time.Time
 	lease     *leaseManager
+
+	guardCancel context.CancelFunc
+	guardDone   chan struct{}
+	logger      *slog.Logger
 }
 
 func newReplicator(app kernel.App, cfg Config) (*replicator, error) {
@@ -99,12 +103,25 @@ func newReplicator(app kernel.App, cfg Config) (*replicator, error) {
 		st.db.SetLogger(slog.New(h).With("system", "walreplica", "replica", st.name))
 	}
 	r.store = store
+	r.logger = app.Logger()
 
 	return r, nil
 }
 
 func (r *replicator) open(ctx context.Context) error {
-	return r.store.Open(ctx)
+	if err := r.store.Open(ctx); err != nil {
+		return err
+	}
+	if r.cfg.MaxMB > 0 {
+		gctx, cancel := context.WithCancel(context.Background())
+		r.guardCancel = cancel
+		r.guardDone = make(chan struct{})
+		go func() {
+			defer close(r.guardDone)
+			r.runSizeGuard(gctx, r.logger)
+		}()
+	}
+	return nil
 }
 
 // syncNow uploads everything written so far (local WAL to LTX, LTX to replica).
@@ -123,6 +140,10 @@ func (r *replicator) syncNow(ctx context.Context) error {
 func (r *replicator) close() error {
 	if r.lease != nil {
 		r.lease.release()
+	}
+	if r.guardCancel != nil {
+		r.guardCancel()
+		<-r.guardDone
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownSyncTimeout)
 	defer cancel()

@@ -22,9 +22,12 @@ Local state: Litestream keeps a metadata directory next to each database (`pb_da
 | `TOKI_REPLICA_URL` | empty (inactive) | `file:///abs/path` or `s3://bucket/prefix` |
 | `TOKI_REPLICA_SYNC_INTERVAL` | `1s` | upload interval, the RPO |
 | `TOKI_REPLICA_RETENTION` | `24h` | how long snapshots (restore points) are kept |
-| `TOKI_REPLICA_SNAPSHOT_INTERVAL` | `1h` | full snapshot interval |
+| `TOKI_REPLICA_SNAPSHOT_INTERVAL` | `6h` | full snapshot interval (was `1h` before 2026-10-08) |
+| `TOKI_REPLICA_MAX_MB` | `4096` | replica size guard in MiB (all LTX files of both databases); `0` turns it off |
 
 Durations use Go syntax (`500ms`, `30s`, `24h`). An invalid value makes the app refuse to start.
+
+LTX compaction stays at Litestream's levels (L1 every 30 s, L2 every 5 min, L3 every hour, snapshots as configured). Compacted files are not deleted when they are merged: levels 1-3 and the snapshots older than `TOKI_REPLICA_RETENTION` are removed together, by the snapshot retention pass that runs after each snapshot. So the retention window and the snapshot interval decide the size (see Sizing).
 
 S3 credentials and endpoint use the standard AWS variables (the default AWS credential chain, so shared credentials files and instance roles also work):
 
@@ -56,6 +59,36 @@ AWS_ACCESS_KEY_ID=minio AWS_SECRET_ACCESS_KEY=minio12345 AWS_ENDPOINT_URL=http:/
 TOKI_REPLICA_URL=s3://tokibase/prod ./toki serve
 ```
 
+## Sizing
+
+What the replica holds, per database: a full snapshot (compressed, about a quarter of the database file) every `TOKI_REPLICA_SNAPSHOT_INTERVAL`, plus every change since the oldest kept snapshot in LTX files (levels 0-3). Nothing is deleted before `TOKI_REPLICA_RETENTION` has passed, so the steady state is about
+
+`replica size = (retention / snapshot interval + 1) x (compressed data.db + compressed auxiliary.db) + changes written during the retention window`
+
+and the point-in-time window is `retention` minus up to one snapshot interval (the oldest kept snapshot is the first one newer than `now - retention`).
+
+`auxiliary.db` holds the request logs and is usually the largest part: it receives a write per request and is replicated in full. Cap it with `TOKI_LOGS_MAX_MB` / `logs.maxDays`; the replica follows.
+
+Incident 2026-10-08 (7-day soak on `tokibuild`, `data.db` 58-76 MB, `auxiliary.db` 300 MB and growing, 20 clients 10 min per hour): the replica dir was 275 MB at start, 617 MB after 10 min and 1.6-1.7 GB after 5 h (484 files) while the databases and WAL stayed flat. Cause: no bug in pruning, the defaults. Snapshots every hour (`data` 28-32 MB, `aux` 38-75 MB each, growing with the logs) were all kept for 24 h, and all L1-L3 files since the oldest snapshot with them. Nothing is deleted before the first snapshot is 24 h old, so the first day only grows; the steady state with the old defaults is 24 snapshots, about 3.5-4 GB for this database, before the changes.
+
+Fix (this release): snapshot every 6 h (4-5 snapshots kept for 24 h, about 0.8 GB for the same database), the size guard `TOKI_REPLICA_MAX_MB`, `toki replica prune` and the sizes in `toki replica status`.
+
+Size guard: every 5 min (first check 1 min after start) the module sums the LTX files of both databases. Above `TOKI_REPLICA_MAX_MB` it logs a Warn (`replica is larger than TOKI_REPLICA_MAX_MB`) and prunes expired restore points early, halving the retention window (retention/2, /4, ... down to the newest snapshot only) until the replica fits. Each step logs a Warn `emergency prune` with the freed bytes. The newest snapshot and the files after it are never deleted, so the latest state stays restorable; only the point-in-time window shrinks. When even that is too big it logs an Error (`replica still larger than ...; raise the limit or shrink the database`); the replica then grows until you raise the limit or free space. `0` disables the guard.
+
+Measured with the soak data copied by `sqlite3 .backup` (`data.db` 76 MB, `auxiliary.db` 304 MB, 425 k log rows), one throwaway server per variant on `tokibuild`, 17 min of 8 write+read workers (about 100 requests/s, far heavier than the soak), time scaled 1 h = 30 s (old: snapshot 30 s, retention 12 min; new: snapshot 3 min, retention 12 min; both reach the retention window after about 12 min):
+
+| variant | after 2 min | steady state (12-16 min) | files |
+| --- | --- | --- | --- |
+| old defaults (snapshot 1 h : retention 24 h) | 1.3 GB | 5.6-5.7 GB | about 1670 |
+| new defaults (snapshot 6 h : retention 24 h) | 0.86 GB | 2.6-2.9 GB | about 1660 |
+| new defaults, `TOKI_REPLICA_MAX_MB` = 700 | 0.96 GB | 1.5-1.9 GB (guard pruned at 5, 10 and 15 min, then logged the Error: under this load the changes since the newest snapshot alone exceed the limit) | about 1620 |
+
+Under this stress load the changes written in the window dominate, so the saving is 2.2x; for the real soak profile (low write rate, large snapshots) the snapshot share dominates and the estimate above (24 -> 4-5 snapshots) applies. Check it with `toki replica status` after 24 h.
+
+`toki replica prune` on the new variant (retention 0) removed 3 snapshots and 47 files (997 MiB, 2650 -> 1653 MiB) and `toki replica restore` from the pruned replica gave a `data.db` with all 139300 records and a passing integrity check, so the RPO claim holds after pruning (also covered by `TestPruneKeepsLatestRestorable`).
+
+Moving a running replica to the new settings: set `TOKI_REPLICA_SNAPSHOT_INTERVAL=6h` (and optionally `TOKI_REPLICA_MAX_MB`) and restart the server; the next snapshot retention pass removes the snapshots that fall outside the window, or run `toki replica prune` once.
+
 ## Checkpoints and PocketBase maintenance
 
 PocketBase runs `PRAGMA wal_checkpoint(TRUNCATE)` nightly (cron `__pbDBOptimize__`) and before backups. A TRUNCATE checkpoint waits for all readers, which includes Litestream's read lock, and holds writers back while it waits. Litestream manages checkpoints itself (passive checkpoints by page count and time, truncating when the WAL grows large).
@@ -72,7 +105,7 @@ Built-in backups (`/api/backups`, autobackup) keep working and are independent: 
 - `lagSeconds` is 0 while the replica holds every captured transaction, otherwise the seconds since the last successful sync. `healthy` turns false on an unresolved error or when pending changes are older than `max(30s, 10 x sync interval)`.
 - Sync failures are logged at Error (at most one line per 30 s) as `walreplica` entries; the first error also shows up as `lastError` until a later sync succeeds.
 - `replica.lease` (same object) shows the lease: `{held, supported, nodeId, hostname, pid, startedAt, heartbeatAt}`. When another node holds the lease and replication was refused, `healthy` is false with `reason` `lease held by <hostname> since <t>` and `lease.held` is false.
-- `toki replica status [--url <url>] [--json]` reads the replica itself (no running app needed): newest transaction and its age, snapshots, oldest restore point, file count and bytes per database.
+- `toki replica status [--url <url>] [--json]` reads the replica itself (no running app needed): newest transaction and its age, snapshots, oldest restore point, oldest segment, file count and size per database, and a total line with the size limit, retention and snapshot interval. `--json` adds the size per level.
 
 ## CLI
 
@@ -80,10 +113,13 @@ Built-in backups (`/api/backups`, autobackup) keep working and are independent: 
 toki replica status [--url URL] [--json]
 toki replica restore --dir <pb_data> [--url URL] [--timestamp RFC3339] [--overwrite]
 toki replica snapshot
+toki replica prune [--url URL] [--retention 24h] [--dry-run]
 toki replica promote --url URL --dir <pb_data> [--timestamp RFC3339] [--force]
 ```
 
 `--url` defaults to `$TOKI_REPLICA_URL`. `status` and `restore` do not bootstrap the app. `--dir` is the global flag and is required for `restore`.
+
+`prune` deletes the snapshots older than `--retention` (default `$TOKI_REPLICA_RETENTION`) and the LTX files only they needed. The newest snapshot is never deleted. It is safe next to a running server (the server applies the same retention); `--dry-run` shows the effect first.
 
 `snapshot` starts replication in its own process, syncs, writes a snapshot of both databases and exits. Run it only when no server is replicating the same `pb_data` (two replicators on one database corrupt the replica history); a running server snapshots on its own every `TOKI_REPLICA_SNAPSHOT_INTERVAL`. For the same reason the short lived commands `superuser`, `rule`, `migrate`, `version` and `replica status|restore` never start replication.
 

@@ -102,6 +102,9 @@ func fillDefaults(c *Config) {
 	if c.SnapshotInterval <= 0 {
 		c.SnapshotInterval = DefaultSnapshotInterval
 	}
+	if c.MaxMB < 0 {
+		c.MaxMB = 0
+	}
 }
 
 func start(app kernel.App, cfg Config) error {
@@ -150,6 +153,7 @@ func start(app kernel.App, cfg Config) error {
 		slog.String("syncInterval", cfg.SyncInterval.String()),
 		slog.String("retention", cfg.Retention.String()),
 		slog.String("snapshotInterval", cfg.SnapshotInterval.String()),
+		slog.Int64("maxMB", cfg.MaxMB),
 	)
 	return nil
 }
