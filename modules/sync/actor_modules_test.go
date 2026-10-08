@@ -39,7 +39,6 @@ func TestFieldpermWriteRuleEnforcedInReplay(t *testing.T) {
 	}
 }
 
-
 func TestPullHidesFieldpermReadFields(t *testing.T) {
 	h, a, b := actorHub(t)
 	fieldperm.Register(h.app)
@@ -57,7 +56,6 @@ func TestPullHidesFieldpermReadFields(t *testing.T) {
 		t.Fatalf("pulled record: %v", got.FieldsData())
 	}
 }
-
 
 func TestBatchguardRunsForTxGroupsOnly(t *testing.T) {
 	h, a, _ := actorHub(t)
@@ -118,7 +116,6 @@ func TestBatchguardRunsForTxGroupsOnly(t *testing.T) {
 	}
 }
 
-
 func TestWebhookFiresOnceOnHubNotOnSpokePull(t *testing.T) {
 	t.Setenv("TOKI_WEBHOOK_ALLOW_PRIVATE", "1")
 	h, a, b := actorHub(t)
@@ -156,4 +153,3 @@ func TestWebhookFiresOnceOnHubNotOnSpokePull(t *testing.T) {
 		t.Fatalf("the origin spoke fired again (%d -> %d)", aLocal, n)
 	}
 }
-
