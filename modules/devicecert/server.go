@@ -4,6 +4,7 @@ package devicecert
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -146,6 +147,11 @@ func (m *Module) tlsConfig() *tls.Config {
 	if mode == MTLSOff {
 		return base
 	}
+	// explicit ticket keys, so every per-handshake clone of the config shares
+	// them; resumed sessions are checked by VerifyConnection like new ones
+	var tk [32]byte
+	_, _ = rand.Read(tk[:])
+	base.SetSessionTicketKeys([][32]byte{tk})
 	base.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
 		return m.clientConfig(base, mode), nil
 	}
