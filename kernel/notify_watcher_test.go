@@ -52,6 +52,10 @@ func TestNotifyWatcher_SettingsUpdate(t *testing.T) {
 	})
 
 	app2.OnSettingsReload().BindFunc(func(e *kernel.SettingsReloadEvent) error {
+		// run the reload first so that the settings are fully loaded
+		// (and no longer written) before the test is notified
+		err := e.Next()
+
 		testEvents.SetFunc(app2, func(old int) int {
 			defer func() {
 				done <- struct{}{}
@@ -59,7 +63,7 @@ func TestNotifyWatcher_SettingsUpdate(t *testing.T) {
 
 			return old + 1
 		})
-		return e.Next()
+		return err
 	})
 
 	// updating app1 settings should trigger a reload in app2
