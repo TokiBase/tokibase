@@ -6,16 +6,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/modules/sessions"
 	"github.com/tokibase/tokibase/tests"
+	"github.com/tokibase/tokibase/tools/security"
 )
 
 type clock struct {
@@ -265,52 +268,138 @@ func TestBindIP(t *testing.T) {
 
 func TestPinBackoffInjectedClock(t *testing.T) {
 	e := setup(t, false)
+	e.provision(t, nil, "4321")
+	id := e.dbRow(t, "gate-1").Id
 	m := e.m
 	for i := 1; i < pinFailures; i++ {
-		if ok, _ := m.pinAllowed("d"); !ok {
+		if ok, _ := m.pinAllowed(id); !ok {
 			t.Fatalf("locked after %d failures", i-1)
 		}
-		if n, lock := m.pinFailed("d"); n != i || lock != 0 {
+		if n, lock := m.pinFailed(id); n != i || lock != 0 {
 			t.Fatalf("failure %d: n=%d lock=%v", i, n, lock)
 		}
 	}
-	if _, lock := m.pinFailed("d"); lock != 60*time.Second {
+	if _, lock := m.pinFailed(id); lock != 60*time.Second {
 		t.Fatalf("5th failure locks 60s, got %v", lock)
 	}
-	if ok, wait := m.pinAllowed("d"); ok || wait != 60*time.Second {
+	if ok, wait := m.pinAllowed(id); ok || wait != 60*time.Second {
 		t.Fatalf("allowed=%v wait=%v", ok, wait)
 	}
+	// persisted: a fresh Module (a restart) still has the lockout
+	if ok, _ := newModule(e.app).pinAllowed(id); ok {
+		t.Fatal("the brake must survive a restart")
+	}
 	e.clk.add(59 * time.Second)
-	if ok, _ := m.pinAllowed("d"); ok {
+	if ok, _ := m.pinAllowed(id); ok {
 		t.Fatal("still locked at 59s")
 	}
 	e.clk.add(2 * time.Second)
-	if ok, _ := m.pinAllowed("d"); !ok {
+	if ok, _ := m.pinAllowed(id); !ok {
 		t.Fatal("free after 61s")
 	}
 	// the next lockout doubles: 5 more failures give 120 s, then 240 s
 	for i := 0; i < pinFailures-1; i++ {
-		m.pinFailed("d")
+		m.pinFailed(id)
 	}
-	if _, lock := m.pinFailed("d"); lock != 120*time.Second {
+	if _, lock := m.pinFailed(id); lock != 120*time.Second {
 		t.Fatalf("second lockout: %v", lock)
 	}
 	e.clk.add(121 * time.Second)
 	for i := 0; i < pinFailures-1; i++ {
-		m.pinFailed("d")
+		m.pinFailed(id)
 	}
-	if _, lock := m.pinFailed("d"); lock != 240*time.Second {
+	if _, lock := m.pinFailed(id); lock != 240*time.Second {
 		t.Fatalf("third lockout: %v", lock)
 	}
-	m.pinOK("d")
-	if ok, _ := m.pinAllowed("d"); !ok {
+	m.pinOK(id)
+	if ok, _ := m.pinAllowed(id); !ok {
 		t.Fatal("a good PIN clears the brake")
 	}
 	for i := 0; i < pinFailures; i++ {
-		_, lock := m.pinFailed("d")
+		_, lock := m.pinFailed(id)
 		if i == pinFailures-1 && lock != 60*time.Second {
 			t.Fatalf("after a reset the first lockout is 60 s again, got %v", lock)
 		}
+	}
+}
+
+// Parallel wrong PINs: the brake is applied atomically, so exactly pinFailures
+// of them are evaluated and every other one is refused with 429.
+func TestUnlockBurstIsBraked(t *testing.T) {
+	e := setup(t, false)
+	code, _ := e.provision(t, nil, "4321")
+	tok, _ := e.pair(t, code)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	got := map[int]int{}
+	for i := 0; i < 40; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			// distinct client IPs: only the per-device brake may stop them
+			st, _, _ := e.do(t, req{method: "POST", path: "/api/kiosk/unlock", cookie: tok, body: `{"pin":"0000"}`, remote: "10.0.1." + strconv.Itoa(i+1) + ":1"})
+			mu.Lock()
+			got[st]++
+			mu.Unlock()
+		}(i)
+	}
+	wg.Wait()
+	if got[401] != pinFailures || got[429] != 40-pinFailures {
+		t.Fatalf("burst result %v", got)
+	}
+	if st, _, _ := e.do(t, req{method: "POST", path: "/api/kiosk/unlock", cookie: tok, body: `{"pin":"4321"}`}); st != 429 {
+		t.Fatalf("right PIN during the lockout: %d", st)
+	}
+}
+
+func TestPerIPThrottle(t *testing.T) {
+	e := setup(t, false)
+	for i := 0; i < pairPerWindow; i++ {
+		if !e.m.allow("pair", "1.2.3.4", pairPerWindow) {
+			t.Fatalf("attempt %d refused", i)
+		}
+	}
+	if e.m.allow("pair", "1.2.3.4", pairPerWindow) {
+		t.Fatal("over the limit")
+	}
+	if !e.m.allow("pair", "1.2.3.5", pairPerWindow) || !e.m.allow("unlock", "1.2.3.4", unlockPerWin) {
+		t.Fatal("limits are per tag and IP")
+	}
+	e.clk.add(throttleWindow + time.Second)
+	if !e.m.allow("pair", "1.2.3.4", pairPerWindow) {
+		t.Fatal("the window must reset")
+	}
+	// over HTTP, without any PocketBase rate-limit rule
+	var last int
+	var body map[string]any
+	for i := 0; i <= pairPerWindow+1; i++ {
+		last, body, _ = e.do(t, req{method: "POST", path: "/api/kiosk/pair", body: `{"code":"nope"}`, remote: "127.0.0.1:" + strconv.Itoa(1000+i)})
+	}
+	if last != 429 || body["data"].(map[string]any)["code"] != "rate_limited" {
+		t.Fatalf("pair flood: %d %v", last, body)
+	}
+}
+
+func TestPairingConcurrentSingleWinner(t *testing.T) {
+	e := setup(t, false)
+	code, _ := e.provision(t, nil, "")
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	wins := 0
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, st := e.pair(t, code); st == 200 {
+				mu.Lock()
+				wins++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if wins != 1 {
+		t.Fatalf("%d concurrent pairings succeeded", wins)
 	}
 }
 
@@ -465,21 +554,232 @@ func TestAudit(t *testing.T) {
 	}
 }
 
-// Without modules/sessions a token cannot be revoked, so its life is capped.
-func TestNoSessionsCapsTTL(t *testing.T) {
+// Without modules/sessions the kiosk_gen claim still kills the tokens of a
+// locked device within one request, and the TTL is not capped.
+func TestNoSessionsLockStillRevokes(t *testing.T) {
 	e := setup(t, false)
 	code, _ := e.provision(t, nil, "4321")
 	tok, _ := e.pair(t, code)
 	_, s, _ := e.do(t, req{method: "POST", path: "/api/kiosk/session", cookie: tok})
-	if got := decodeTTL(t, s); got != noSessionsTTL.Seconds() {
+	if got := decodeTTL(t, s); got != 12*3600 {
 		t.Fatalf("ttl %v", got)
 	}
+	old := s["token"].(string)
+	if st, _, _ := e.do(t, req{method: "GET", path: "/t/me", auth: old}); st != 200 {
+		t.Fatalf("token before lock: %d", st)
+	}
 	st, lk, _ := e.do(t, req{method: "POST", path: "/api/kiosk/lock", cookie: tok})
-	if st != 200 || lk["revocable"] != false {
+	if st != 200 || lk["revocable"] != true {
 		t.Fatalf("lock %d %v", st, lk)
+	}
+	if st, _, _ := e.do(t, req{method: "GET", path: "/t/me", auth: old}); st != 401 {
+		t.Fatalf("a locked device's token must die at once: %d", st)
 	}
 	if st, _, _ := e.do(t, req{method: "POST", path: "/api/kiosk/session", cookie: tok}); st != 423 {
 		t.Fatalf("no new token while locked: %d", st)
+	}
+	st, u, _ := e.do(t, req{method: "POST", path: "/api/kiosk/unlock", cookie: tok, body: `{"pin":"4321"}`})
+	if st != 200 {
+		t.Fatalf("unlock %d", st)
+	}
+	if st, _, _ := e.do(t, req{method: "GET", path: "/t/me", auth: u["token"].(string)}); st != 200 {
+		t.Fatalf("new token: %d", st)
+	}
+	if st, _, _ := e.do(t, req{method: "GET", path: "/t/me", auth: old}); st != 401 {
+		t.Fatalf("old token after unlock: %d", st)
+	}
+}
+
+// Every token ever issued to the device dies on lock (far more than the old 64
+// in-memory sids), with and without modules/sessions, and the record is in the DB.
+func TestLockRevokesAllIssuedTokens(t *testing.T) {
+	for _, withSessions := range []bool{true, false} {
+		withSessions := withSessions
+		t.Run("sessions="+strconv.FormatBool(withSessions), func(t *testing.T) {
+			e := setup(t, withSessions)
+			code, _ := e.provision(t, nil, "4321")
+			tok, _ := e.pair(t, code)
+			var toks []string
+			for i := 0; i < 70; i++ {
+				_, s, _ := e.do(t, req{method: "POST", path: "/api/kiosk/session", cookie: tok})
+				toks = append(toks, s["token"].(string))
+			}
+			if withSessions {
+				var n int
+				if err := e.app.DB().NewQuery("SELECT COUNT(*) FROM {{" + SessionsTable + "}}").Row(&n); err != nil || n != 70 {
+					t.Fatalf("recorded sessions: %d %v", n, err)
+				}
+			}
+			// a "restart": nothing is kept in memory, the module is rebuilt
+			e.m.mu.Lock()
+			e.m.touch = map[string]time.Time{}
+			e.m.mu.Unlock()
+			if st, _, _ := e.do(t, req{method: "POST", path: "/api/kiosk/lock", cookie: tok}); st != 200 {
+				t.Fatalf("lock %d", st)
+			}
+			for i, tk := range toks {
+				if st, _, _ := e.do(t, req{method: "GET", path: "/t/me", auth: tk}); st != 401 {
+					t.Fatalf("sessions=%v: token %d still works after lock: %d", withSessions, i, st)
+				}
+			}
+		})
+	}
+}
+
+func runCLI(t *testing.T, e *env, args ...string) (string, error) {
+	t.Helper()
+	cmd := NewCommand(e.app)
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return out.String(), err
+}
+
+func TestRevokeAndRotateKillIssuedTokens(t *testing.T) {
+	for _, withSessions := range []bool{true, false} {
+		for _, verb := range []string{"revoke", "rotate"} {
+			withSessions, verb := withSessions, verb
+			t.Run(verb+strconv.FormatBool(withSessions), func(t *testing.T) {
+				e := setup(t, withSessions)
+				code, _ := e.provision(t, nil, "4321")
+				tok, _ := e.pair(t, code)
+				_, s, _ := e.do(t, req{method: "POST", path: "/api/kiosk/session", cookie: tok})
+				old := s["token"].(string)
+				if st, _, _ := e.do(t, req{method: "GET", path: "/t/me", auth: old}); st != 200 {
+					t.Fatalf("token before %s: %d", verb, st)
+				}
+				if out, err := runCLI(t, e, verb, "gate-1"); err != nil {
+					t.Fatalf("%s: %v %s", verb, err, out)
+				}
+				if st, _, _ := e.do(t, req{method: "GET", path: "/t/me", auth: old}); st != 401 {
+					t.Fatalf("sessions=%v: token after %s: %d", withSessions, verb, st)
+				}
+			})
+		}
+	}
+}
+
+// off-boarding: the actor is deleted first, then the operator unpairs the device.
+func TestRevokeRotateSetPinWithDeletedActor(t *testing.T) {
+	e := setup(t, true)
+	code, _ := e.provision(t, nil, "4321")
+	e.pair(t, code)
+	if err := e.app.Delete(e.actor); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"set-pin", "gate-1", "--pin", "9999"}, {"revoke", "gate-1"}, {"rotate", "gate-1"}} {
+		if out, err := runCLI(t, e, args...); err != nil {
+			t.Fatalf("%v with a deleted actor: %v %s", args, err, out)
+		}
+	}
+	if e.dbRow(t, "gate-1").GetString("token_hash") != "" {
+		t.Fatal("the device must be unpaired")
+	}
+}
+
+func TestAgentsAndSystemActorsRefused(t *testing.T) {
+	e := setup(t, false)
+	for _, col := range []string{kernel.CollectionNameAgents, core.CollectionNameSuperusers, "_authOrigins"} {
+		if _, _, err := Provision(e.app, &Device{Name: "a", AuthCollection: col, AuthRecord: "x"}, "", e.clk.now(), 0); err == nil {
+			t.Fatalf("%s must not be an actor", col)
+		}
+	}
+	// also when set directly on a saved device
+	e.provision(t, nil, "")
+	r := e.dbRow(t, "gate-1")
+	r.Set("auth_collection", kernel.CollectionNameAgents)
+	if err := e.app.Save(r); err == nil {
+		t.Fatal("switching a device to an _agents actor must fail")
+	}
+	d := &Device{AuthCollection: kernel.CollectionNameAgents, AuthRecord: "x"}
+	if _, err := actorOf(e.app, d); err == nil {
+		t.Fatal("actorOf must refuse _agents")
+	}
+}
+
+// lock must not trust the claims of an unverified Authorization token.
+func TestLockIgnoresForgedAuthorization(t *testing.T) {
+	e := setup(t, true)
+	code, _ := e.provision(t, nil, "4321")
+	tok, _ := e.pair(t, code)
+	victim, err := e.actor.NewAuthToken() // a normal login of the same actor, not issued by the kiosk
+	if err != nil {
+		t.Fatal(err)
+	}
+	vc, _ := security.ParseUnverifiedJWT(victim)
+	forged, err := security.NewJWT(jwt.MapClaims{"id": e.actor.Id, "type": "auth", "collectionId": e.actor.Collection().Id, "sid": vc["sid"]}, "not-the-key", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := e.do(t, req{method: "GET", path: "/t/me", auth: victim}); st != 200 {
+		t.Fatalf("victim token: %d", st)
+	}
+	if st, _, _ := e.do(t, req{method: "POST", path: "/api/kiosk/lock", cookie: tok, auth: forged}); st != 200 {
+		t.Fatalf("lock: %d", st)
+	}
+	if st, _, _ := e.do(t, req{method: "GET", path: "/t/me", auth: victim}); st != 200 {
+		t.Fatalf("a forged Authorization revoked another session: %d", st)
+	}
+}
+
+func TestStaticTokenCannotBeRefreshed(t *testing.T) {
+	e := setup(t, false)
+	code, _ := e.provision(t, nil, "")
+	tok, _ := e.pair(t, code)
+	_, s, _ := e.do(t, req{method: "POST", path: "/api/kiosk/session", cookie: tok})
+	auth := s["token"].(string)
+	st, body, _ := e.do(t, req{method: "POST", path: "/api/collections/users/auth-refresh", auth: auth})
+	if st != 200 || body["token"] != auth {
+		t.Fatalf("auth-refresh must hand back the same token: %d", st)
+	}
+}
+
+func TestIsLoopback(t *testing.T) {
+	for _, c := range []struct {
+		remote string
+		hdr    map[string]string
+		want   bool
+	}{
+		{"127.0.0.1:1", nil, true},
+		{"[::1]:1", nil, true},
+		{"[::ffff:127.0.0.1]:1", nil, true},
+		{"10.0.0.5:1", nil, false},
+		{"127.0.0.1:1", map[string]string{"X-Forwarded-For": "8.8.8.8"}, false},
+		{"127.0.0.1:1", map[string]string{"X-Real-IP": "8.8.8.8"}, false},
+		{"127.0.0.1:1", map[string]string{"Forwarded": "for=8.8.8.8"}, false},
+		{"garbage", nil, false},
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = c.remote
+		for k, v := range c.hdr {
+			r.Header.Set(k, v)
+		}
+		if got := isLoopback(r); got != c.want {
+			t.Errorf("%s %v: got %v", c.remote, c.hdr, got)
+		}
+	}
+}
+
+func TestUnlockEdgeCases(t *testing.T) {
+	e := setup(t, false)
+	code, _ := e.provision(t, nil, "4321")
+	tok, _ := e.pair(t, code)
+	// unlocking a device that is not locked is harmless
+	if st, _, _ := e.do(t, req{method: "POST", path: "/api/kiosk/unlock", cookie: tok, body: `{"pin":"4321"}`}); st != 200 {
+		t.Fatalf("unlock of an unlocked device: %d", st)
+	}
+	// when the session cannot be issued the device stays locked
+	e.do(t, req{method: "POST", path: "/api/kiosk/lock", cookie: tok})
+	if err := e.app.Delete(e.actor); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := e.do(t, req{method: "POST", path: "/api/kiosk/unlock", cookie: tok, body: `{"pin":"4321"}`}); st != 403 {
+		t.Fatalf("unlock with a deleted actor: %d", st)
+	}
+	if !e.dbRow(t, "gate-1").GetBool("locked") {
+		t.Fatal("the device must stay locked when no session could be issued")
 	}
 }
 

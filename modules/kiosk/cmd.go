@@ -109,8 +109,8 @@ func NewCommand(app core.App) *cobra.Command {
 	var rBase string
 	rotate := &cobra.Command{
 		Use: "rotate <name>", Short: "Drop the device token and print a new pairing URL", SilenceUsage: true, Args: cobra.ExactArgs(1),
-		Long: "The paired browser stops working at once (its cookie no longer matches). Tokens it already holds\n" +
-			"expire with their TTL; use `toki kiosk revoke --sessions` to end them now.",
+		Long: "The paired browser stops working at once (its cookie no longer matches) and every token the\n" +
+			"device already holds is revoked (device generation + recorded sessions).",
 		RunE: func(c *cobra.Command, args []string) error {
 			r, err := load(args[0])
 			if err != nil {
@@ -119,6 +119,9 @@ func NewCommand(app core.App) *cobra.Command {
 			code := newPairing(r, time.Now().UTC(), rExpires)
 			if err := app.Save(r); err != nil {
 				return err
+			}
+			if _, err := RevokeDevice(app, r.Id, "kiosk rotate"); err != nil {
+				return fmt.Errorf("the device was rotated, but its tokens could not be revoked: %w", err)
 			}
 			fmt.Fprintln(c.OutOrStdout(), pairURL(rBase, code))
 			return nil
@@ -129,7 +132,7 @@ func NewCommand(app core.App) *cobra.Command {
 
 	var sessions bool
 	revoke := &cobra.Command{
-		Use: "revoke <name>", Short: "Unpair a device (the row stays, nothing can pair it until `rotate`)", SilenceUsage: true, Args: cobra.ExactArgs(1),
+		Use: "revoke <name>", Short: "Unpair a device and revoke its tokens (the row stays, nothing can pair it until `rotate`)", SilenceUsage: true, Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			r, err := load(args[0])
 			if err != nil {
@@ -141,9 +144,14 @@ func NewCommand(app core.App) *cobra.Command {
 			if err := app.Save(r); err != nil {
 				return err
 			}
+			n, err := RevokeDevice(app, r.Id, "kiosk revoke")
+			if err != nil {
+				return fmt.Errorf("the device is unpaired, but its tokens could not be revoked: %w", err)
+			}
+			fmt.Fprintf(c.OutOrStdout(), "revoked %d session(s) of the device\n", n)
 			if sessions {
 				if kernel.RevokeUserSessions == nil {
-					return errors.New("the device is unpaired, but sessions are not available to revoke its tokens (they expire with the TTL)")
+					return errors.New("the device is unpaired, but sessions are not available to revoke its tokens (the device tokens are dead through the device generation)")
 				}
 				n, err := kernel.RevokeUserSessions(app, r.GetString("auth_collection"), r.GetString("auth_record"), "kiosk revoke")
 				if err != nil {
@@ -155,7 +163,7 @@ func NewCommand(app core.App) *cobra.Command {
 			return nil
 		},
 	}
-	revoke.Flags().BoolVar(&sessions, "sessions", false, "also revoke every active session of the service actor")
+	revoke.Flags().BoolVar(&sessions, "sessions", false, "also revoke every active session of the service actor (every device sharing it, and the actor's other logins)")
 
 	var newPin string
 	var clearPin bool

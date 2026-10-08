@@ -24,6 +24,7 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/hook"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -44,10 +45,20 @@ const (
 
 	defaultTTLHours = 12
 	maxTTLHours     = 720
-	// noSessionsTTL caps the token lifetime when no session store can revoke a
-	// token on lock: a locked device is then locked out within this time.
-	noSessionsTTL = 10 * time.Minute
-	pairingTTL    = 15 * time.Minute
+	pairingTTL      = 15 * time.Minute
+
+	// Plain tables (no collections): the sids issued per device and the
+	// per-device revocation generation carried by every token as `kiosk_gen`.
+	SessionsTable = "_kiosk_sessions"
+	GenTable      = "_kiosk_gen"
+	claimDev      = "kiosk_dev"
+	claimGen      = "kiosk_gen"
+
+	// built-in per-IP throttle, independent of the PocketBase rate-limit rules
+	throttleWindow = time.Minute
+	pairPerWindow  = 20
+	unlockPerWin   = 30
+	maxThrottleIPs = 4096
 
 	pinFailures  = 5
 	pinLockBase  = 60 * time.Second
@@ -183,6 +194,9 @@ func (d *Device) Validate() error {
 	if d.AuthCollection == core.CollectionNameSuperusers {
 		return errors.New("kiosk: a superuser cannot be the service actor of a kiosk")
 	}
+	if strings.HasPrefix(d.AuthCollection, "_") {
+		return errors.New("kiosk: a system collection (_superusers, _agents, ...) cannot hold the service actor of a kiosk")
+	}
 	if d.TTLHours < 0 || d.TTLHours > maxTTLHours {
 		return fmt.Errorf("kiosk: ttl_hours must be between 1 and %d", maxTTLHours)
 	}
@@ -256,15 +270,61 @@ var ensureMu sync.Mutex
 
 func floatPtr(f float64) *float64 { return &f }
 
-// ensureCollections creates _kiosk_devices when missing.
+const createTablesSQL = `CREATE TABLE IF NOT EXISTS {{` + SessionsTable + `}} (
+	[[device]]  TEXT NOT NULL,
+	[[sid]]     TEXT NOT NULL,
+	[[issued]]  TEXT NOT NULL,
+	[[expires]] TEXT NOT NULL,
+	PRIMARY KEY ([[device]], [[sid]])
+)`
+
+const createGenSQL = `CREATE TABLE IF NOT EXISTS {{` + GenTable + `}} (
+	[[device]] TEXT PRIMARY KEY NOT NULL,
+	[[gen]]    INTEGER NOT NULL DEFAULT 0
+)`
+
+// deviceFields lists the fields added after the first release; ensureCollections
+// adds the missing ones to an existing collection.
+func deviceFields() []core.Field {
+	return []core.Field{
+		&core.NumberField{Name: "pin_fail_count", OnlyInt: true},
+		&core.NumberField{Name: "pin_lockouts", OnlyInt: true},
+		&core.DateField{Name: "pin_locked_until"},
+	}
+}
+
+// ensureCollections creates _kiosk_devices (and the plain tables) when missing.
 func ensureCollections(app core.App) error {
 	ensureMu.Lock()
 	defer ensureMu.Unlock()
 	if !app.HasTable("_collections") {
 		return errors.New("kiosk: _collections table is not ready")
 	}
-	if _, err := app.FindCachedCollectionByNameOrId(Collection); err == nil {
-		return nil
+	for _, q := range []string{createTablesSQL, createGenSQL} {
+		if _, err := app.DB().NewQuery(q).Execute(); err != nil {
+			return err
+		}
+	}
+	if c, err := app.FindCachedCollectionByNameOrId(Collection); err == nil {
+		missing := false
+		for _, f := range deviceFields() {
+			if c.Fields.GetByName(f.GetName()) == nil {
+				missing = true
+			}
+		}
+		if !missing {
+			return nil
+		}
+		c, err = app.FindCollectionByNameOrId(Collection)
+		if err != nil {
+			return err
+		}
+		for _, f := range deviceFields() {
+			if c.Fields.GetByName(f.GetName()) == nil {
+				c.Fields.Add(f)
+			}
+		}
+		return app.Save(c)
 	}
 	c := core.NewBaseCollection(Collection)
 	c.System = true // rules stay nil: superuser only
@@ -282,6 +342,9 @@ func ensureCollections(app core.App) error {
 		&core.NumberField{Name: "ttl_hours", OnlyInt: true, Min: floatPtr(0), Max: floatPtr(maxTTLHours)},
 		&core.NumberField{Name: "lock_after_s", OnlyInt: true, Min: floatPtr(0)},
 		&core.DateField{Name: "last_seen"},
+	)
+	c.Fields.Add(deviceFields()...)
+	c.Fields.Add(
 		&core.AutodateField{Name: "created", OnCreate: true},
 		&core.AutodateField{Name: "updated", OnCreate: true, OnUpdate: true},
 	)
@@ -289,6 +352,11 @@ func ensureCollections(app core.App) error {
 	c.AddIndex("idx_toki_kiosk_token", false, "token_hash", "")
 	c.AddIndex("idx_toki_kiosk_pairing", false, "pairing_hash", "")
 	return app.Save(c)
+}
+
+func actorChanged(r *core.Record) bool {
+	o := r.Original()
+	return o == nil || o.GetString("auth_collection") != r.GetString("auth_collection") || o.GetString("auth_record") != r.GetString("auth_record")
 }
 
 // validateActor checks that the service actor exists and is an auth record that is not a superuser.
@@ -301,7 +369,7 @@ func validateActor(app core.App, d *Device) error {
 
 func actorOf(app core.App, d *Device) (*core.Record, error) {
 	col, err := app.FindCachedCollectionByNameOrId(d.AuthCollection)
-	if err != nil || !col.IsAuth() || col.Name == core.CollectionNameSuperusers {
+	if err != nil || !col.IsAuth() || col.Name == core.CollectionNameSuperusers || col.System || strings.HasPrefix(col.Name, "_") {
 		return nil, fmt.Errorf("kiosk: %q is not an auth collection usable as a service actor", d.AuthCollection)
 	}
 	rec, err := app.FindRecordById(col, d.AuthRecord)
@@ -311,110 +379,181 @@ func actorOf(app core.App, d *Device) (*core.Record, error) {
 	return rec, nil
 }
 
-// lockout is the in-memory PIN brake of one device.
-type lockout struct {
-	fails    int
-	lockouts int
-	until    time.Time
-}
-
 // Module is the registered kiosk module.
 type Module struct {
 	app core.App
 	now func() time.Time
 
 	mu    sync.Mutex
-	locks map[string]*lockout            // device id -> PIN brake
-	sids  map[string]map[string]struct{} // device id -> sids issued since start
-	touch map[string]time.Time           // device id -> last last_seen write
+	touch map[string]time.Time // device id -> last last_seen write
+
+	thMu     sync.Mutex
+	throttle map[string]*window // tag|ip -> attempts in the current window
+
+	pinMus sync.Map // device id -> *sync.Mutex (serializes check+compare+record)
+
+	purgeAt time.Time
+}
+
+type window struct {
+	start time.Time
+	n     int
 }
 
 func newModule(app core.App) *Module {
 	return &Module{
 		app: app, now: func() time.Time { return time.Now().UTC() },
-		locks: map[string]*lockout{}, sids: map[string]map[string]struct{}{}, touch: map[string]time.Time{},
+		touch: map[string]time.Time{}, throttle: map[string]*window{},
 	}
 }
 
-// pinAttempt reports whether a PIN attempt may be made now and, when not, how long to wait.
-func (m *Module) pinAllowed(id string) (bool, time.Duration) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	l := m.locks[id]
-	if l == nil {
-		return true, 0
+// allow counts one attempt of tag from ip and reports whether it is within limit
+// per window. Independent of the PocketBase rate-limit rules.
+func (m *Module) allow(tag, ip string, limit int) bool {
+	now := m.now()
+	m.thMu.Lock()
+	defer m.thMu.Unlock()
+	k := tag + "|" + ip
+	w := m.throttle[k]
+	if w == nil || now.Sub(w.start) >= throttleWindow {
+		if len(m.throttle) >= maxThrottleIPs {
+			m.throttle = map[string]*window{}
+		}
+		w = &window{start: now}
+		m.throttle[k] = w
 	}
-	if now := m.now(); now.Before(l.until) {
-		return false, l.until.Sub(now)
+	w.n++
+	return w.n <= limit
+}
+
+func (m *Module) deviceMu(id string) *sync.Mutex {
+	v, _ := m.pinMus.LoadOrStore(id, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
+type brake struct {
+	Fails    int    `db:"fails"`
+	Lockouts int    `db:"lockouts"`
+	Until    string `db:"until"`
+}
+
+func (m *Module) loadBrake(id string) brake {
+	var b brake
+	err := m.app.DB().NewQuery(`SELECT COALESCE([[pin_fail_count]],0) AS fails, COALESCE([[pin_lockouts]],0) AS lockouts,
+		COALESCE([[pin_locked_until]],'') AS until FROM {{` + Collection + `}} WHERE [[id]]={:id}`).Bind(dbx.Params{"id": id}).One(&b)
+	if err != nil {
+		return brake{}
+	}
+	return b
+}
+
+// pinAllowed reports whether a PIN attempt may be made now and, when not, how long to wait.
+// The caller holds the device mutex.
+func (m *Module) pinAllowed(id string) (bool, time.Duration) {
+	b := m.loadBrake(id)
+	if until := parseTime(b.Until); !until.IsZero() {
+		if now := m.now(); now.Before(until) {
+			return false, until.Sub(now)
+		}
 	}
 	return true, 0
 }
 
-// pinFailed counts a failure; the 5th starts a lockout of 60 s that doubles for
-// each following lockout (up to one hour). It returns the failure count and the
-// lockout started by this failure (0 when none).
+// nextBrake counts a failure; the 5th starts a lockout of 60 s that doubles for
+// each following lockout (up to one hour).
+func nextBrake(fails, lockouts int, now time.Time) (nf, nl int, until time.Time, lock time.Duration) {
+	fails++
+	if fails < pinFailures {
+		return fails, lockouts, time.Time{}, 0
+	}
+	d := min(pinLockBase<<min(lockouts, 6), pinLockMax)
+	return 0, lockouts + 1, now.Add(d), d
+}
+
+// pinFailed persists a failure. It returns the failure count and the lockout
+// started by this failure (0 when none). The caller holds the device mutex.
 func (m *Module) pinFailed(id string) (int, time.Duration) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	l := m.locks[id]
-	if l == nil {
-		if len(m.locks) >= maxDeviceCnt {
-			m.locks = map[string]*lockout{}
-		}
-		l = &lockout{}
-		m.locks[id] = l
+	b := m.loadBrake(id)
+	n := b.Fails + 1
+	nf, nl, until, lock := nextBrake(b.Fails, b.Lockouts, m.now())
+	us := ""
+	if !until.IsZero() {
+		us = fmtTime(until)
+	} else if prev := parseTime(b.Until); !prev.IsZero() {
+		us = fmtTime(prev)
 	}
-	l.fails++
-	n := l.fails
-	if l.fails < pinFailures {
-		return n, 0
+	if _, err := m.app.DB().NewQuery(`UPDATE {{` + Collection + `}} SET [[pin_fail_count]]={:f}, [[pin_lockouts]]={:l}, [[pin_locked_until]]={:u} WHERE [[id]]={:id}`).
+		Bind(dbx.Params{"f": nf, "l": nl, "u": us, "id": id}).Execute(); err != nil {
+		m.app.Logger().Error("kiosk: failed to persist the PIN brake", "error", err)
 	}
-	d := pinLockBase << min(l.lockouts, 6)
-	d = min(d, pinLockMax)
-	l.lockouts++
-	l.fails = 0
-	l.until = m.now().Add(d)
-	return n, d
+	return n, lock
 }
 
 func (m *Module) pinOK(id string) {
-	m.mu.Lock()
-	delete(m.locks, id)
-	m.mu.Unlock()
+	if _, err := m.app.DB().NewQuery(`UPDATE {{` + Collection + `}} SET [[pin_fail_count]]=0, [[pin_lockouts]]=0, [[pin_locked_until]]='' WHERE [[id]]={:id}`).
+		Bind(dbx.Params{"id": id}).Execute(); err != nil {
+		m.app.Logger().Error("kiosk: failed to reset the PIN brake", "error", err)
+	}
 }
 
-func (m *Module) rememberSID(id, sid string) {
+// ---- durable revocation ---------------------------------------------------
+
+// generation is the current kiosk_gen of a device (0 until the first revocation).
+func generation(app core.App, device string) (int64, error) {
+	var g int64
+	err := app.DB().NewQuery(`SELECT COALESCE(MAX([[gen]]),0) FROM {{` + GenTable + `}} WHERE [[device]]={:d}`).
+		Bind(dbx.Params{"d": device}).Row(&g)
+	return g, err
+}
+
+func (m *Module) rememberSID(device, sid string, expires time.Time) {
 	if sid == "" {
 		return
 	}
+	now := m.now()
+	if _, err := m.app.DB().NewQuery(`INSERT OR REPLACE INTO {{` + SessionsTable + `}} ([[device]],[[sid]],[[issued]],[[expires]]) VALUES ({:d},{:s},{:i},{:x})`).
+		Bind(dbx.Params{"d": device, "s": sid, "i": fmtTime(now), "x": fmtTime(expires)}).Execute(); err != nil {
+		m.app.Logger().Warn("kiosk: failed to record a session", "error", err)
+		return
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	s := m.sids[id]
-	if s == nil {
-		if len(m.sids) >= maxDeviceCnt {
-			m.sids = map[string]map[string]struct{}{}
-		}
-		s = map[string]struct{}{}
-		m.sids[id] = s
+	purge := now.Sub(m.purgeAt) > time.Minute
+	if purge {
+		m.purgeAt = now
 	}
-	if len(s) >= 64 { // refreshes every 80% of the TTL: far below this in practice
-		for k := range s {
-			delete(s, k)
-			break
-		}
+	m.mu.Unlock()
+	if purge { // sessions whose token already expired need no revocation
+		_, _ = m.app.DB().NewQuery(`DELETE FROM {{` + SessionsTable + `}} WHERE [[expires]] < {:n}`).Bind(dbx.Params{"n": fmtTime(now)}).Execute()
 	}
-	s[sid] = struct{}{}
 }
 
-func (m *Module) takeSIDs(id string) []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]string, 0, len(m.sids[id]))
-	for s := range m.sids[id] {
-		out = append(out, s)
+// RevokeDevice ends every token ever issued to a device: it bumps the device
+// generation (tokens carrying an older kiosk_gen are refused by the request
+// middleware, with or without modules/sessions) and revokes each recorded sid
+// through kernel.RevokeSession. It returns how many sessions were revoked.
+// Works when the service actor no longer exists.
+func RevokeDevice(app core.App, device, reason string) (int, error) {
+	if _, err := app.DB().NewQuery(`INSERT INTO {{` + GenTable + `}} ([[device]],[[gen]]) VALUES ({:d},1)
+		ON CONFLICT([[device]]) DO UPDATE SET [[gen]]=[[gen]]+1`).Bind(dbx.Params{"d": device}).Execute(); err != nil {
+		return 0, err
 	}
-	delete(m.sids, id)
-	return out
+	var sids []string
+	if err := app.DB().NewQuery(`SELECT [[sid]] FROM {{` + SessionsTable + `}} WHERE [[device]]={:d}`).
+		Bind(dbx.Params{"d": device}).Column(&sids); err != nil {
+		return 0, err
+	}
+	n := 0
+	if fn := kernel.RevokeSession; fn != nil {
+		for _, sid := range sids {
+			if ok, err := fn(app, sid, reason); err != nil {
+				app.Logger().Warn("kiosk: failed to revoke a session", "error", err)
+			} else if ok {
+				n++
+			}
+		}
+	}
+	_, err := app.DB().NewQuery(`DELETE FROM {{` + SessionsTable + `}} WHERE [[device]]={:d}`).Bind(dbx.Params{"d": device}).Execute()
+	return n, err
 }
 
 // Register binds the module to app: the collection on bootstrap, validation and routes.
@@ -445,8 +584,12 @@ func Register(app core.App) *Module {
 			if err := d.Validate(); err != nil {
 				return err
 			}
-			if err := validateActor(app, d); err != nil {
-				return err
+			// the actor is only re-checked when it changed: revoke, rotate and set-pin
+			// must keep working after the actor was deleted
+			if e.Record.IsNew() || actorChanged(e.Record) {
+				if err := validateActor(app, d); err != nil {
+					return err
+				}
 			}
 			return e.Next()
 		},
