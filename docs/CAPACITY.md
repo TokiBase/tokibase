@@ -170,6 +170,10 @@ Before, measured again on the code of this branch with the log cap switched off 
 9. Not measured because the harness does not cover them: sync "1-3 ms per change" (SYNC_DESIGN), replica RPO/RTO (covered by `tests/e2e/failover.sh`), jobs throughput. The docs contain no capacity claim for SSE connections, writes/s or reads/s.
 10. No dropped realtime events, no errors, no p99 above 2 s at 50 clients or fewer, and no unbounded RSS growth (soak: 310 to 384 MB).
 
+## Replica size (walreplica, 2026-10-08)
+
+The 7-day soak showed the file replica growing to 1.7 GB in 5 h with flat databases. Cause: hourly snapshots of a growing `auxiliary.db` (logs) kept for 24 h, plus all compaction levels since the oldest snapshot; nothing is pruned before the first snapshot is 24 h old. Defaults are now snapshot 6 h, retention 24 h, `TOKI_REPLICA_MAX_MB` 4096 (warn and prune expired restore points). Measured in a 17 min stress run with time scaled 1 h = 30 s: 5.7 GB with the old ratio (1 h : 24 h) against 2.6-2.9 GB with the new one (6 h : 24 h); with a 700 MB limit the guard pruned to 1.5-1.9 GB. Plan for replica size = (retention / snapshot interval + 1) x compressed databases + changes in the window, and keep `TOKI_LOGS_MAX_MB` set. Details and the restore-after-prune check: `docs/modules/walreplica.md` (Sizing).
+
 ## Re-running
 
 ```sh
