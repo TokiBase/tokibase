@@ -31,7 +31,16 @@ var ctxb = context.Background()
 // itemsSpoke is a spoke with the same `items` collection as the hub.
 type itemsSpoke struct {
 	*spokeEnv
-	c *client.Client
+	c   *client.Client
+	mux http.Handler
+}
+
+// handler is the HTTP handler of the spoke (built once: OnServe can run once per app).
+func (s *itemsSpoke) handler(t *testing.T) http.Handler {
+	if s.mux == nil {
+		s.mux = buildMux(t, s.app)
+	}
+	return s.mux
 }
 
 func newItemsSpoke(t *testing.T, h *hubEnv, name string) *itemsSpoke {

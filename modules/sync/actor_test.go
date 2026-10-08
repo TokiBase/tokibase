@@ -79,7 +79,7 @@ func (s *itemsSpoke) asUser(t *testing.T, aid, method, url, body string) (int, [
 	if err != nil {
 		t.Fatalf("LocalToken: %v", err)
 	}
-	mux := buildMux(t, s.app)
+	mux := s.handler(t)
 	req := httptest.NewRequest(method, url, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", tok)
@@ -477,7 +477,7 @@ func TestBatchguardRunsForTxGroupsOnly(t *testing.T) {
 		r, _ := su.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test@example.com")
 		return r.NewAuthToken()
 	}()
-	mux := buildMux(t, a.app)
+	mux := a.handler(t)
 	body := `{"requests":[{"method":"POST","url":"/api/collections/items/records","body":{"title":"g1","qty":1}},{"method":"POST","url":"/api/collections/items/records","body":{"title":"g2","qty":2}}]}`
 	req := httptest.NewRequest("POST", "/api/batch", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
