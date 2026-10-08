@@ -408,11 +408,12 @@ func TestLeafDueFunction(t *testing.T) {
 // startTLS serves handler with the module's TLS config on a loopback port.
 func startTLS(t *testing.T, m *Module, h http.Handler) string {
 	t.Helper()
+	// not StartTLS: it adds a certificate of its own, which Go prefers to GetCertificate when the client sends no SNI
 	srv := httptest.NewUnstartedServer(h)
-	srv.TLS = m.tlsConfig()
-	srv.StartTLS()
+	srv.Listener = tls.NewListener(srv.Listener, m.tlsConfig())
+	srv.Start()
 	t.Cleanup(srv.Close)
-	return srv.URL
+	return "https://" + srv.Listener.Addr().String()
 }
 
 func clientFor(t *testing.T, root *x509.Certificate, cert *tls.Certificate) *http.Client {
@@ -421,7 +422,8 @@ func clientFor(t *testing.T, root *x509.Certificate, cert *tls.Certificate) *htt
 	pool.AddCert(root)
 	cfg := &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	if cert != nil {
-		cfg.Certificates = []tls.Certificate{*cert}
+		// always offer it: Go would otherwise hold it back when the issuer is not in the server's CA list
+		cfg.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return cert, nil }
 	}
 	return &http.Client{Transport: &http.Transport{TLSClientConfig: cfg}, Timeout: 5 * time.Second}
 }
