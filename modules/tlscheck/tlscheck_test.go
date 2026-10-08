@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tests"
 )
 
@@ -84,5 +85,25 @@ func TestTLSRequested(t *testing.T) {
 		if got := tlsRequested(strings.Fields(line)); got != want {
 			t.Errorf("%q: got %v want %v", line, got, want)
 		}
+	}
+}
+
+// With the devicecert TLS listener on, strict mode no longer refuses a plain
+// listener on all interfaces; a stubbed devicecert module does not count.
+func TestEdgeTLSListenerSuppresses(t *testing.T) {
+	t.Setenv("TOKI_TLS_CHECK", "strict")
+	kernel.RegisterModuleMarker("devicecert", nil, nil, false)
+	defer kernel.RegisterModuleMarker("devicecert", nil, nil, true)
+	t.Setenv("TOKI_DEVICECERT", "on")
+	if err := serve(t, "0.0.0.0:8090", nil); err == nil {
+		t.Fatal("no TOKI_DEVICECERT_LISTEN: strict must still refuse")
+	}
+	t.Setenv("TOKI_DEVICECERT_LISTEN", ":8443")
+	if err := serve(t, "0.0.0.0:8090", nil); err != nil {
+		t.Fatalf("edge TLS listener on: %v", err)
+	}
+	kernel.RegisterModuleMarker("devicecert", nil, nil, true)
+	if err := serve(t, "0.0.0.0:8090", nil); err == nil {
+		t.Fatal("a stubbed devicecert must not silence the check")
 	}
 }

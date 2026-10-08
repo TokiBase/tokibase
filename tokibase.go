@@ -23,6 +23,7 @@ import (
 	"github.com/tokibase/tokibase/modules/computed"
 	"github.com/tokibase/tokibase/modules/crypto"
 	"github.com/tokibase/tokibase/modules/denylog"
+	"github.com/tokibase/tokibase/modules/devicecert"
 	"github.com/tokibase/tokibase/modules/fieldperm"
 	"github.com/tokibase/tokibase/modules/geo"
 	"github.com/tokibase/tokibase/modules/jobs"
@@ -466,6 +467,23 @@ func NewWithConfig(config Config) *PocketBase {
 		scanner.Register(pb.App.(core.App))
 	}
 
+	// X.509 device identity: hub CA, edge TLS leaf, :8443 listener (opt in with TOKI_DEVICECERT=on; needs sync)
+	if devicecert.Enabled() {
+		devicecert.Register(pb.App.(core.App))
+		if auditLog != nil {
+			devicecert.SetAuditSink(func(action, collection, record string, details map[string]any) {
+				after, _ := json.Marshal(details)
+				afterStr := string(after)
+				if err := auditLog.Append(&audit.Entry{
+					ActorKind: "system", Action: action, Collection: collection,
+					Record: record, After: &afterStr,
+				}); err != nil {
+					pb.Logger().Warn("audit: failed to record "+action, "error", err)
+				}
+			})
+		}
+	}
+
 	// provider-neutral payments: webhooks, intents, entitlements (TOKI_PAYMENTS=off disables)
 	if payments.Enabled() {
 		payments.Register(pb.App.(core.App))
@@ -602,6 +620,7 @@ func (pb *PocketBase) Start() error {
 	if printer.Enabled() {
 		pb.RootCmd.AddCommand(printer.NewCommand(pb))
 	}
+	pb.RootCmd.AddCommand(devicecert.NewCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewLockoutCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewSessionsCommand(pb))
 	pb.RootCmd.AddCommand(passkey.NewCommand(pb))
