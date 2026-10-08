@@ -60,6 +60,10 @@ func TestHealthAPI(t *testing.T) {
 				`"canBackup":true`,
 				`"realIP"`,
 				`"possibleProxyHeader"`,
+				`"db":{"`,
+				`"waitMs"`,
+				`"lastTruncateAt"`, // the WAL status was serialized to the end
+				`"auxiliary":{"pool"`,
 			},
 			ExpectedEvents: map[string]int{"*": 0},
 		},

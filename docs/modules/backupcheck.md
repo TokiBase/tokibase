@@ -28,6 +28,10 @@ Report fields: `name`, `sizeBytes`, `integrityOk`, `quickCheckOk`, `collections`
 
 Audit: modules do not import each other, so the hook exposes `backupcheck.OnResult func(app kernel.App, r Report)`. Wire the audit module (action `backup.verify`) there from the root package once both modules are on main.
 
+## API backups under load
+
+`POST /api/backups` is synchronous (204 when the zip is stored, as upstream). The time is dominated by `VACUUM INTO` and zipping `auxiliary.db`, so a small `auxiliary.db` (`TOKI_LOGS_MAX_MB`, default 512) keeps it short; the automatic verification runs after the response and does not add to it. For long backups add `?async=true` (or the header `Prefer: respond-async`): the call answers `202` with `{"state":"running","name":...}` and `GET /api/backups/status` (superuser) returns `idle`, `running`, `done` or `failed` (with `error`) for the last asynchronous backup. See `docs/COMPAT.md`.
+
 ## CLI
 
 ```

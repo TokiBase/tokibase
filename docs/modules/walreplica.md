@@ -60,7 +60,7 @@ TOKI_REPLICA_URL=s3://tokibase/prod ./toki serve
 
 PocketBase runs `PRAGMA wal_checkpoint(TRUNCATE)` nightly (cron `__pbDBOptimize__`) and before backups. A TRUNCATE checkpoint waits for all readers, which includes Litestream's read lock, and holds writers back while it waits. Litestream manages checkpoints itself (passive checkpoints by page count and time, truncating when the WAL grows large).
 
-While replication is active the module therefore sets the app store key `kernel.StoreKeyDisableCheckpoint` (`@disableWALCheckpoint`). The sqlite store then skips the manual checkpoint in the nightly maintenance and in backups; `PRAGMA optimize` still runs and `VACUUM INTO` based backups are unaffected. The flag is removed when replication stops.
+While replication is active the module therefore sets the app store key `kernel.StoreKeyDisableCheckpoint` (`@disableWALCheckpoint`). The sqlite store then skips the manual checkpoint in the nightly maintenance and in backups; `PRAGMA optimize` still runs and `VACUUM INTO` based backups are unaffected. The flag is removed when replication stops. The minutely WAL maintenance of the sqlite store (`TOKI_WAL_MAX_MB`, see `docs/CAPACITY.md`) is skipped for the same reason: while replication is active the WAL size is governed by Litestream.
 
 ## Backups
 
