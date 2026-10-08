@@ -494,6 +494,7 @@ func (validator *collectionValidator) checkRule(value any) error {
 	}
 
 	r := NewRecordFieldResolver(validator.app, validator.new, &RequestInfo{}, true)
+	r.SetDryRun(true) // syntax/field check only, no provider lookups
 	_, err := search.FilterData(vStr).BuildExpr(r)
 	if err != nil {
 		return validation.NewError("validation_invalid_rule", "Invalid rule. Raw error: "+err.Error())

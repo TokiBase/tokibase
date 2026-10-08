@@ -58,6 +58,10 @@ type RecordFieldResolver struct {
 	allowHiddenFields bool
 	dialect           rule.Dialect // nil = SQLite
 	resolved          bool         // set by the first Resolve (see SetDialect)
+	dryRun            bool         // schema validation: never touch data (see SetDryRun)
+	clientFilter      bool         // SetAllowHiddenFields was called: client filters follow (see blind_index.go)
+	blindCache        map[string][]string
+	blindLookups      int
 	// ---
 	listRuleJoins       []ruleJoin
 	joinAliasSuffix     string // used for uniqueness in the flatten collection list rule join
@@ -80,9 +84,20 @@ func (r *RecordFieldResolver) AllowHiddenFields() bool {
 }
 
 // SetAllowHiddenFields enables or disables hidden fields filtering.
+//
+// By convention it is called after the collection rule was built and before
+// the client filter/sort is resolved; from then on the resolver is "strict"
+// for encrypted fields (unsupported shapes return an [EncryptedFieldError]).
+// A resolver created with allowHiddenFields=false is strict from the start.
 func (r *RecordFieldResolver) SetAllowHiddenFields(allowHiddenFields bool) {
+	r.clientFilter = true
 	r.allowHiddenFields = allowHiddenFields
 }
+
+// SetDryRun marks the resolver as used for schema validation only (collection
+// rule syntax checks): data dependent hooks, such as blind-index lookups, are
+// skipped, so saving or importing a collection never calls a module provider.
+func (r *RecordFieldResolver) SetDryRun(dryRun bool) { r.dryRun = dryRun }
 
 // NewRecordFieldResolver creates and initializes a new `RecordFieldResolver`.
 func NewRecordFieldResolver(

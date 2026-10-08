@@ -22,6 +22,7 @@ const (
 	jwksTimeout     = 5 * time.Second
 	jwksMinRefresh  = time.Minute
 	jwksMaxAge      = 6 * time.Hour
+	jwksHardMaxAge  = 24 * time.Hour // beyond this a failing refresh no longer serves cached keys
 	jwksMaxBodySize = 1 << 20
 )
 
@@ -34,35 +35,60 @@ type jwks struct {
 
 	mu        sync.Mutex
 	keys      map[string]crypto.PublicKey
-	fetchedAt time.Time // last attempt (successful or not)
+	okAt      time.Time     // last successful fetch
+	fetchedAt time.Time     // last attempt (successful or not)
+	inflight  chan struct{} // non-nil while a fetch runs (single flight)
 }
 
 func newJWKS(url string, now func() time.Time) *jwks {
 	return &jwks{url: url, now: now, client: &http.Client{Timeout: jwksTimeout}}
 }
 
+// key returns the key for kid. The network fetch runs outside the mutex and is
+// shared by concurrent callers. Keys older than jwksMaxAge are refreshed; if
+// the refresh keeps failing they are still served until jwksHardMaxAge, after
+// which verification fails closed.
 func (j *jwks) key(kid string) (crypto.PublicKey, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	now := j.now()
-	k, ok := j.keys[kid]
-	stale := j.keys == nil || now.Sub(j.fetchedAt) > jwksMaxAge
-	if ok && !stale {
-		return k, nil
-	}
-	if (j.keys == nil || !ok || stale) && (j.fetchedAt.IsZero() || now.Sub(j.fetchedAt) >= jwksMinRefresh) {
-		j.fetchedAt = now
-		if keys, err := j.fetch(); err == nil {
-			j.keys = keys
-			k, ok = keys[kid]
-		} else if !ok {
-			return nil, fmt.Errorf("jwks: %w", err)
+	for i := 0; i < 3; i++ {
+		j.mu.Lock()
+		now := j.now()
+		k, ok := j.keys[kid]
+		age := now.Sub(j.okAt)
+		if ok && age <= jwksMaxAge {
+			j.mu.Unlock()
+			return k, nil
 		}
+		if ch := j.inflight; ch != nil {
+			j.mu.Unlock()
+			<-ch
+			continue
+		}
+		if !j.fetchedAt.IsZero() && now.Sub(j.fetchedAt) < jwksMinRefresh {
+			j.mu.Unlock()
+			if ok && age <= jwksHardMaxAge {
+				return k, nil
+			}
+			if ok {
+				return nil, errors.New("jwks: cached keys expired and the refresh failed")
+			}
+			return nil, errors.New("jwks: unknown key id")
+		}
+		j.fetchedAt = now
+		ch := make(chan struct{})
+		j.inflight = ch
+		j.mu.Unlock()
+
+		keys, err := j.fetch()
+
+		j.mu.Lock()
+		if err == nil {
+			j.keys, j.okAt = keys, now
+		}
+		j.inflight = nil
+		j.mu.Unlock()
+		close(ch)
 	}
-	if !ok {
-		return nil, errors.New("jwks: unknown key id")
-	}
-	return k, nil
+	return nil, errors.New("jwks: unavailable")
 }
 
 type jwk struct {

@@ -43,9 +43,9 @@ func NewCommand(app core.App) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "roles",
 		Short: "Manage roles and memberships (_roles, _memberships)",
-		Long: "Roles are named grants that rules test with @role(\"name\") = true, @role(\"name\", scope) = true and @member(scope) = true.\n" +
+		Long: "Roles are named grants that rules test with @role(\"name\") = true, @role(\"name\", scope, \"collection\") = true and @member(scope, \"collection\") = true.\n" +
 			"A membership gives a role to one auth record (any auth collection, or _agents), optionally limited to a scope\n" +
-			"(a team, tenant or clan record id) and optionally expiring. A running server picks up CLI changes within 5 seconds.",
+			"(a team, tenant or clan record id plus its collection) and optionally expiring. A running server picks up CLI changes within 5 seconds.",
 	}
 	out := func(c *cobra.Command) func(string, ...any) {
 		return func(f string, a ...any) { fmt.Fprintf(c.OutOrStdout(), f, a...) }
@@ -117,8 +117,11 @@ func NewCommand(app core.App) *cobra.Command {
 				return err
 			}
 			uc, err := app.FindCollectionByNameOrId(colName)
-			if err != nil || !uc.IsAuth() {
-				return fmt.Errorf("%s is not an auth collection", colName)
+			if err != nil || (!uc.IsAuth() && uc.Name != agentsCollection) {
+				return fmt.Errorf("%s is not an auth collection or _agents", colName)
+			}
+			if scope != "" && scopeCol == "" {
+				return fmt.Errorf("--scope requires --scope-collection (record ids are only unique per collection)")
 			}
 			if _, err := app.FindRecordById(uc, uid); err != nil {
 				return fmt.Errorf("record %s/%s not found", colName, uid)
@@ -152,7 +155,7 @@ func NewCommand(app core.App) *cobra.Command {
 		},
 	}
 	grant.Flags().StringVar(&scope, "scope", "", "limit the grant to this record id (team, tenant, clan)")
-	grant.Flags().StringVar(&scopeCol, "scope-collection", "", "collection of the scope record")
+	grant.Flags().StringVar(&scopeCol, "scope-collection", "", "collection of the scope record (required with --scope)")
 	grant.Flags().StringVar(&expires, "expires", "", "expiry: RFC3339, YYYY-MM-DD or a duration such as 72h")
 
 	var rvScope string
