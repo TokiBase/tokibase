@@ -79,27 +79,24 @@ URL_HUB="http://127.0.0.1:$PORT_HUB"
 URL_S1="http://127.0.0.1:$PORT_S1"
 HUB="$TMP/hub"; S1="$TMP/s1"
 
-# environment of the two nodes (what the systemd unit of docs/EDGE_GATE.md sets)
-hub_env() {
-  TOKI_SYNC_ROLE=hub TOKI_SYNC_INSECURE=1 TOKI_SYNC_INTERVAL=1s TOKI_DEVICECERT=on \
-    TOKI_DEVICECERT_LISTEN="127.0.0.1:$TLS_HUB" TOKI_DEVICECERT_MTLS=optional "$@"
-}
-spoke_env() {
-  TOKI_SYNC_ROLE="${SPOKE_ROLE:-spoke}" TOKI_SYNC_INSECURE=1 TOKI_SYNC_INTERVAL=1s \
-    TOKI_PRINTER=on TOKI_SCANNER=on TOKI_KIOSK=on TOKI_DEVICECERT=on \
-    TOKI_DEVICECERT_LISTEN="127.0.0.1:$TLS_S1" TOKI_DEVICECERT_MTLS=optional \
-    TOKI_PRINT_ALLOW_COLLECTIONS=gate_devices TOKI_SCAN_READ_AUTH=gate_devices \
-    TOKI_SCAN_POST_COLLECTIONS=gate_devices GOMEMLIMIT=200MiB "$@"
-}
-hubtoki() { hub_env "$HUB_BIN" "$@" --dev=false --dir "$HUB"; }
-spoketoki() { spoke_env "$EDGE_BIN" "$@" --dev=false --dir "$S1"; }
+# environment of the two nodes (what the systemd unit of docs/EDGE_GATE.md sets). Arrays, not
+# functions: a backgrounded function is a subshell and $! would not be the toki process.
+HUB_ENV=(env TOKI_SYNC_ROLE=hub TOKI_SYNC_INSECURE=1 TOKI_SYNC_INTERVAL=1s TOKI_DEVICECERT=on
+  TOKI_DEVICECERT_LISTEN="127.0.0.1:$TLS_HUB" TOKI_DEVICECERT_MTLS=optional)
+SPOKE_ENV=(env TOKI_SYNC_ROLE=spoke TOKI_SYNC_INSECURE=1 TOKI_SYNC_INTERVAL=1s
+  TOKI_PRINTER=on TOKI_SCANNER=on TOKI_KIOSK=on TOKI_DEVICECERT=on
+  TOKI_DEVICECERT_LISTEN="127.0.0.1:$TLS_S1" TOKI_DEVICECERT_MTLS=optional
+  TOKI_PRINT_ALLOW_COLLECTIONS=gate_devices TOKI_SCAN_READ_AUTH=gate_devices
+  TOKI_SCAN_POST_COLLECTIONS=gate_devices GOMEMLIMIT=200MiB)
+hubtoki() { "${HUB_ENV[@]}" "$HUB_BIN" "$@" --dev=false --dir "$HUB"; }
+spoketoki() { "${SPOKE_ENV[@]}" "$EDGE_BIN" "$@" --dev=false --dir "$S1"; }
 start_hub() {
-  hub_env "$HUB_BIN" serve --dev=false --automigrate=false --dir "$HUB" --http "127.0.0.1:$PORT_HUB" >>"$TMP/hub.log" 2>&1 &
+  "${HUB_ENV[@]}" "$HUB_BIN" serve --dev=false --automigrate=false --dir "$HUB" --http "127.0.0.1:$PORT_HUB" >>"$TMP/hub.log" 2>&1 &
   echo $! >"$TMP/hub.pid"
   wait_for "hub health" "curl -fs $URL_HUB/api/health >/dev/null 2>&1"
 }
-start_spoke() {
-  spoke_env "$EDGE_BIN" serve --dev=false --automigrate=false --publicDir "$TMP/app" --dir "$S1" --http "127.0.0.1:$PORT_S1" >>"$TMP/s1.log" 2>&1 &
+start_spoke() { # [role]: "off" for the setup phase before enrollment
+  "${SPOKE_ENV[@]}" TOKI_SYNC_ROLE="${1:-spoke}" "$EDGE_BIN" serve --dev=false --automigrate=false --publicDir "$TMP/app" --dir "$S1" --http "127.0.0.1:$PORT_S1" >>"$TMP/s1.log" 2>&1 &
   echo $! >"$TMP/s1.pid"
   wait_for "spoke health" "curl -fs $URL_S1/api/health >/dev/null 2>&1"
 }
@@ -146,8 +143,8 @@ log "hub up on :$PORT_HUB (TLS :$TLS_HUB)"
 # ---- 2. spoke local config: what the app migrations and the operator do on every box ----
 # (a spoke refuses new collections once enrolled, so gate_devices is created first; the printer,
 #  scanner and kiosk rows are system collections that never sync)
-SPOKE_ROLE=off spoke_env "$EDGE_BIN" superuser upsert "$EMAIL" "$PASS" --dir "$S1" >/dev/null
-SPOKE_ROLE=off start_spoke
+"${SPOKE_ENV[@]}" TOKI_SYNC_ROLE=off "$EDGE_BIN" superuser upsert "$EMAIL" "$PASS" --dev=false --dir "$S1" >/dev/null
+start_spoke off
 TS="$(su_token "$URL_S1")"
 api "$TS" POST "$URL_S1" /api/collections '{"name":"gate_devices","type":"auth","viewRule":"@request.auth.id = id"}' >/dev/null || fail "create gate_devices"
 ACTOR="$(api "$TS" POST "$URL_S1" /api/collections/gate_devices/records \
