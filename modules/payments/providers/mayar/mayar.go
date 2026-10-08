@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -223,7 +224,7 @@ type webhookBody struct {
 		TransactionID string          `json:"transactionId"`
 		PaymentLinkID string          `json:"paymentLinkId"`
 		Status        json.RawMessage `json:"status"`
-		Amount        json.Number     `json:"amount"`
+		Amount        json.RawMessage `json:"amount"`
 		UpdatedAt     json.RawMessage `json:"updatedAt"`
 	} `json:"data"`
 }
@@ -260,8 +261,8 @@ func (p *Provider) VerifyWebhook(ctx context.Context, headers map[string]string,
 			ev.AltRefs = append(ev.AltRefs, a)
 		}
 	}
-	if n, err := wb.Data.Amount.Int64(); err == nil && n > 0 {
-		ev.Amount = n // anything else (absent, 0, 15000.50) stays 0 = unknown
+	if n, err := strconv.ParseInt(strings.Trim(strings.TrimSpace(string(wb.Data.Amount)), `"`), 10, 64); err == nil && n > 0 {
+		ev.Amount = n // anything else (absent, 0, 15000.50, "abc") stays 0 = unknown
 	}
 	if wb.Event == "payment.received" {
 		switch s := statusText(wb.Data.Status); s {
@@ -271,7 +272,7 @@ func (p *Provider) VerifyWebhook(ctx context.Context, headers map[string]string,
 			ev.Type = payments.EventFailed
 		case "expired":
 			ev.Type = payments.EventExpired
-		case "unpaid", "pending", "false", "created", "waiting", "processing":
+		case "unpaid", "pending", "false", "created":
 			ev.Type = payments.EventIgnored
 		default:
 			// absent, null, refunded, closed, anything new: never a payment

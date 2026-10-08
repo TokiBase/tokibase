@@ -439,6 +439,7 @@ func TestEventRetriesAndDeadLetter(t *testing.T) {
 	}
 
 	// dead letter after MaxEventAttempts
+	e.now = time.Now().UTC()
 	e.m.MaxEventAttempts = 2
 	_, _ = e.deliver(t, "good", WebhookEvent{EventID: "dead", Type: EventPaid, ProviderRef: "nobody2", Amount: 5, Currency: "IDR"})
 	e.q.run(t, e.app)

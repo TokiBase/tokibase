@@ -182,7 +182,7 @@ var hookHdr = map[string]string{"x-callback-token": "hook-secret"}
 // Pm3: only known paid words pay; everything unrecognized changes nothing.
 func TestUnknownStatusNeverPays(t *testing.T) {
 	p, seen := server(t, detailPaid) // the API would say "paid": the webhook must not even get that far
-	for _, st := range []string{`"PROCESSING"`, "-", "null", `""`, `"refunded"`, `"reversed"`, `"closed"`, "true", `"settled-ish"`} {
+	for _, st := range []string{`"PROCESSING"`, `"waiting"`, "-", "null", `""`, `"refunded"`, `"reversed"`, `"closed"`, "true", `"settled-ish"`} {
 		evs, err := p.VerifyWebhook(context.Background(), hookHdr, hookBody(st, "50000"))
 		if err != nil || evs[0].Type != payments.EventUnknown {
 			t.Errorf("status %s: want unknown, got %v %v", st, evs, err)
@@ -191,7 +191,7 @@ func TestUnknownStatusNeverPays(t *testing.T) {
 	if len(*seen) != 0 {
 		t.Fatal("an unknown status must not trigger API calls")
 	}
-	for _, st := range []string{`"waiting"`, `"unpaid"`, `"pending"`} {
+	for _, st := range []string{`"unpaid"`, `"pending"`} {
 		evs, _ := p.VerifyWebhook(context.Background(), hookHdr, hookBody(st, "50000"))
 		if evs[0].Type != payments.EventIgnored {
 			t.Errorf("status %s must be ignored", st)
