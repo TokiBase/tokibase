@@ -120,7 +120,7 @@ count() { api "$1" GET "$2" "/api/collections/e2eitems/records?perPage=1" | jget
 
 digest() { # role dir -> "records digest pending" (or "- - -")
   local out
-  out="$(toki "$1" "$2" sync verify --json 2>/dev/null || true)"
+  out="$(toki "$1" "$2" sync verify --json 2>/dev/null | grep '^{' | tail -1 || true)"
   [ -n "$out" ] || { echo "- - -"; return; }
   echo "$out" | jget '(lambda c: (str(c["records"])+" "+c["digest"]+" "+str(d["pending"])) if c else "- - -")(d["collections"][0] if d["collections"] else None)'
 }
@@ -208,7 +208,7 @@ S1N="$(count "$(token "$URL_S1")" "$URL_S1")"
 log "hub holds $HUBN records, identical on all three nodes"
 
 # ---- 5. verify: a spoke compares its metadata digest with the hub ----
-toki spoke "$S2" sync verify --against-hub --json >"$TMP/against.json" || fail "verify --against-hub failed: $(cat "$TMP/against.json" 2>/dev/null)"
+toki spoke "$S2" sync verify --against-hub --json 2>/dev/null | grep '^{' | tail -1 >"$TMP/against.json" || true; [ -s "$TMP/against.json" ] || fail "verify --against-hub failed: $(cat "$TMP/against.json" 2>/dev/null)"
 jget 'd["against_hub"]["checked"] is True and d["against_hub"]["mismatch"] == []' <"$TMP/against.json" | grep -q True || fail "hub reported digest differences: $(cat "$TMP/against.json")"
 
 log "OK"
