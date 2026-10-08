@@ -92,7 +92,7 @@ log "hub up on $PORT_HUB with collection e2eitems and policy direction=both"
 # ---- spokes: enroll, start, create the same collection (schema bundles are PR8) ----
 enroll_spoke() { # name dir port url
   local code
-  code="$(toki hub "$HUB" sync enroll --name "$1" --profile edge --actor "_superusers/$SU_ID" | awk '/^code:/ {print $2}')"
+  code="$(toki hub "$HUB" sync enroll --name "$1" --profile edge --actor "_superusers/$SU_ID" --allow-superuser-actor | awk '/^code:/ {print $2}')"
   [ -n "$code" ] || fail "no enrollment code for $1"
   toki spoke "$2" superuser upsert "$EMAIL" "$PASS" >/dev/null
   toki spoke "$2" sync join "$URL_HUB" "$code" >/dev/null || fail "join $1"

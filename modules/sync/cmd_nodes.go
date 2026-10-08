@@ -30,9 +30,10 @@ func requireRole(want Role) error {
 
 func enrollCommand(app core.App) *cobra.Command {
 	var name, profile, actor string
+	var allowSU bool
 	var params []string
 	c := &cobra.Command{
-		Use:   "enroll --name N --profile P [--param k=v] [--actor col/id]",
+		Use:   "enroll --name N --profile P [--param k=v] [--actor col/id [--allow-superuser-actor]]",
 		Short: "Hub: create a pending node and print its one-time enrollment code",
 		Long: "Creates a pending node on the hub and prints a one-time code (valid 24 h). " +
 			"The code is shown only once; the hub keeps its hash. Use it on the device: toki sync join <hub-url> <code>.",
@@ -50,7 +51,7 @@ func enrollCommand(app core.App) *cobra.Command {
 				}
 				pm[k] = v
 			}
-			rec, code, err := CreateEnrollment(app, EnrollOptions{Name: name, Profile: profile, Params: pm, Actor: actor, CLI: true})
+			rec, code, err := CreateEnrollment(app, EnrollOptions{Name: name, Profile: profile, Params: pm, Actor: actor, AllowSuperuserActor: allowSU, CLI: true})
 			if err != nil {
 				return err
 			}
@@ -64,6 +65,7 @@ func enrollCommand(app core.App) *cobra.Command {
 	c.Flags().StringVar(&profile, "profile", "", "profile: "+strings.Join(nodeProfiles, "|")+" (required)")
 	c.Flags().StringArrayVar(&params, "param", nil, "partition param k=v (repeatable)")
 	c.Flags().StringVar(&actor, "actor", "", "service actor <collection>/<record id>")
+	c.Flags().BoolVar(&allowSU, "allow-superuser-actor", false, "allow a superuser as service actor (bypasses all rules for what the node pushes as itself)")
 	_ = c.MarkFlagRequired("name")
 	_ = c.MarkFlagRequired("profile")
 	return c

@@ -353,6 +353,10 @@ func processInternalRequest(
 		if strings.EqualFold(k, "authorization") {
 			continue
 		}
+		// only the sync replay may set the node header (rules can rely on it)
+		if infoContext != core.RequestInfoContextSync && strings.EqualFold(k, SyncNodeHeader) {
+			continue
+		}
 
 		r.Header.Set(k, v)
 	}

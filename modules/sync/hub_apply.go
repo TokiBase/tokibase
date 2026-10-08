@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	stdatomic "sync/atomic"
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
@@ -289,7 +290,15 @@ func (m *Module) processGroup(app kernel.App, nodeID, ip string, pushed int64, g
 	}
 	var rj *rejection
 	if !errors.As(err, &rj) {
-		if isTransient(err) {
+		if isReplayTimeout(err) {
+			// a group that keeps timing out (poison pill, deadlocked hook) must not
+			// hold the apply mutex of every push for ever: it is permanent after
+			// maxReplayTimeouts attempts (P4-9)
+			if m.bumpTimeout(nodeID, todo[0].oseq) < maxReplayTimeouts {
+				return nil, err
+			}
+			m.clearTimeout(nodeID, todo[0].oseq)
+		} else if isTransient(err) {
 			return nil, err // retriable: the node pushes again
 		}
 		// a permanent failure must not block the queue of the node for ever
@@ -487,7 +496,10 @@ func (m *Module) insertRevert(tx kernel.App, nodeID, colRef, recID string, actor
 				return 0, err
 			}
 			if !vr.visible {
-				rec = nil
+				// outside the view rule of the actor: never an op d (that would delete
+				// the data on the device); the row is a verdict without data
+				r.op, r.patch, r.code = OpUpdate, "{}", revertInvisible
+				return m.insertHubRow(db, r)
 			}
 			hidden = vr.hidden
 		}
@@ -618,6 +630,93 @@ func fixAutodates(tx kernel.App, col *core.Collection, id string, want map[strin
 		}
 	}
 	return nil
+}
+
+// maxReplayTimeouts is how often a group may time out before it is rejected.
+const maxReplayTimeouts = 3
+
+func isReplayTimeout(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "batch transaction timeout")
+}
+
+func timeoutKey(nodeID string, oseq int64) string { return nodeID + ":" + strconv.FormatInt(oseq, 10) }
+
+func (m *Module) bumpTimeout(nodeID string, oseq int64) int {
+	v, _ := m.timeouts.LoadOrStore(timeoutKey(nodeID, oseq), new(stdatomic.Int32))
+	return int(v.(*stdatomic.Int32).Add(1))
+}
+
+func (m *Module) clearTimeout(nodeID string, oseq int64) { m.timeouts.Delete(timeoutKey(nodeID, oseq)) }
+
+// ExpireParked rejects the parked changes older than TOKI_SYNC_PARK_TTL (default
+// 30 d): the row becomes rejected (code park_expired), the node gets a revert
+// row with the hub state, the open conflict is closed and the event is audited.
+// It returns how many changes it rejected. The hub runs it hourly; operators
+// resolve parked changes before that with `toki sync conflicts`.
+func (m *Module) ExpireParked() (int, error) {
+	if !m.hubReady() {
+		return 0, nil
+	}
+	cutoff := m.now().UTC().Add(-parkTTL()).Format("2006-01-02 15:04:05.000Z")
+	var rows []struct {
+		Seq    int64  `db:"seq"`
+		Node   string `db:"node"`
+		OSeq   int64  `db:"origin_seq"`
+		Col    string `db:"collection"`
+		Record string `db:"record"`
+		Actor  string `db:"actor"`
+	}
+	if err := m.app.DB().NewQuery("SELECT seq, node, origin_seq, collection, record, actor FROM _changes WHERE status='parked' AND created < {:c} ORDER BY seq LIMIT 500").
+		Bind(dbx.Params{"c": cutoff}).All(&rows); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range rows {
+		m.applyMu.Lock()
+		err := m.app.RunInTransaction(func(tx kernel.App) error {
+			return m.RejectParked(tx, r.Seq, proto.CodeParkExpired, "park_ttl")
+		})
+		m.applyMu.Unlock()
+		if err != nil {
+			return n, err
+		}
+		n++
+		emit(AuditReject, r.Col, r.Record, map[string]any{
+			"code": proto.CodeParkExpired, "node": r.Node, "change": r.Node + ":" + strconv.FormatInt(r.OSeq, 10),
+			"actor_grant": r.Actor, "stage": "park_ttl", "by": "park_ttl",
+		})
+	}
+	return n, nil
+}
+
+// RejectParked turns the parked change with hub seq into a rejected one and
+// sends the pushing node a revert row. It is the exit of `parked` for the TTL
+// and the hook point of `toki sync conflicts --resolve ... reject`.
+func (m *Module) RejectParked(tx kernel.App, seq int64, code, by string) error {
+	var row struct {
+		Node   string `db:"node"`
+		OSeq   int64  `db:"origin_seq"`
+		Col    string `db:"collection"`
+		Record string `db:"record"`
+	}
+	if err := tx.NonconcurrentDB().NewQuery("SELECT node, origin_seq, collection, record FROM _changes WHERE seq={:s} AND status='parked'").
+		Bind(dbx.Params{"s": seq}).One(&row); err != nil {
+		return err
+	}
+	db := tx.NonconcurrentDB()
+	if _, err := db.NewQuery("UPDATE _changes SET status='rejected', code={:c} WHERE seq={:s}").
+		Bind(dbx.Params{"c": code, "s": seq}).Execute(); err != nil {
+		return err
+	}
+	if _, err := m.insertRevert(tx, row.Node, row.Col, row.Record, serviceActor(tx, row.Node)); err != nil {
+		return err
+	}
+	_, err := db.NewQuery("UPDATE " + ConflictsCollection + " SET status='resolved', resolution='rejected', resolved_by={:b}, resolved_at={:t} WHERE change={:ch} AND status='open'").
+		Bind(dbx.Params{"b": by, "t": m.created(), "ch": row.Node + ":" + strconv.FormatInt(row.OSeq, 10)}).Execute()
+	if err != nil && strings.Contains(err.Error(), "no such table") {
+		return nil
+	}
+	return err
 }
 
 // erased reports whether the record of c has a legal tombstone (a purge): the

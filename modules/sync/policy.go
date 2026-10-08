@@ -47,6 +47,12 @@ type policy struct {
 	// Trusted lets a collection whose view rule is null (superusers only) be
 	// pulled while PullViewRule is on.
 	Trusted bool
+	// SkipViewRule turns the default view rule check of pulled rows off for this
+	// collection (default: enforced for the service actor of the node, see pullRuleOn).
+	SkipViewRule bool
+	// EvictInvisible makes the revert of a record outside the view rule evict
+	// the local copy instead of only a notice (default: TOKI_SYNC_EVICT_INVISIBLE).
+	EvictInvisible bool
 }
 
 type policyCache struct {

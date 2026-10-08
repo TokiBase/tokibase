@@ -16,6 +16,7 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/types"
 )
 
@@ -111,6 +112,9 @@ type EnrollOptions struct {
 	Params  map[string]string
 	// Actor is the service actor "collection/id" (optional).
 	Actor string
+	// AllowSuperuserActor is required for a superuser as service actor: it
+	// bypasses every collection rule for all changes the node pushes as "node".
+	AllowSuperuserActor bool
 	// CLI marks the audit entry as made by an operator on the command line.
 	CLI bool
 }
@@ -138,6 +142,7 @@ func CreateEnrollment(app core.App, o EnrollOptions) (*core.Record, string, erro
 	if ex, _ := app.FindFirstRecordByFilter(col, "name={:n}", dbx.Params{"n": name}); ex != nil {
 		return nil, "", fmt.Errorf("a node named %q already exists", name)
 	}
+	actorKind := ""
 	rec := core.NewRecord(col)
 	rec.Set("name", name)
 	rec.Set("profile", o.Profile)
@@ -150,8 +155,15 @@ func CreateEnrollment(app core.App, o EnrollOptions) (*core.Record, string, erro
 		if !found || c == "" || id == "" {
 			return nil, "", errors.New("actor must be <collection>/<record id>")
 		}
+		if isSuperusersRef(app, c) && !o.AllowSuperuserActor {
+			return nil, "", errors.New("a superuser as service actor bypasses all rules for everything this node pushes as itself; repeat with --allow-superuser-actor if that is intended")
+		}
 		rec.Set("actor_collection", c)
 		rec.Set("actor_record", id)
+		actorKind = "regular"
+		if isSuperusersRef(app, c) {
+			actorKind = kernel.AuthKindSuperuser
+		}
 	}
 	code, err := NewEnrollCode()
 	if err != nil {
@@ -164,6 +176,7 @@ func CreateEnrollment(app core.App, o EnrollOptions) (*core.Record, string, erro
 	}
 	emit(AuditNodeEnroll, NodesCollection, rec.Id, map[string]any{
 		"name": name, "profile": o.Profile, "stage": "created", "cli": o.CLI,
+		"service_actor": o.Actor, "service_actor_kind": actorKind, "warning": warnIf(actorKind == kernel.AuthKindSuperuser, "superuser service actor: rules are bypassed"),
 	})
 	return rec, code, nil
 }
@@ -216,3 +229,19 @@ func RevokeNode(app core.App, ref string, cli bool) (*core.Record, error) {
 
 // constEq compares two strings in constant time.
 func constEq(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }
+
+// isSuperusersRef tells whether a collection reference is the superusers collection.
+func isSuperusersRef(app core.App, ref string) bool {
+	if ref == core.CollectionNameSuperusers {
+		return true
+	}
+	c, err := app.FindCachedCollectionByNameOrId(core.CollectionNameSuperusers)
+	return err == nil && c != nil && c.Id == ref
+}
+
+func warnIf(cond bool, msg string) string {
+	if cond {
+		return msg
+	}
+	return ""
+}

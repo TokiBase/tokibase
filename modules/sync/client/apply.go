@@ -109,9 +109,19 @@ func (c *Client) applyChange(tx kernel.App, ch *proto.PullChange) (bool, error) 
 	if pv == nil {
 		return false, nil // not replicated on this node
 	}
+	if ch.Notice != "" {
+		// informational row of the hub: no data, the local value stays
+		return false, c.markReview(tx, col, ch)
+	}
 	h, err := hlc.Parse(ch.HLC)
 	if err != nil {
 		return false, err
+	}
+	if ch.Revert || ch.Evict || ch.Op == "d" || ch.Op == "p" || ch.Op == "x" {
+		// the hub decided about this record: it is no longer pending review
+		if err := clearReview(tx.NonconcurrentDB(), col.Id, ch.Record); err != nil {
+			return false, err
+		}
 	}
 	if c.o.Clock != nil {
 		c.o.Clock.Observe(h)

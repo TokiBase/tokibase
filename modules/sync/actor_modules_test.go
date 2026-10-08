@@ -3,8 +3,6 @@
 package sync
 
 import (
-	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -89,20 +87,10 @@ func TestBatchguardRunsForTxGroupsOnly(t *testing.T) {
 		t.Fatalf("OnBatchRequest ran %d times for a single change", batches.Load())
 	}
 	// a tx group of two creates goes through OnBatchRequest and batchguard refuses it
-	su := a.app
-	sut, _ := func() (string, error) {
-		r, _ := su.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test@example.com")
-		return r.NewAuthToken()
-	}()
-	mux := a.handler(t)
+	aid := grant(t, a, h.usr)
 	body := `{"requests":[{"method":"POST","url":"/api/collections/items/records","body":{"title":"g1","qty":1}},{"method":"POST","url":"/api/collections/items/records","body":{"title":"g2","qty":2}}]}`
-	req := httptest.NewRequest("POST", "/api/batch", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", sut)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code != 200 {
-		t.Fatalf("local batch: %d %s", rec.Code, rec.Body.String())
+	if code, out := a.asUser(t, aid, "POST", "/api/batch", body); code != 200 {
+		t.Fatalf("local batch: %d %s", code, out)
 	}
 	res := a.sync(t)
 	if res.Rejected != 2 {
