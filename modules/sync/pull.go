@@ -16,6 +16,10 @@ import (
 	"github.com/tokibase/tokibase/modules/sync/proto"
 )
 
+// pullByteBudget is the size after which a pull page stops taking rows.
+// A single row can still be large; the client reads up to 8 MiB.
+const pullByteBudget = 4 << 20
+
 const (
 	defaultPage = 500
 	maxPage     = 1000
@@ -148,13 +152,21 @@ func (m *Module) buildPull(app kernel.App, nodeID string, after, head int64, lim
 	} else {
 		resp.Next = head
 	}
+	size := 0
 	for i := range rows {
+		if size >= pullByteBudget && i > 0 {
+			// a page must stay below what the client reads (8 MiB): stop here, the
+			// rest comes on the next page (a page always carries at least one row)
+			resp.More, resp.Next = true, rows[i-1].Seq
+			break
+		}
 		pc, ok, err := m.pullChange(app, vw, &rows[i])
 		if err != nil {
 			return nil, err
 		}
 		if ok {
 			resp.Changes = append(resp.Changes, pc)
+			size += len(pc.Patch) + 320
 		}
 	}
 	return resp, nil
@@ -172,7 +184,9 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 	if perr != nil {
 		return proto.PullChange{}, false, perr
 	}
-	if p == nil || (p.Direction != DirBoth && p.Direction != DirPull) {
+	// reverts target one node and are delivered whatever the direction: a
+	// push-only collection still has to learn that its change was refused
+	if p == nil || (p.Direction != DirBoth && p.Direction != DirPull && r.Status != StatusRevert) {
 		return proto.PullChange{}, false, nil
 	}
 	pc := proto.PullChange{
@@ -222,6 +236,7 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 		if hasMeta {
 			pc.HLC, pc.Node = hlc.HLC(mh).String(), mn
 		}
+		pc.Fields = m.fieldClockWire(db, col, p, r.Record, nil)
 		return pc, true, nil
 	}
 
@@ -267,7 +282,7 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 		return pc, false, err
 	}
 	for name, v := range patch {
-		if _, typed := typedOp(v); !typed {
+		if _, typed := opOf(p.Types, name, v); !typed {
 			continue
 		}
 		if abs, ok := cur[name]; ok {
@@ -279,5 +294,28 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 		return pc, false, err
 	}
 	pc.Patch = json.RawMessage(enc)
+	pc.Fields = m.fieldClockWire(db, col, p, r.Record, patch)
 	return pc, true, nil
+}
+
+// fieldClockWire returns the field clocks of record for the wire (field-merge
+// collections only): those of the patch fields, or all of them when patch is nil.
+func (m *Module) fieldClockWire(db dbx.Builder, col *core.Collection, p *policy, id string, patch map[string]any) map[string]string {
+	if p.Strategy != StratFieldMerge {
+		return nil
+	}
+	clocks, err := readFieldClocks(db, col.Id, id)
+	if err != nil || len(clocks) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for f, h := range clocks {
+		if _, ok := patch[f]; patch == nil || ok {
+			out[f] = h.String()
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

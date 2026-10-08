@@ -255,7 +255,15 @@ func (m *Module) capture(tx kernel.App, e *core.RecordEvent, op string, p *polic
 		}
 		return deleteMeta(db, col.Id, id)
 	default:
-		return upsertMeta(db, col.Id, id, h, node, hash)
+		if err := upsertMeta(db, col.Id, id, h, node, hash); err != nil {
+			return err
+		}
+		if p.Strategy == StratFieldMerge {
+			// a local write on the hub raises the clock of the plain fields it
+			// changed, so that a concurrent push cannot silently overwrite it
+			return bumpFieldClocks(db, col.Id, id, plainFields(p.Types, patch), hlc.HLC(h))
+		}
+		return nil
 	}
 }
 

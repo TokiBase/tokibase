@@ -65,12 +65,40 @@ type BatchIn struct {
 	Auth     *BatchAuthIn     `json:"auth,omitempty"` // nil = anonymous
 }
 
+// SyncActorIn is who made the conflicting change.
+type SyncActorIn struct {
+	Kind       string `json:"kind"` // auth | superuser | system
+	ID         string `json:"id,omitempty"`
+	Collection string `json:"collection,omitempty"`
+}
+
+// SyncIncomingIn is the pushed change of a sync.conflict event.
+type SyncIncomingIn struct {
+	Op      string         `json:"op"`
+	Node    string         `json:"node"`
+	HLC     string         `json:"hlc"`
+	BaseHLC string         `json:"base_hlc"`
+	Patch   map[string]any `json:"patch"`
+	Actor   SyncActorIn    `json:"actor"`
+}
+
+// SyncIn is delivered for sync.conflict events (docs/SYNC_DESIGN.md §4.6).
+// Current and the patch are redacted (sensitive fields are "[encrypted]").
+type SyncIn struct {
+	RecordID    string            `json:"record_id"`
+	Current     map[string]any    `json:"current"`
+	CurrentHLC  string            `json:"current_hlc"`
+	CurrentNode string            `json:"current_node"`
+	Incoming    SyncIncomingIn    `json:"incoming"`
+	FieldClocks map[string]string `json:"field_clocks"`
+}
+
 // EventIn is the JSON document written to the guest's stdin.
 type EventIn struct {
 	ABI         string         `json:"abi"`
 	Module      string         `json:"module"`
 	Event       string         `json:"event"`
-	Kind        string         `json:"kind"` // record | cron | route | job | batch
+	Kind        string         `json:"kind"` // record | cron | route | job | batch | sync
 	Phase       string         `json:"phase,omitempty"`
 	Action      string         `json:"action,omitempty"`
 	Collection  string         `json:"collection,omitempty"`
@@ -80,6 +108,7 @@ type EventIn struct {
 	RequestInfo *RequestInfoIn `json:"request_info,omitempty"`
 	Route       *RouteIn       `json:"route,omitempty"`
 	Batch       *BatchIn       `json:"batch,omitempty"`
+	Sync        *SyncIn        `json:"sync,omitempty"`
 	Cron        *struct {
 		Expr string `json:"expr"`
 	} `json:"cron,omitempty"`
@@ -99,6 +128,9 @@ type Result struct {
 	Data    map[string]any    `json:"data,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    json.RawMessage   `json:"body,omitempty"`
+	// sync.conflict: accept | reject | merge | park, and the patch of merge.
+	Resolution string         `json:"resolution,omitempty"`
+	Patch      map[string]any `json:"patch,omitempty"`
 }
 
 // Headers never handed to guests in request_info (credentials of the actor).

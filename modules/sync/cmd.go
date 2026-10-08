@@ -133,7 +133,7 @@ func NewCommand(app core.App) *cobra.Command {
 	}
 	status.Flags().BoolVar(&asJSON, "json", false, "output JSON")
 	root.AddCommand(status)
-	root.AddCommand(enrollCommand(app), joinCommand(app), revokeCommand(app), peersCommand(app), verifyCommand(app))
+	root.AddCommand(enrollCommand(app), joinCommand(app), revokeCommand(app), peersCommand(app), verifyCommand(app), conflictsCommand(app))
 	return root
 }
 

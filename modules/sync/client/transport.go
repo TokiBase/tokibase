@@ -113,6 +113,9 @@ func noRedirect(hc *http.Client) *http.Client {
 	return &cp
 }
 
+// maxResponseBytes is the most the client reads from one response.
+const maxResponseBytes = 8 << 20
+
 func (c *Client) do(ctx context.Context, method, path string, hdr map[string]string, body []byte) (*http.Response, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
 	if err != nil {
@@ -133,9 +136,14 @@ func (c *Client) do(ctx context.Context, method, path string, hdr map[string]str
 	if res.StatusCode/100 == 3 {
 		return res, nil, fmt.Errorf("sync: the hub answered with a redirect (%d) which is refused", res.StatusCode)
 	}
-	b, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	b, err := io.ReadAll(io.LimitReader(res.Body, maxResponseBytes+1))
 	if err != nil {
 		return nil, nil, err
+	}
+	if len(b) > maxResponseBytes {
+		// a truncated body would only fail to decode and stall the loop for good
+		return res, nil, &Error{Status: res.StatusCode, Code: proto.CodeResponseTooLarge,
+			Message: "the response exceeds the 8 MiB limit"}
 	}
 	if res.StatusCode/100 != 2 {
 		he := &Error{Status: res.StatusCode}

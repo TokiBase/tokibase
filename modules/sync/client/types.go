@@ -56,6 +56,7 @@ const (
 	EventPushed         = "pushed"
 	EventRejected       = "rejected"
 	EventSuperseded     = "superseded"
+	EventParked         = "parked"
 	EventError          = "error"
 	EventRebootstrap    = "rebootstrap"
 	EventRevoked        = "revoked"
@@ -79,6 +80,7 @@ type Result struct {
 	Pushed     int
 	Rejected   int
 	Superseded int
+	Parked     int
 	Pulled     int
 	Applied    int
 	Err        error
@@ -86,18 +88,21 @@ type Result struct {
 
 // Status is a snapshot of the loop.
 type Status struct {
-	State          string
-	Online         bool
-	Paused         bool
-	Running        bool
-	Pending        int64
-	PullAfter      int64
-	AckedOrigin    int64
-	LastOK         time.Time
-	LastError      string
-	OffsetMs       int64
-	Failures       int
-	NextAttempt    time.Time
-	ApplyErrors    int64
+	State       string
+	Online      bool
+	Paused      bool
+	Running     bool
+	Pending     int64
+	PullAfter   int64
+	AckedOrigin int64
+	LastOK      time.Time
+	LastError   string
+	OffsetMs    int64
+	Failures    int
+	NextAttempt time.Time
+	ApplyErrors int64
+	// HashMismatches counts hash_mismatch checks (§4.7); HashStreak is the current run of them.
+	HashMismatches int64
+	HashStreak     int
 	DigestMismatch []string
 }

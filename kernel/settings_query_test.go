@@ -1,7 +1,6 @@
 package kernel_test
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -80,7 +79,7 @@ func TestReloadSettingsWithEncryption(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	os.Setenv("pb_test_env", strings.Repeat("a", 32))
+	t.Setenv("pb_test_env", strings.Repeat("a", 32))
 
 	// cleanup all stored settings
 	// ---
