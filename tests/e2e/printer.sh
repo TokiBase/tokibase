@@ -137,5 +137,5 @@ list="$(curl -fs "$BASE/api/print/printers" -H "Authorization: $UT")"
 echo "$list" | grep -q counter || fail "printers list: $list"
 echo "$list" | grep -q "127.0.0.1" && fail "address leaked to a regular user"
 
-"$TMP/toki" print jobs --dir "$TMP/pb_data" | grep -q "$ID" || fail "toki print jobs"
+TOKI_PRINTER=on "$TMP/toki" print jobs --dir "$TMP/pb_data" | grep -q "$ID" || fail "toki print jobs"
 log "OK"
