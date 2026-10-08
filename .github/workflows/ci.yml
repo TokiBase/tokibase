@@ -24,7 +24,7 @@ jobs:
       - run: go test ./kernel/rule/... ./tools/search/... ./kernel/... ./apis/... ./modules/... -short
   test-race:
     # data race detector on the kernel + sync suites (notify watcher / cleanup goroutines)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, tokibuild]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
