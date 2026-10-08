@@ -336,9 +336,9 @@ Order matters. PRs 1 to 3 have no hardware dependency and can be built and teste
 | 0 (done) | `kernel: edge provider interfaces` | `kernel/nodeident.go` (`NodeIdentity`: node id, hub id, hub pub, cert, `Sign(msg)`), `kernel/syncstatus.go` (`SyncStatus`: hub reachable, pending count, last sync), `kernel/devicecerts.go` (provider registration). Sync implements and registers them. No behavior change, unit tests only. | none |
 | 1 (done) | `internal/devio` + `internal/escpos` | Linux serial and evdev readers, TCP/file dialer with the CIDR policy, ESC/POS builder, codepages, QR (native plus raster). Pure unit tests with fakes. | none |
 | 2 (done) | `printer` PR1 | Collections, template DSL, `print.send` handler, status/paper-out logic, `/api/print*`, CLI, marker/stub, `no_printer`, docs, TCP-stub integration test. | 1 |
-| 3 | `scanner` PR1 | `_scanners`/`_scan_events`, serial and web ingestion, dedupe, `@scan` topic, `/api/scan*`, CLI, `no_scanner`, docs. | 1 |
+| 3 (done) | `scanner` PR1 | `_scanners`/`_scan_events`, serial and web ingestion, dedupe, `@scan` topic, `/api/scan*`, CLI, `no_scanner`, docs. | 1 |
 | 4 | `kiosk` PR1 | `_kiosk_devices`, pair/session/status/lock/unlock, embedded `kiosk.js` (indicator, wedge capture, lock overlay), CLI, `no_kiosk`, docs. Wires in the scanner wedge hook if PR 3 is merged. | 0, optionally 3 |
-| 5 | `scanner` PR2 | evdev reader with `EVIOCGRAB`, `toki scan devices`, 32/64-bit struct tests, udev docs. | 3 |
+| 5 (evdev reader and `devices` done in PR 3) | `scanner` PR2 | evdev reader with `EVIOCGRAB`, `toki scan devices`, 32/64-bit struct tests, udev docs. | 3 |
 | 6 | `devicecert` PR1 | Hub CA with wrapped key, `_device_certs`, `/api/sync/devcert` and spoke renewal in `modules/sync`, leaf key, `:8443` listener, `toki devicecert ca|status|list`, `no_devicecert`. | 0 |
 | 7 | `devicecert` PR2 | Client-cert issue/revoke, mTLS route allowlist, deny-list sync policy, `/api/device/identity` and `/api/device/attest`, rotate-ca. | 6 |
 | 8 | `edge` integration | `profiles.txt` (nano tags), size measurement and `docs/PROFILES.md`, `docs/EDGE_GATE.md`, parking e2e (`tests/e2e/edge-gate.sh`: hub, spoke, TCP printer stub, pty scanner, kiosk pair, 48 h offline compressed with `TOKI_SYNC_TEST_CLOCK_OFFSET`). Feeds SYNC_DESIGN PR10. | 2 to 7 |
@@ -355,6 +355,10 @@ Order matters. PRs 1 to 3 have no hardware dependency and can be built and teste
 - Status is checked before the write (paper end, cover open, mechanical error give `waiting_paper` without sending anything) and once after it (paper end stop or an error stop give `waiting_paper`; a closed connection is an error and the queue retries). A printer that does not answer `DLE EOT` within `timeout_ms` prints anyway.
 - `modules/sync` excludes every system collection from `_sync_policies` (`eligible()`), so the planned pull-only provisioning of `_printers` and `_print_templates` is not possible yet; `_print_jobs` is safe by that same rule and by an explicit `IsSyncReplica` guard. Admitting these two collections is a sync follow-up.
 - `_print_jobs.waits` and `updated` are extra fields. `cut`/`drawer` on a printer are defaults appended to rendered jobs that lack `@cut`/`@drawer`. Templates see the paper width as `{{._cols}}`.
+
+### Status of PR 3 (done)
+
+`modules/scanner`: `_scanners`/`_scan_events` (raw SQL writes, no hooks, local only), serial and evdev readers over `internal/devio` with reconnect backoff and health block `scanner`, web wedge (`POST /api/scan`, `/scan/wedge.js`), dedupe LRU plus `client_seq`, `@scan` topic restricted to authenticated clients (`TOKI_SCAN_TOPIC_AUTH`), `GET /api/scan/events` and `/api/scan/scanners`, `toki scan list|listen|simulate|devices`, `no_scanner` (nano), `tests/e2e/scanner.sh`, docs in `docs/modules/scanner.md`. The evdev reader and `toki scan devices` landed here, so PR 5 only has what is left (real-device checks). Decisions: the dedupe window starts at the first read and is not extended; `terminator` is validated but all of CR/LF/CRLF end a scan in v1; a non-positive `dedupe_ms` of 0 means the default and a negative value disables it.
 
 Parallelism: after PR 0 and 1, PRs 2, 3 and 6 are independent.
 
