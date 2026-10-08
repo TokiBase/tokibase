@@ -6,11 +6,14 @@ Phase 3 hub/spoke replication (offline-first). The full design is `docs/SYNC_DES
 
 ## What exists now
 
-- `hlc`: the 64-bit hybrid logical clock (48 bit unix ms, 16 bit logical). `Clock` has `Now`, `Observe`, `SetOffset`/`Offset`/`WallNow`, an injected `now`, a spin to the next millisecond on logical overflow, and a persisted floor (`hlc_floor` in `_sync_state`, written every 1000 ticks inside the capture transaction and on terminate).
+- `hlc`: the 64-bit hybrid logical clock (48 bit unix ms, 16 bit logical). `Clock` has `Now`, `Observe`, `ObserveBounded(remote, maxAhead)` (refuses a remote too far ahead with `ErrFutureHLC`, the hub applies the 5 minute `future_hlc` check of §3.7 with it), `SetOffset`/`Offset`/`WallNow`, an injected `now`, a spin to the next millisecond on logical overflow, and a persisted floor; the clock never decreases (a remote at the top of the 48 bit range is clamped to the int64 range of `_changes.hlc`); at boot the clock starts at `max(MAX(_changes.hlc), MAX(_sync_meta.hlc), hlc_floor)` since HLCs observed from remote nodes live only in `_sync_meta` (`hlc_floor` in `_sync_state`, written every 1000 ticks inside the capture transaction and on terminate).
 - Capture hooks on `OnRecord{Create,Update,Delete}Execute` at priority `-1<<19` (outer than crypto, which binds at 0). Each hook runs the write in `RunInTransaction`, so the `_changes` row, the `_sync_meta` row and the tombstone commit or roll back together with the record. Inside the hook `e.App` is replaced by the transaction app; the kernel copies it to the model event before the database write (`syncModelEventWithRecordEvent`), the same mechanism that `kernel.onRecordDeleteExecute` uses. A test proves that a failing inner handler leaves no record and no change row.
+- Atomicity and locking: the first statement of the capture transaction is a no-op write on `_sync_state`, so the SQLite write lock is taken before any SELECT. Reading first and upgrading later fails at once with `SQLITE_BUSY_SNAPSHOT` when a raw writer (`app.DB()`) committed in between, and neither `busy_timeout` nor the store's lock retry helps inside a stale snapshot. When a transaction already exists (batch, hook, user `RunInTransaction`) the record write and the change rows run in a `SAVEPOINT`: if capture fails the record write is rolled back even when the caller swallows the error and commits.
+- Fail closed: a policy load error without a previous good set refuses the write (with a good set it keeps serving it and retries after 1 s); if `Init` failed on an already bootstrapped app, writes to capturable collections are refused until restart; an unknown `TOKI_SYNC_ROLE` aborts startup.
+- The pre-write state is read with an extra `FindRecordById` inside the transaction (not `Original()`, which can be stale and is unreliable with `ignoreUnchangedFields`); this costs one SELECT per captured update.
 - Patch diff, canonical hash, exclusions, empty-patch skip, tombstone guard, `status=local`, atomic group id (`tx`), actor from the request.
 - `toki sync status [--json]`.
-- Kernel seams (no behaviour change for other modules): `kernel.SyncOrigin` / `WithSyncOrigin` / `SyncOriginFrom` / `IsSyncReplica`, `kernel.RegisterDerivedField` / `UnregisterDerivedField` / `IsDerived` / `DerivedFieldsOf`, and the reserved `@request.context = "sync"` (`kernel.RequestInfoContextSync`). `modules/computed` registers its target fields as derived and unregisters them when a definition is removed or its collection changes.
+- Kernel seams (no behaviour change for other modules): `kernel.SyncOrigin` / `WithSyncOrigin` / `SyncOriginFrom` / `IsSyncReplica`, `kernel.RegisterDerivedField` / `UnregisterDerivedField` / `IsDerived` / `DerivedFieldsOf`, and the reserved `@request.context = "sync"` (`kernel.RequestInfoContextSync`). `modules/computed` registers its target fields as derived and unregisters them when a definition is removed.
 
 ## Identity, enrollment and handshake (PR2)
 
@@ -50,7 +53,7 @@ The answer carries `session_token` (HS256 JWT keyed by the hub `session_secret`,
 
 | Variable | Meaning |
 | --- | --- |
-| `TOKI_SYNC_ROLE` | `off` (default), `hub` or `spoke`. With `off` the module registers nothing except its marker: no tables, no hooks, no cost. Unknown values count as `off`. |
+| `TOKI_SYNC_ROLE` | `off` (default), `hub` or `spoke`. With `off` the module registers nothing except its marker: no tables, no hooks, no cost. An unknown value is a startup error (`Register` panics, `RegisterFromEnv` returns it): a mistyped hub must not run without sync. `toki sync status` reports an unknown value as `off`. |
 
 | `TOKI_SYNC_HUB_KEY_FILE` | hub: file with the Ed25519 key (base64), created 0600 if missing, instead of `_sync_state` |
 | `TOKI_SYNC_NODE_KEY` | spoke: base64 key blob (seed + x25519 private key) instead of `<dataDir>/sync_node.key` |
@@ -77,9 +80,9 @@ Patch (`_changes.patch`, JSON):
 
 Encrypted fields (modules/crypto) are captured as the stored ciphertext, byte for byte. The hash covers the ciphertext too.
 
-An update whose changes are only derived or autodate fields (for example the `updated` bump that a computed rollup causes) writes no row. A file-only update writes no row either (files are not synced in v1).
+An update whose changes are only derived or autodate fields (for example the `updated` bump that a computed rollup causes) writes no `_changes` row, but `_sync_meta.hash` is refreshed (the `hlc` stays), so it keeps equal to `RecordHash` of the stored row and `toki sync verify` does not see false drift. A file-only update writes no row either (files are not synced in v1).
 
-`hash` is `sha256` of the canonical JSON `{"c": collectionId, "id": id, "f": {sorted synced fields}}`: object keys sorted, numbers as `strconv.FormatFloat(v, 'g', -1, 64)`, no HTML escaping. `RecordHash` computes it.
+`hash` is `sha256` of the canonical JSON `{"c": collectionId, "id": id, "f": {sorted synced fields}}`: object keys sorted, numbers as `strconv.FormatFloat(v, 'g', -1, 64)`, no HTML escaping. Numbers inside JSON fields keep their exact text (decoded with `UseNumber`; integers above 2^53 are not rounded, `1.0` stays `1.0`). Fields typed `set` are sorted and de-duplicated before hashing and diffing, so a reorder is not a change and two nodes that applied the same adds in another order have the same hash. `RecordHash` computes it.
 
 `actor` is `rec:<authCollectionId>:<authId>` when the write came from a REST request (including `/api/batch` sub-requests) with an authenticated record, otherwise `node`. Grants (`aid`) replace this in PR4.
 
@@ -125,4 +128,5 @@ toki sync peers [--json]                                                  # hub:
 - No network, no apply, no conflict handling, no compaction: `_changes` grows until PR6.
 - Push, pull, the client loop, actor grants, schema bundles, keys and reservations are not implemented; the handshake returns those fields empty.
 - Certificates are not renewed (365 d) and the hub key cannot be rotated yet.
-- A derived-only update (computed rollup) bumps the `updated` autodate locally without a change row, so `updated` and the stored hash can differ between nodes after the apply paths exist. The apply side (PR3) must decide how to treat it.
+- A derived-only update (computed rollup) bumps the `updated` autodate locally without a change row, so `updated` and the stored hash can differ between nodes after the apply paths exist. Since `_sync_meta.hash` is refreshed for such saves, the apply side (PR3) can tell stale from diverged by comparing the hash with `RecordHash`.
+- Known gaps, planned: a policy refers to a collection or field by name (rename stops capture until the policy is fixed; no `field_types`/`exclude` name validation until PR6); `counter` deltas use float64 subtraction (exact for integers); cascade children and hook-written rows are attributed to `node`, not to the request user; a panic inside a transaction leaks one `txs` map entry; `toki sync status` runs `Init` in a second process (a first start can race on `node_id`).

@@ -32,6 +32,7 @@ var ddl = []string{
   created        TEXT    NOT NULL
 )`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx__changes_origin ON _changes (node, origin_seq)`,
+	`CREATE INDEX IF NOT EXISTS idx__changes_hlc ON _changes (hlc)`,
 	`CREATE INDEX IF NOT EXISTS idx__changes_rec ON _changes (collection, record, hlc)`,
 	`CREATE INDEX IF NOT EXISTS idx__changes_out ON _changes (status, seq) WHERE status IN ('local','pushed')`,
 	`CREATE INDEX IF NOT EXISTS idx__changes_pull ON _changes (seq, collection, part_new) WHERE status IN ('applied','revert')`,
@@ -46,6 +47,8 @@ var ddl = []string{
   part       TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (collection, record)
 ) WITHOUT ROWID`,
+
+	`CREATE INDEX IF NOT EXISTS idx__sync_meta_hlc ON _sync_meta (hlc)`,
 
 	`CREATE TABLE IF NOT EXISTS _sync_tombstones (
   collection TEXT    NOT NULL,

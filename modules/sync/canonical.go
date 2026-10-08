@@ -14,33 +14,86 @@ import (
 )
 
 // normalize turns a field value (DB export form: ciphertext stays "tkc1:…")
-// into plain JSON data: nil, bool, string, float64, []any, map[string]any.
-func normalize(v any) any {
+// into plain JSON data: nil, bool, string, float64, json.Number, []any,
+// map[string]any. Numbers inside JSON values stay json.Number (decoded with
+// UseNumber) so integers above 2^53 survive; number fields are float64.
+func normalize(v any) (any, error) {
 	switch t := v.(type) {
-	case nil, bool, string, float64:
-		return t
+	case nil, bool, string, float64, json.Number:
+		return t, nil
 	case int:
-		return float64(t)
+		return float64(t), nil
 	case int64:
-		return float64(t)
+		return float64(t), nil
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, x := range t {
+			n, err := normalize(x)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = n
+		}
+		return out, nil
+	case []any:
+		out := make([]any, len(t))
+		for i, x := range t {
+			n, err := normalize(x)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = n
+		}
+		return out, nil
 	}
 	b, err := json.Marshal(v)
 	if err != nil {
-		return nil
+		return nil, err
 	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
 	var out any
-	if err := json.Unmarshal(b, &out); err != nil {
-		return nil
+	if err := dec.Decode(&out); err != nil {
+		return nil, err
 	}
-	return out
+	return out, nil
 }
 
-// canonicalJSON encodes v with sorted object keys, numbers as
-// strconv.FormatFloat(v,'g',-1,64) and no HTML escaping.
+// canonicalJSON encodes v with sorted object keys, float64 as
+// strconv.FormatFloat(v,'g',-1,64), json.Number verbatim and no HTML escaping.
+// A value that cannot be normalized encodes as null (values reaching here come
+// from fieldValues, which reports the error).
 func canonicalJSON(v any) []byte {
 	var buf bytes.Buffer
-	writeCanon(&buf, normalize(v))
+	n, _ := normalize(v)
+	writeCanon(&buf, n)
 	return buf.Bytes()
+}
+
+// canonicalSet sorts the elements of an array by canonical form and drops
+// duplicates: the stored order of a `set` field is not significant.
+func canonicalSet(v any) any {
+	arr, ok := v.([]any)
+	if !ok {
+		return v
+	}
+	type el struct {
+		key string
+		v   any
+	}
+	els := make([]el, 0, len(arr))
+	for _, x := range arr {
+		els = append(els, el{string(canonicalJSON(x)), x})
+	}
+	sort.SliceStable(els, func(i, j int) bool { return els[i].key < els[j].key })
+	out := make([]any, 0, len(els))
+	for i, e := range els {
+		if i > 0 && els[i-1].key == e.key {
+			continue
+		}
+		out = append(out, e.v)
+	}
+	return out
 }
 
 func writeCanonString(buf *bytes.Buffer, s string) {
@@ -65,6 +118,8 @@ func writeCanon(buf *bytes.Buffer, v any) {
 		writeCanonString(buf, t)
 	case float64:
 		buf.WriteString(strconv.FormatFloat(t, 'g', -1, 64))
+	case json.Number:
+		buf.WriteString(string(t))
 	case []any:
 		buf.WriteByte('[')
 		for i, e := range t {
@@ -91,7 +146,8 @@ func writeCanon(buf *bytes.Buffer, v any) {
 		}
 		buf.WriteByte('}')
 	default:
-		writeCanon(buf, normalize(t))
+		n, _ := normalize(t)
+		writeCanon(buf, n)
 	}
 }
 
@@ -103,7 +159,7 @@ func canonicalHash(collectionId, id string, fields map[string]any) []byte {
 	buf.WriteString(`,"id":`)
 	writeCanonString(&buf, id)
 	buf.WriteString(`,"f":`)
-	writeCanon(&buf, normalize(fields))
+	writeCanon(&buf, fields)
 	buf.WriteByte('}')
 	sum := sha256.Sum256(buf.Bytes())
 	return sum[:]
@@ -135,8 +191,10 @@ func syncedFields(col *core.Collection, p *policy) []core.Field {
 	return out
 }
 
-// fieldValues reads the normalized DB-export values of fields from rec.
-func fieldValues(rec *core.Record, fields []core.Field) (map[string]any, error) {
+// fieldValues reads the normalized DB-export values of fields from rec. Fields
+// typed `set` in types are canonicalised (sorted, unique) so that the hash and
+// the $add/$rm delta do not depend on the stored order.
+func fieldValues(rec *core.Record, fields []core.Field, types map[string]string) (map[string]any, error) {
 	out := make(map[string]any, len(fields))
 	for _, f := range fields {
 		var v any
@@ -149,7 +207,14 @@ func fieldValues(rec *core.Record, fields []core.Field) (map[string]any, error) 
 		} else {
 			v = rec.GetRaw(f.GetName())
 		}
-		out[f.GetName()] = normalize(v)
+		n, err := normalize(v)
+		if err != nil {
+			return nil, errf("field %q: %w", f.GetName(), err)
+		}
+		if types[f.GetName()] == TypeSet {
+			n = canonicalSet(n)
+		}
+		out[f.GetName()] = n
 	}
 	return out, nil
 }
@@ -158,7 +223,11 @@ func fieldValues(rec *core.Record, fields []core.Field) (map[string]any, error) 
 // no `exclude` list). It is what `_changes.hash` and `_sync_meta.hash` hold.
 func RecordHash(rec *core.Record, p *policy) ([]byte, error) {
 	col := rec.Collection()
-	vals, err := fieldValues(rec, syncedFields(col, p))
+	var types map[string]string
+	if p != nil {
+		types = p.Types
+	}
+	vals, err := fieldValues(rec, syncedFields(col, p), types)
 	if err != nil {
 		return nil, err
 	}

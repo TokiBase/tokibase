@@ -29,6 +29,12 @@ var errCompiledOut = errors.New("sync is not available in this build (no_sync)")
 // RoleFromEnv reports RoleOff in builds with the no_sync tag.
 func RoleFromEnv() Role { return RoleOff }
 
+// ParseRole accepts any value in builds with the no_sync tag (sync is compiled out).
+func ParseRole(string) (Role, error) { return RoleOff, nil }
+
+// RegisterFromEnv is a no-op returning nil in builds with the no_sync tag.
+func RegisterFromEnv(app core.App) (*Module, error) { return nil, nil }
+
 // Enabled reports false in builds with the no_sync tag.
 func Enabled() bool { return false }
 

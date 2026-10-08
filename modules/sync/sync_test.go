@@ -139,6 +139,15 @@ func (e *env) policy(t *testing.T, coll, dir string, types map[string]string, ex
 	}
 }
 
+func (e *env) pol(t *testing.T) *policy {
+	t.Helper()
+	p, err := e.m.pol.For(e.items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func (e *env) item(t *testing.T, kv ...any) *core.Record {
 	t.Helper()
 	r := core.NewRecord(e.items)
@@ -241,7 +250,7 @@ func TestCaptureCreateUpdateDelete(t *testing.T) {
 		}
 	}
 	fresh, _ := e.app.FindRecordById("items", r.Id)
-	want, err := RecordHash(fresh, e.m.pol.For(e.items))
+	want, err := RecordHash(fresh, e.pol(t))
 	if err != nil || !bytes.Equal(want, c.Hash) || len(c.Hash) != sha256.Size {
 		t.Fatalf("hash mismatch: %x vs %x (%v)", want, c.Hash, err)
 	}
@@ -288,7 +297,7 @@ func TestCaptureCreateUpdateDelete(t *testing.T) {
 		t.Fatalf("autodate change must be part of a real update: %v", p)
 	}
 	fresh, _ = e.app.FindRecordById("items", r.Id)
-	if want, _ := RecordHash(fresh, e.m.pol.For(e.items)); !bytes.Equal(want, u.Hash) {
+	if want, _ := RecordHash(fresh, e.pol(t)); !bytes.Equal(want, u.Hash) {
 		t.Fatal("update hash mismatch")
 	}
 
@@ -587,7 +596,7 @@ func TestCryptoCiphertextCapturedVerbatim(t *testing.T) {
 	}
 	// the hash covers the ciphertext
 	fresh, _ := app.FindRecordById("items", created.Id)
-	if want, _ := RecordHash(fresh, e.m.pol.For(e.items)); !bytes.Equal(want, rows[0].Hash) {
+	if want, _ := RecordHash(fresh, e.pol(t)); !bytes.Equal(want, rows[0].Hash) {
 		t.Fatal("hash must be computed over the stored ciphertext")
 	}
 

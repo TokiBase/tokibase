@@ -4,7 +4,9 @@
 package hlc
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -129,12 +131,35 @@ func (c *Clock) Now() HLC {
 	return c.tick(0)
 }
 
+// ErrFutureHLC is returned by ObserveBounded for a remote HLC that is too far
+// ahead of the local wall clock (SYNC_DESIGN §3.7 `future_hlc`).
+var ErrFutureHLC = errors.New("hlc: remote hlc is too far in the future")
+
 // Observe merges a remote HLC (pull apply, push accept) and returns the new
 // local value, which is greater than both the previous local value and remote.
+// It does not bound the drift (use ObserveBounded for untrusted input), but
+// the clock never decreases: a remote that does not fit an int64 (the storage
+// type of `_changes.hlc`) is clamped to math.MaxInt64.
 func (c *Clock) Observe(remote HLC) HLC {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if remote > math.MaxInt64 {
+		remote = math.MaxInt64
+	}
 	return c.tick(remote)
+}
+
+// ObserveBounded is Observe, but it refuses (and leaves the clock untouched)
+// a remote whose physical part is more than maxAhead ahead of the corrected
+// wall clock, or that does not fit an int64. The hub uses it for pushed
+// changes (5 minutes, §3.7).
+func (c *Clock) ObserveBounded(remote HLC, maxAhead time.Duration) (HLC, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if remote > math.MaxInt64 || remote.PhysicalMs() > c.WallNow().UnixMilli()+maxAhead.Milliseconds() {
+		return 0, ErrFutureHLC
+	}
+	return c.tick(remote), nil
 }
 
 // tick implements the HLC receive/send algorithm. remote == 0 is a local event.
@@ -162,6 +187,17 @@ func (c *Clock) tick(remote HLC) HLC {
 			continue
 		default:
 			next = Make(base.PhysicalMs(), base.Logical()+1)
+		}
+		if next > math.MaxInt64 {
+			next = base // saturated: stay inside the int64 range of `_changes.hlc`
+		}
+		if next <= c.last {
+			// never go down
+			if c.last < math.MaxInt64 {
+				next = c.last + 1
+			} else {
+				next = c.last
+			}
 		}
 		c.last = next
 		c.ticks++
@@ -218,14 +254,18 @@ func SaveFloor(s Store, h HLC) error {
 	return s.Set(FloorKey, h.String())
 }
 
-// Boot computes the starting value of a clock: max(maxChanges, floor).
-func Boot(s Store, maxChanges HLC) (HLC, error) {
+// Boot computes the starting value of a clock: max(seen..., floor). seen are
+// the highest HLCs found in the database (`_changes` and `_sync_meta`, the
+// latter holds the HLCs observed from remote nodes).
+func Boot(s Store, seen ...HLC) (HLC, error) {
 	f, err := LoadFloor(s)
 	if err != nil {
 		return 0, err
 	}
-	if maxChanges > f {
-		return maxChanges, nil
+	for _, h := range seen {
+		if h > f {
+			f = h
+		}
 	}
 	return f, nil
 }

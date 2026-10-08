@@ -45,19 +45,33 @@ const hookId = "__tokiSync__"
 // Execute handler (crypto binds at 0), so they read the stored values.
 const capturePriority = -1 << 19
 
-// RoleFromEnv parses TOKI_SYNC_ROLE. Unknown values count as off.
-func RoleFromEnv() Role {
-	switch Role(strings.ToLower(strings.TrimSpace(os.Getenv(EnvRole)))) {
+// ParseRole parses a role name: "" and "off", "hub", "spoke" (case and
+// surrounding space ignored). Any other value is an error, so that a typo
+// does not silently run a node without sync.
+func ParseRole(s string) (Role, error) {
+	switch Role(strings.ToLower(strings.TrimSpace(s))) {
+	case "", RoleOff:
+		return RoleOff, nil
 	case RoleHub:
-		return RoleHub
+		return RoleHub, nil
 	case RoleSpoke:
-		return RoleSpoke
+		return RoleSpoke, nil
 	}
-	return RoleOff
+	return RoleOff, fmt.Errorf("sync: invalid %s=%q (want off, hub or spoke)", EnvRole, s)
+}
+
+// RoleFromEnv parses TOKI_SYNC_ROLE for read-only callers (status). An unknown
+// value reports off here; Register / RegisterFromEnv refuse to start instead.
+func RoleFromEnv() Role {
+	r, _ := ParseRole(os.Getenv(EnvRole))
+	return r
 }
 
 // Enabled reports whether the process has a sync role other than off.
 func Enabled() bool { return RoleFromEnv() != RoleOff }
+
+// errBox boxes an error for atomic.Pointer.
+type errBox struct{ err error }
 
 // Module is the registered sync module (nil when the role is off).
 type Module struct {
@@ -67,9 +81,12 @@ type Module struct {
 	// now is the wall clock of the HLC (tests inject it).
 	now func() time.Time
 
-	ready  atomic.Bool
-	nodeID atomic.Value // string
-	clock  atomic.Pointer[hlc.Clock]
+	ready atomic.Bool
+	// initErr is set when Init failed; capture then refuses writes to
+	// capturable collections instead of letting them through uncaptured.
+	initErr atomic.Pointer[errBox]
+	nodeID  atomic.Value // string
+	clock   atomic.Pointer[hlc.Clock]
 
 	pol policyCache
 
@@ -87,7 +104,25 @@ type Module struct {
 
 // Register binds the module according to TOKI_SYNC_ROLE. With the role off it
 // binds nothing and returns nil (only the module marker exists).
-func Register(app core.App) *Module { return RegisterRole(app, RoleFromEnv()) }
+//
+// An unknown TOKI_SYNC_ROLE value panics at startup (fail closed: a mistyped
+// hub must not run without sync); use RegisterFromEnv to get the error.
+func Register(app core.App) *Module {
+	m, err := RegisterFromEnv(app)
+	if err != nil {
+		panic(err)
+	}
+	return m
+}
+
+// RegisterFromEnv is Register returning an error for an invalid TOKI_SYNC_ROLE.
+func RegisterFromEnv(app core.App) (*Module, error) {
+	role, err := ParseRole(os.Getenv(EnvRole))
+	if err != nil {
+		return nil, err
+	}
+	return RegisterRole(app, role), nil
+}
 
 // RegisterRole is Register with an explicit role.
 func RegisterRole(app core.App, role Role) *Module {
@@ -100,12 +135,15 @@ func RegisterRole(app core.App, role Role) *Module {
 	init := func() error {
 		err := m.Init()
 		if err != nil {
-			app.Logger().Error("sync: failed to initialize", "error", err)
+			m.initErr.Store(&errBox{err})
+			app.Logger().Error("sync: failed to initialize, writes to capturable collections are refused", "error", err)
+		} else {
+			m.initErr.Store(nil)
 		}
 		return err
 	}
 	if app.IsBootstrapped() {
-		_ = init()
+		_ = init() // fail closed through m.initErr: capture refuses writes
 	}
 	app.OnBootstrap().Bind(&hook.Handler[*core.BootstrapEvent]{
 		Id: hookId, Priority: -1,
@@ -190,11 +228,16 @@ func (m *Module) Init() error {
 		}
 	}
 
-	var maxHLC int64
+	var maxHLC, maxMeta int64
 	if err := m.app.DB().NewQuery("SELECT COALESCE(MAX(hlc),0) FROM _changes").Row(&maxHLC); err != nil {
 		return err
 	}
-	start, err := hlc.Boot(st, hlc.HLC(maxHLC))
+	// HLCs observed from remote nodes live only in _sync_meta (replica applies
+	// write no _changes row): the clock must not restart below them
+	if err := m.app.DB().NewQuery("SELECT COALESCE(MAX(hlc),0) FROM _sync_meta").Row(&maxMeta); err != nil {
+		return err
+	}
+	start, err := hlc.Boot(st, hlc.HLC(maxHLC), hlc.HLC(maxMeta))
 	if err != nil {
 		return err
 	}
