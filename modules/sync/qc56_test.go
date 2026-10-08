@@ -472,7 +472,7 @@ func TestHookMergePatchIsValidated(t *testing.T) {
 	tk := h.ticket(t, "t", "A")
 	a.sync(t)
 	merge := map[string]any{}
-	bindHook(t, h, func(e *kernel.SyncConflictEvent) error {
+	bindHook(t, h.hubEnv, func(e *kernel.SyncConflictEvent) error {
 		e.Resolution, e.Patch = kernel.SyncResolveMerge, merge
 		return nil
 	})
@@ -488,7 +488,7 @@ func TestHookMergePatchIsValidated(t *testing.T) {
 			merge[k] = v
 		}
 		seq++
-		st, resp, eb := rawPush(t, h, tok, pushReq(pc(node, seq, nowHLC(-500+seq, 0), 0, "pbc_tickets", tk.Id, OpUpdate, map[string]any{"title": "n"})))
+		st, resp, eb := rawPush(t, h.hubEnv, tok, pushReq(pc(node, seq, nowHLC(-500+seq, 0), 0, "pbc_tickets", tk.Id, OpUpdate, map[string]any{"title": "n"})))
 		if st != 200 {
 			t.Fatalf("%d %+v", st, eb)
 		}
