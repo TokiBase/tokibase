@@ -181,6 +181,9 @@ func (m *Module) handleSession(e *core.RequestEvent) error {
 	if d.Locked {
 		return kioskError(e, http.StatusLocked, "locked", "the device is locked")
 	}
+	if !m.allow("session", d.ID, sessionPerWindow) {
+		return kioskError(e, http.StatusTooManyRequests, "rate_limited", "too many session requests for this device")
+	}
 	out, st, code, msg := m.session(d)
 	if out == nil {
 		return kioskError(e, st, code, msg)

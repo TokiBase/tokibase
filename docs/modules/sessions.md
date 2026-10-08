@@ -19,7 +19,7 @@ Table `_sessions` in the MAIN database (`data.db`, so it is backed up and replic
 | `kind` | `auth` (password/OTP/OAuth2/...), `refresh` (issued by auth-refresh), `static` (non-refreshable: impersonation, `NewStaticAuthToken`) |
 | `created`, `last_seen`, `expires` | PocketBase datetime layout, UTC; `expires` = token expiry |
 | `ip`, `user_agent` | of the request that issued the token |
-| `device` | header `X-Toki-Device` of the login/refresh request (max 128 chars); a refresh without the header inherits the previous session's device |
+| `device` | header `X-Toki-Session-Device` of the login/refresh request (not `X-Toki-Device`, which modules/devicecert strips from every inbound request) (max 128 chars); a refresh without the header inherits the previous session's device |
 | `revoked`, `revoked_reason` | `NULL` while active. Reasons: `cli`, `password_changed`, `email_changed`, `rotated`, `reuse_detected`, or whatever the Go caller passed |
 
 ## Which tokens are covered
@@ -44,7 +44,7 @@ Realtime: at `POST /api/realtime` the session is re-validated and the token's `s
 
 On `auth-refresh` of a refreshable token, the new token gets a new session and the previous one is revoked (`rotated`). Presenting the rotated-out token again is treated as theft: every active session of that user and device (same `device` value, empty counts as one device) is revoked (`reuse_detected`) and `auth.reuse_detected` is audited.
 
-Trade-off, why it is off by default: the JS SDK auto-refresh sends the same token from parallel tabs/processes; with rotation the second tab presents an already rotated token and is logged out (and trips reuse detection). Enable it only for clients with a single refresher per device, and send a distinct `X-Toki-Device` per device.
+Trade-off, why it is off by default: the JS SDK auto-refresh sends the same token from parallel tabs/processes; with rotation the second tab presents an already rotated token and is logged out (and trips reuse detection). Enable it only for clients with a single refresher per device, and send a distinct `X-Toki-Session-Device` per device.
 
 ## Revoke without REST changes
 

@@ -38,7 +38,13 @@ func (m *Module) handleIdentity(e *core.RequestEvent) error {
 		fp = Fingerprint(leaf.Raw)
 	}
 	e.Response.Header().Set("Cache-Control", "no-store")
-	return e.JSON(http.StatusOK, map[string]any{"node_id": ni.NodeID(), "hub_id": ni.HubID(), "cert": ni.Cert(), "leaf_fp": fp})
+	out := map[string]any{"node_id": ni.NodeID(), "hub_id": ni.HubID(), "leaf_fp": fp}
+	if e.Auth != nil {
+		// the node cert JWS carries the partition params (tenant/site ids):
+		// only an authenticated caller gets it
+		out["cert"] = ni.Cert()
+	}
+	return e.JSON(http.StatusOK, out)
 }
 
 // handleAttest signs a caller-chosen nonce with the node key, so the app can
@@ -75,8 +81,12 @@ func (m *Module) handleAttest(e *core.RequestEvent) error {
 		return e.JSON(http.StatusServiceUnavailable, map[string]any{"status": 503, "message": "The node key is not available yet.", "data": map[string]any{}})
 	}
 	e.Response.Header().Set("Cache-Control", "no-store")
-	return e.JSON(http.StatusOK, map[string]any{
+	out := map[string]any{
 		"node_id": ni.NodeID(), "hub_id": ni.HubID(), "nonce": body.Nonce, "ts": ts, "alg": "Ed25519",
-		"sig": base64.StdEncoding.EncodeToString(sig), "cert": ni.Cert(),
-	})
+		"sig": base64.StdEncoding.EncodeToString(sig),
+	}
+	if e.Auth != nil { // the cert (with the partition params) only for an authenticated caller
+		out["cert"] = ni.Cert()
+	}
+	return e.JSON(http.StatusOK, out)
 }

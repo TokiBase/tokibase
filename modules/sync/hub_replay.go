@@ -253,7 +253,7 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 	if perr != nil {
 		return nil, perr
 	}
-	if p == nil || (p.Direction != DirBoth && p.Direction != DirPush) {
+	if systemAllowed(col) || p == nil || (p.Direction != DirBoth && p.Direction != DirPush) {
 		return nil, reject(proto.CodePolicyDirection, "the collection does not accept pushes")
 	}
 	// PR8: map the field names of an older schema version to the current ones

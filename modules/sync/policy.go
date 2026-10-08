@@ -186,6 +186,12 @@ func (c *policyCache) load() (map[string]*policy, error) {
 				// rules are null by design (syscollections.go): the pull is limited
 				// by the policy direction, not by a view rule
 				p.SkipViewRule, p.PullViewRule, p.Trusted = true, false, true
+				// allowlisted system collections are pull-only whatever the row says:
+				// a spoke must never be able to push (for example un-revoke) them
+				if p.Direction != DirPull && p.Direction != DirNone {
+					c.m.app.Logger().Warn("sync: system collection policy forced to direction pull", "collection", col.Name, "was", p.Direction)
+					p.Direction = DirPull
+				}
 			}
 			out[col.Id] = p
 			out[col.Name] = p

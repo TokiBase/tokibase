@@ -34,7 +34,7 @@ const (
 	// ClaimSID is the JWT claim carrying the session token id.
 	ClaimSID = "sid"
 	// DeviceHeader optionally names the device of a login/refresh request.
-	DeviceHeader = "X-Toki-Device"
+	DeviceHeader = "X-Toki-Session-Device"
 
 	KindAuth    = "auth"
 	KindRefresh = "refresh"

@@ -305,6 +305,9 @@ type storedCA struct {
 // (peers and nodes get both roots in the bundle); the new one signs from now
 // on. The old root is listed with its retire time.
 func (m *Module) RotateCA(overlapDays int) (*CA, time.Time, error) {
+	if overlapDays < 0 || overlapDays > MaxOverlapDays {
+		return nil, time.Time{}, fmt.Errorf("devicecert: overlap days must be between 0 and %d", MaxOverlapDays)
+	}
 	m.caMu.Lock()
 	m.cas = nil // read the stored state, not a cache
 	m.caMu.Unlock()
@@ -403,6 +406,9 @@ func (m *Module) Issue(ctx context.Context, req kernel.DeviceCertRequest) (*kern
 	}
 	dns, ips := SplitSANs(sans)
 	days := req.Days
+	if kind == kernel.DeviceCertClient && days < 0 {
+		return nil, fmt.Errorf("devicecert: days must be between 1 and %d", MaxClientDays)
+	}
 	if days <= 0 {
 		days = LeafDays()
 	}
