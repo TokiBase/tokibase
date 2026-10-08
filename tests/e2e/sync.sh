@@ -429,9 +429,10 @@ jget 'd["against_hub"]["mismatch"] == []' <"$TMP/against3.json" | grep -q True |
 # ---- 12. a node silent for longer than the retention (fake clock) is stale and re-bootstraps ----
 log "stale node: s3 goes offline, the hub compacts with a clock 59m50s ahead and 1h retention"
 kill_node s3
+sleep 12 # s3 has been silent for more than 10 s
+# a fresh write makes s1 and s2 pull, which refreshes their last_seen (an idle node is not touched)
 for i in 1 2 3; do create "$TH" "$URL_HUB" "while s3 was away $i" >/dev/null; done
 wait_converged "hub, s1, s2 converged while s3 is away"
-sleep 12 # s3 has been silent for more than 10 s; s1 and s2 pull every second
 TOKI_SYNC_TEST=1 TOKI_SYNC_TEST_CLOCK_OFFSET=3590s TOKI_SYNC_RETENTION=1h TOKI_SYNC_MIN_KEEP=1ms \
   toki hub "$HUB" sync compact --json 2>/dev/null | grep '^{' | tail -1 >"$TMP/compact3.json" || true
 jget 'd["stale_nodes"] == 1' <"$TMP/compact3.json" | grep -q True || fail "exactly s3 should be stale: $(cat "$TMP/compact3.json")"
