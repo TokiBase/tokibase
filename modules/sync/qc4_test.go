@@ -101,6 +101,20 @@ func TestUserWithoutGrantIsNeverTheServiceActor(t *testing.T) { // P4-1
 		}
 		expectUngrantedRejected(t, h, a, tok)
 	})
+	t.Run("a superuser of the spoke is the node", func(t *testing.T) {
+		_, a, _ := actorHub(t)
+		su, _ := a.app.FindAuthRecordByEmail(core.CollectionNameSuperusers, "test@example.com")
+		tok, _ := su.NewAuthToken()
+		code, out := a.withToken(t, tok, "POST", "/api/collections/items/records", `{"title":"operator"}`)
+		if code != 200 {
+			t.Fatalf("%d %s", code, out)
+		}
+		var actor string
+		_ = a.app.DB().NewQuery("SELECT actor FROM _changes WHERE record={:r}").Bind(dbx.Params{"r": idOf(t, out)}).Row(&actor)
+		if actor != ActorNode {
+			t.Fatalf("actor %q", actor)
+		}
+	})
 	t.Run("no request auth stays node", func(t *testing.T) {
 		_, a, _ := actorHub(t)
 		r := a.create(t, map[string]any{"title": "hook"})

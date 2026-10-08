@@ -115,7 +115,7 @@ func tokenKeyHash(rec *core.Record) string {
 const ActorRecPrefix = "rec:"
 
 // actorIDFor is the `actor` of a change written by a request of auth: the aid
-// of the newest valid grant for that record on this node. A request without
+// of the newest valid grant for that record on this node (a superuser of the spoke, the operator, is the node itself). A request without
 // auth (hooks, cron, direct app calls) is "node"; an authenticated record
 // WITHOUT a valid grant is never promoted to "node" (that would run its write
 // with the rights of the service actor): it is attributed to itself and the
@@ -128,6 +128,11 @@ func (m *Module) actorIDFor(app core.App, auth *core.Record) string {
 	err := app.DB().NewQuery("SELECT aid FROM _sync_actors WHERE collection={:c} AND record={:r} AND exp>{:now} ORDER BY rowid DESC LIMIT 1").
 		Bind(dbx.Params{"c": auth.Collection().Id, "r": auth.Id, "now": m.Clock().WallNow().UnixMilli()}).Row(&aid)
 	if err != nil || aid == "" {
+		if kernel.AuthKindOf(auth) == kernel.AuthKindSuperuser {
+			// the operator of this node (admin UI, CLI token): it already holds
+			// the node's own rights, so its writes are the node's
+			return ActorNode
+		}
 		return ActorRecPrefix + auth.Collection().Id + ":" + auth.Id
 	}
 	return aid
