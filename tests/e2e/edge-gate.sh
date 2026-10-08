@@ -39,6 +39,8 @@ jget() { python3 -c "import sys,json; d=json.load(sys.stdin); print($1)"; }
 fail() {
   log "FAIL: $*"
   for f in "$TMP"/*.log; do echo "--- $f" >&2; tail -30 "$f" >&2; done
+  echo "--- spoke health" >&2; curl -s "$URL_S1/api/health" -H "Authorization: ${TS:-}" 2>&1 | cut -c1-1500 >&2 || true; echo >&2
+  echo "--- scan events (kiosk token)" >&2; curl -s "$URL_S1/api/scan/events?scanner=belt" -H "Authorization: ${TOK:-}" 2>&1 | cut -c1-600 >&2 || true; echo >&2
   echo "--- hub conflicts" >&2; hubtoki sync conflicts 2>&1 | tail -15 >&2 || true
   echo "--- spoke conflicts" >&2; spoketoki sync conflicts 2>&1 | tail -15 >&2 || true
   echo "--- spoke sync status" >&2; spoketoki sync status 2>&1 | tail -15 >&2 || true
