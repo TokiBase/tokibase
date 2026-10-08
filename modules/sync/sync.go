@@ -185,6 +185,7 @@ func RegisterRole(app core.App, role Role) *Module {
 	m.bindEpoch()
 	m.bindHubNotify()
 	m.bindLoop()
+	m.registerProviders()
 	return m
 }
 
