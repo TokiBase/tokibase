@@ -22,6 +22,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/pocketbase/dbx"
+	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/modules/sync/client"
 	"github.com/tokibase/tokibase/modules/sync/proto"
 	"github.com/tokibase/tokibase/tests"
