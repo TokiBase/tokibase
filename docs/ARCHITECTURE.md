@@ -51,7 +51,7 @@ Exit gate: 100% SDK suite pass, kernel has no `net/http` import, all builds unde
 
 Exit gate: all modules on by default in profile `solo`, failover drill RTO under 30 s in CI, no COMPAT deviation on the REST contract.
 
-## Phase 2 (in progress)
+## Phase 2 (functional scope done 2026-10-08; gomobile artifact verification pending)
 
 - [x] sessions: server-side sessions with `sid` JWT claim, revoke per device/all, revoke on password/email change, optional refresh rotation, `toki sessions` (`docs/modules/sessions.md`).
 - [x] jobs: durable `_jobs` queue with retry/backoff, dead-letter, cron and worker role; consumer interface `kernel.Jobs(app)` so modules never import each other, `toki jobs ...` (`docs/modules/jobs.md`).
@@ -71,9 +71,7 @@ Exit gate: all modules on by default in profile `solo`, failover drill RTO under
 - [x] nano/embed PR 1: `embed/` in-process Go API (`Start`, `Call` without TCP, `Subscribe`, `Superuser`, `Export`, one instance per data dir), `mobile/` gomobile facade, `mobile/build.sh`, `make aar|xcframework`, CI job `embed` (`docs/EMBED.md`). gomobile itself is not run in CI.
 - [x] rule engine (PR 1): dialect-neutral rule AST in `kernel/rule` (`Parse` on top of fexpr) and a SQLite emitter (`kernel/rule/sql.Emit`) with byte-identical SQL/params to the legacy compiler; opt-in via `TOKI_RULE_AST=1` (default off), differential tests in `tools/search`, CI job `test-rule-ast` (`docs/RULE_ENGINE.md`). PostgreSQL emitter and in-memory evaluator are later PRs.
 - [x] mcp (PR 2): streamable HTTP transport at `/api/mcp` (`TOKI_MCP=on`, bearer agent keys), `@request.auth.kind` (`guest|user|superuser|agent`) in rules with agents evaluated as `_agents` auth, sandbox mode (`--sandbox`, writes rolled back), `expires` (`docs/modules/mcp.md`). Copy-of-`pb_data` sandbox deferred.
-- [x] rule engine (PR 1): dialect-neutral rule AST in `kernel/rule` (`Parse` on top of fexpr) and a SQLite emitter (`kernel/rule/sql.Emit`) with byte-identical SQL/params to the legacy compiler; opt-in via `TOKI_RULE_AST=1` (default off), differential tests in `tools/search`, CI job `test-rule-ast` (`docs/RULE_ENGINE.md`).
 - [x] rule engine (PR 2): resolver/emitter split (`rule.Ref`, `rule.Dialect`, SQLite dialect byte-identical to the legacy SQL, differential corpus unchanged) and a PostgreSQL emitter/dialect (`kernel/rule/pg`, tested by golden SQL + structural parity, no PostgreSQL runtime). Unsupported on PostgreSQL: table valued joins (`:each`, multi-value relation hops) and `strftime`. In-memory evaluator is a later PR (`docs/RULE_ENGINE.md`).
-- [ ] mcp (PR 2): streamable HTTP transport, `@request.auth.kind = "agent"` in rules, sandbox mode.
 
 ## Size budgets (stripped; CI enforces the numbers in `profiles.txt`: solo 46 MiB, team 46 MiB, no_ui 43 MiB, cluster (solo+replica_s3) 55 MiB, edge 28 MiB, nano 24 MiB). The full-featured `solo` build has reached the 45 MB design budget with passkey (+2.1 MB, go-webauthn/TPM/CBOR), mcp (+2 MB) and push; the `edge`/`nano` profiles exclude these through build tags (`no_mcp`, `no_passkey`, `no_push`, `no_webhooks`, `no_crypto`, ... see `docs/PROFILES.md`).
 
