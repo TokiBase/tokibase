@@ -49,8 +49,8 @@ Each edge module PR recorded its measured cost here (linux/amd64, stripped, `mak
 
 | What | Before (origin/main 5d04b774) | After | Delta | Budget |
 | --- | --- | --- | --- | --- |
-| nano `examples/base` | 23,330,976 B (22.25 MiB) | 23,363,744 B (22.28 MiB) | +32,768 B (32 KiB) | 23 MiB (24,117,248 B), 0.72 MiB left |
-| edge `examples/base` | 28,713,120 B (27.38 MiB) | 28,749,984 B (27.42 MiB) | +36,864 B (36 KiB) | 28 MiB (29,360,128 B), 0.58 MiB left |
+| nano `examples/base` | 23,330,976 B (22.25 MiB) | 23,363,744 B (22.28 MiB) | +32,768 B (32 KiB) | 24 MiB |
+| edge `examples/base` | 28,713,120 B (27.38 MiB) | 28,749,984 B (27.42 MiB) | +36,864 B (36 KiB) | 30 MiB |
 
 PR10 adds the `embed` sync facade, the client conditions and the `Scheduler` seam; no new dependency. The `mobile` AAR was not rebuilt on the VM (no Android SDK there, see [EMBED.md](EMBED.md#android-aar-on-linux)); the wrappers add only methods of `Handle` and import nothing new, so the Android `libgojni.so` grows by about the nano delta.
 
