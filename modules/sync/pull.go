@@ -34,6 +34,13 @@ func (m *Module) lowWater() int64 {
 	return 0
 }
 
+// hubNodeStatus returns the status of a node ("" when it does not exist).
+func hubNodeStatus(app kernel.App, nodeID string) string {
+	var st string
+	_ = app.DB().NewQuery("SELECT status FROM " + NodesCollection + " WHERE id={:id}").Bind(dbx.Params{"id": nodeID}).Row(&st)
+	return st
+}
+
 func (m *Module) schemaVersion() int64 {
 	if v, ok, err := (dbState{db: m.app.DB()}).Get(keySchemaVersion); err == nil && ok {
 		n, _ := strconv.ParseInt(v, 10, 64)
@@ -57,7 +64,8 @@ func (m *Module) ackPulled(nodeID string, through int64) int64 {
 }
 
 // pullHandler is GET /api/sync/pull?after=<seq>&limit=500[&wait=25]
-// (docs/SYNC_DESIGN.md §3.5). PR3 has no partitions, view rules or evictions.
+// (docs/SYNC_DESIGN.md §3.5): rows are limited to the partition of the node,
+// records that left it (or the view rule) become evictions (op "x").
 func (m *Module) pullHandler(e *core.RequestEvent) error {
 	nodeID := NodeFrom(e)
 	q := e.Request.URL.Query()
@@ -87,6 +95,11 @@ func (m *Module) pullHandler(e *core.RequestEvent) error {
 	}
 	if low := m.lowWater(); after < low {
 		return syncErr(e, http.StatusGone, proto.CodeRebootstrap, "The cursor is older than the retained changes; re-bootstrap.", map[string]any{"low_water": low})
+	}
+	if st := hubNodeStatus(e.App, nodeID); st == NodeStale || st == NodeRebootstrap {
+		// compaction no longer keeps changes for a stale node (§3.6)
+		return syncErr(e, http.StatusGone, proto.CodeRebootstrap, "This node was offline longer than the retention; re-bootstrap.",
+			map[string]any{"low_water": m.lowWater(), "node_status": st})
 	}
 	m.ackPulled(nodeID, after) // pull implicitly acks `after`
 
@@ -124,6 +137,8 @@ type pullRow struct {
 	Patch      string `db:"patch"`
 	Hash       []byte `db:"hash"`
 	Status     string `db:"status"`
+	PartOld    string `db:"part_old"`
+	PartNew    string `db:"part_new"`
 }
 
 // buildPull reads one page of deliverable changes with seq in (after, head].
@@ -136,12 +151,21 @@ func (m *Module) buildPull(app kernel.App, nodeID string, after, head int64, lim
 		return resp, nil
 	}
 	vw := newViewer(app, nodeID, serviceActor(app, nodeID))
+	// partitions (§3.5): rows of other partitions never leave the database
+	pex, pparams, err := m.partitionExclusion(vw)
+	if err != nil {
+		return nil, err
+	}
+	params := dbx.Params{"a": after, "h": head, "n": nodeID, "hub": m.hub.id, "lim": limit + 1}
+	for k, v := range pparams {
+		params[k] = v
+	}
 	var rows []pullRow
-	err := app.DB().NewQuery(`SELECT seq, node, origin_seq, hlc, collection, record, op, patch, hash, status FROM _changes
+	err = app.DB().NewQuery(`SELECT seq, node, origin_seq, hlc, collection, record, op, patch, hash, status, part_old, part_new FROM _changes
   WHERE seq > {:a} AND seq <= {:h}
-    AND ((status='applied') OR (status='revert' AND target={:n}) OR (status='local' AND node={:hub}))
+    AND ((status='applied') OR (status='revert' AND target={:n}) OR (status='local' AND node={:hub}))` + pex + `
   ORDER BY seq LIMIT {:lim}`).
-		Bind(dbx.Params{"a": after, "h": head, "n": nodeID, "hub": m.hub.id, "lim": limit + 1}).All(&rows)
+		Bind(params).All(&rows)
 	if err != nil {
 		return nil, err
 	}
@@ -207,6 +231,11 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 		if rec != nil {
 			// a revert carries only what the node may see (P3-2, P3-10): a record
 			// outside the view rule of the node's actor is reported as gone
+			if !vw.inPartition(rec, p) {
+				// the record the node touched lives in another partition: the node
+				// drops its copy (no tombstone) and learns nothing about it
+				return evictChange(pc), true, nil
+			}
 			vr, err := vw.view(rec, p, true)
 			if err != nil {
 				return pc, false, err
@@ -240,7 +269,37 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 		return pc, true, nil
 	}
 
-	if r.Op == OpDelete || r.Op == OpPurge {
+	if r.Op == OpPurge {
+		// an erasure reaches every node that pulls the collection, whatever its
+		// partition: the node may hold the record from earlier
+		pc.Patch = json.RawMessage(`{}`)
+		return pc, true, nil
+	}
+	if p.PullViewRule && col.ViewRule == nil && !p.Trusted {
+		return pc, false, nil // view rule null: superusers only, never pulled unless trusted (§7.7)
+	}
+	enter := false
+	if p.PullViewRule && col.ViewRule != nil && *col.ViewRule != "" && r.Op == OpUpdate {
+		// a restrictive view rule can make a record visible by an update: the node may
+		// not have it, so the update travels as the whole record (an upsert)
+		enter = true
+	}
+	if p.PartField != "" {
+		pv, ok := vw.nodePartition(p)
+		if !ok {
+			return pc, false, nil // the node has no such parameter: it gets nothing
+		}
+		newIn, oldIn := r.PartNew == pv, r.PartOld == pv
+		switch {
+		case !newIn && !oldIn:
+			return pc, false, nil
+		case oldIn && !newIn && r.Op != OpDelete:
+			return evictChange(pc), true, nil // the record left the partition
+		case newIn && !oldIn && r.Op == OpUpdate:
+			enter = true // the record entered the partition: send it whole
+		}
+	}
+	if r.Op == OpDelete {
 		pc.Patch = json.RawMessage(`{}`)
 		return pc, true, nil
 	}
@@ -259,9 +318,34 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 	if rec == nil {
 		return pc, false, nil
 	}
-	vr, err := vw.view(rec, p, false)
+	vr, err := vw.view(rec, p, p.PullViewRule)
 	if err != nil {
 		return pc, false, err
+	}
+	if !vr.visible {
+		if r.Op == OpUpdate {
+			return evictChange(pc), true, nil // it may have been sent before: drop it
+		}
+		return pc, false, nil
+	}
+	if enter {
+		vals, err := fieldValues(rec, fields, p.Types)
+		if err != nil {
+			return pc, false, err
+		}
+		for name := range vr.hidden {
+			delete(vals, name)
+		}
+		enc, err := encodePatch(vals)
+		if err != nil {
+			return pc, false, err
+		}
+		pc.Op, pc.Patch = OpCreate, json.RawMessage(enc)
+		pc.Hash = hex.EncodeToString(canonicalHash(col.Id, r.Record, vals))
+		if mh, mn, ok := readMeta(db, col.Id, r.Record); ok {
+			pc.HLC, pc.Node = hlc.HLC(mh).String(), mn
+		}
+		return pc, true, nil
 	}
 	allowed := make(map[string]struct{}, len(fields))
 	for _, f := range fields {

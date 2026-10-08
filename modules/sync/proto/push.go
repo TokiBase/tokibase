@@ -7,6 +7,8 @@ const (
 	PathPush = "/api/sync/push"
 	PathPull = "/api/sync/pull"
 	PathAck  = "/api/sync/ack"
+	// PathPurge is POST /api/sync/purge (superusers; legal erasure of one record).
+	PathPurge = "/api/sync/purge"
 )
 
 // Topic is the realtime topic on which the hub pokes online spokes. The
@@ -51,6 +53,7 @@ const (
 	CodeTombstoned       = "tombstoned"
 	CodeLegalTombstone   = "legal_tombstone"
 	CodePolicyDirection  = "policy_direction"
+	CodePolicyPartition  = "policy_partition"
 	CodeFutureHLC        = "future_hlc"
 	CodeSuperseded       = "superseded"
 	CodeOrphaned         = "orphaned"
