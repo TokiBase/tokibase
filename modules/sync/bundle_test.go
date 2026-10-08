@@ -330,7 +330,7 @@ func TestBundleLagBeyondMaxBundlesForcesRebootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !hs.Rebootstrap || len(hs.Schema.Bundles) != 0 {
+	if !hs.Rebootstrap || len(hs.Schema.Bundles) != 1 {
 		t.Fatalf("handshake: rebootstrap %v bundles %d", hs.Rebootstrap, len(hs.Schema.Bundles))
 	}
 	// the loop stops with the rebootstrap state (the snapshot is a later PR)

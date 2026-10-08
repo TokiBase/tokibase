@@ -518,8 +518,14 @@ func (m *Module) handshakeSchema(spokeVersion int64) (proto.Schema, bool) {
 	from := spokeVersion + 1
 	if spokeVersion <= 0 {
 		from = hub // fresh node: the latest full snapshot is enough
-	} else if oldest := m.oldestBundle(); from < oldest || hub-spokeVersion > int64(m.maxBundles()) {
-		return out, true
+	}
+	tooOld := false
+	if spokeVersion > 0 {
+		if oldest := m.oldestBundle(); from < oldest || hub-spokeVersion > int64(m.maxBundles()) {
+			// too far behind: the node bootstraps from a snapshot (PR7); the latest
+			// full bundle comes with the answer so that it has the schema first
+			from, tooOld = hub, true
+		}
 	}
 	var rows []struct {
 		Version int64  `db:"version"`
@@ -534,7 +540,7 @@ func (m *Module) handshakeSchema(spokeVersion int64) (proto.Schema, bool) {
 	for _, r := range rows {
 		out.Bundles = append(out.Bundles, proto.SchemaBundle{Version: r.Version, Hash: r.Hash, Bundle: json.RawMessage(r.Bundle)})
 	}
-	return out, false
+	return out, tooOld
 }
 
 // bundleDefs is the field map of one stored bundle: collection id -> name ->

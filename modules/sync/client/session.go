@@ -53,6 +53,11 @@ func (c *Client) ensureSession(ctx context.Context) error {
 	c.caps = hs.Caps
 	c.mu.Unlock()
 	if hs.Rebootstrap && !c.isBootstrapping() {
+		// PR8: a node that is too far behind on schema gets the latest bundle with the
+		// answer; it is applied before the snapshot bootstrap (which then finds the collections)
+		if err := c.applyBundles(ctx, hs); err != nil {
+			return err
+		}
 		// the state is stored first: a crash before the new epoch is stored still
 		// finds the epoch different at the next handshake (§3.3)
 		c.markRebootstrap(hs.LowWater)
