@@ -85,7 +85,7 @@ func (v *viewer) view(rec *core.Record, p *policy, checkRule bool) (*viewResult,
 		}
 	}
 	clone := rec.Clone()
-	if err := apis.EnrichRecordsForInfo(v.app, ri, clone); err != nil {
+	if err := apis.EnrichRecordsForInfo(core.AsApp(v.app), ri, clone); err != nil {
 		return nil, err
 	}
 	pub := clone.PublicExport()

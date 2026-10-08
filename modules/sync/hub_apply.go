@@ -4,7 +4,6 @@ package sync
 
 import (
 	"compress/gzip"
-	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,12 +13,10 @@ import (
 	"strings"
 
 	"github.com/pocketbase/dbx"
-	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/modules/sync/hlc"
 	"github.com/tokibase/tokibase/modules/sync/proto"
-	"github.com/tokibase/tokibase/tools/router"
 )
 
 // The hub apply pipeline of PR3 (docs/SYNC_DESIGN.md §4.1).
