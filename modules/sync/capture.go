@@ -7,11 +7,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	stdsync "sync"
+	"sync/atomic"
 
 	"github.com/pocketbase/dbx"
-	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/modules/sync/hlc"
@@ -41,7 +42,7 @@ type txState struct {
 	n        int
 	firstSeq int64
 	id       string
-	floorSet bool
+	floorH   hlc.HLC // floor written by this tx (0 = none); reset when rolled back
 }
 
 func (m *Module) bindCapture() {
@@ -84,10 +85,19 @@ func (m *Module) actorFor(rec *core.Record) string {
 // the same pattern.
 func (m *Module) onExecute(op string) func(e *core.RecordEvent) error {
 	return func(e *core.RecordEvent) error {
+		col := e.Record.Collection()
 		if !m.ready.Load() {
+			if b := m.initErr.Load(); b != nil && eligible(col) {
+				// fail closed: a node whose capture failed to initialize must
+				// not accept writes it cannot record
+				return errf("not initialized, write to %q refused: %w", col.Name, b.err)
+			}
 			return e.Next()
 		}
-		p := m.pol.For(e.Record.Collection())
+		p, err := m.pol.For(col)
+		if err != nil {
+			return errf("policy unavailable, write to %q refused: %w", col.Name, err)
+		}
 		if p == nil {
 			return e.Next()
 		}
@@ -96,13 +106,65 @@ func (m *Module) onExecute(op string) func(e *core.RecordEvent) error {
 			return e.Next() // hub replay of a pushed change: PR3
 		}
 		orig := e.App
-		err := e.App.RunInTransaction(func(tx kernel.App) error {
+		nested := orig.TxInfo() != nil
+		err = orig.RunInTransaction(func(tx kernel.App) error {
 			e.App = tx
-			return m.capture(tx, e, op, p, origin)
+			return m.atomically(tx, nested, func() error {
+				return m.capture(tx, e, op, p, origin)
+			})
 		})
 		e.App = orig
 		return err
 	}
+}
+
+var savepointSeq atomic.Uint64
+
+// atomically runs fn (record write + change rows) so that it either fully
+// happens or leaves nothing behind in tx.
+//
+//   - The first statement is a write (no-op update of `_sync_state`), which
+//     takes the SQLite write lock before any SELECT. A deferred transaction
+//     that reads first and upgrades later fails at once with
+//     SQLITE_BUSY_SNAPSHOT when another connection committed in between
+//     (busy_timeout and the lock retry do not help inside a stale snapshot).
+//   - Inside an outer transaction (batch, hook, user RunInTransaction) the
+//     work runs in a SAVEPOINT: when fn fails, the record write is rolled back
+//     even if the caller swallows the error and commits the outer transaction.
+func (m *Module) atomically(tx kernel.App, nested bool, fn func() error) error {
+	db := tx.NonconcurrentDB()
+	if _, err := db.NewQuery("UPDATE _sync_state SET value=value WHERE key={:k}").
+		Bind(dbx.Params{"k": keyNodeID}).Execute(); err != nil {
+		return err
+	}
+	if !nested {
+		return fn()
+	}
+	sp := fmt.Sprintf("sync_cap_%d", savepointSeq.Add(1))
+	if _, err := db.NewQuery("SAVEPOINT " + sp).Execute(); err != nil {
+		return err
+	}
+	var saved txState
+	st := m.txStateOf(tx)
+	if st != nil {
+		st.mu.Lock()
+		saved.n, saved.firstSeq, saved.id, saved.floorH = st.n, st.firstSeq, st.id, st.floorH
+		st.mu.Unlock()
+	}
+	if err := fn(); err != nil {
+		if _, rerr := db.NewQuery("ROLLBACK TO " + sp).Execute(); rerr != nil {
+			return fmt.Errorf("%w (savepoint rollback failed: %v)", err, rerr)
+		}
+		_, _ = db.NewQuery("RELEASE " + sp).Execute()
+		if st != nil {
+			st.mu.Lock()
+			st.n, st.firstSeq, st.id, st.floorH = saved.n, saved.firstSeq, saved.id, saved.floorH
+			st.mu.Unlock()
+		}
+		return err
+	}
+	_, err := db.NewQuery("RELEASE " + sp).Execute()
+	return err
 }
 
 func (m *Module) capture(tx kernel.App, e *core.RecordEvent, op string, p *policy, origin *kernel.SyncOrigin) error {
@@ -128,13 +190,19 @@ func (m *Module) capture(tx kernel.App, e *core.RecordEvent, op string, p *polic
 			if err != nil {
 				return err
 			}
-			if pre, err = fieldValues(old, fields); err != nil {
+			if pre, err = fieldValues(old, fields, p.Types); err != nil {
 				return err
 			}
 		}
-		baseHLC = metaHLC(db, col.Id, id)
+		var err error
+		if baseHLC, err = metaHLC(db, col.Id, id); err != nil {
+			return err
+		}
 	case OpDelete:
-		baseHLC = metaHLC(db, col.Id, id)
+		var err error
+		if baseHLC, err = metaHLC(db, col.Id, id); err != nil {
+			return err
+		}
 	}
 
 	if err := e.Next(); err != nil {
@@ -150,7 +218,7 @@ func (m *Module) capture(tx kernel.App, e *core.RecordEvent, op string, p *polic
 	patch := map[string]any{}
 	if op != OpDelete {
 		var err error
-		if post, err = fieldValues(rec, fields); err != nil {
+		if post, err = fieldValues(rec, fields, p.Types); err != nil {
 			return err
 		}
 		hash = canonicalHash(col.Id, id, post)
@@ -164,7 +232,9 @@ func (m *Module) capture(tx kernel.App, e *core.RecordEvent, op string, p *polic
 		var meaningful bool
 		patch, meaningful = diffPatch(fields, p, pre, post)
 		if !meaningful {
-			return nil // nothing but derived/autodate changes: no change row
+			// nothing but derived/autodate changes: no change row, but the
+			// stored row did change, so keep _sync_meta.hash equal to its hash
+			return refreshMetaHash(db, col.Id, id, hash)
 		}
 	}
 
@@ -187,9 +257,7 @@ func (m *Module) capture(tx kernel.App, e *core.RecordEvent, op string, p *polic
 		if err := putTombstone(db, col.Id, id, "delete", h, node, m.actorFor(rec), "", m.created()); err != nil {
 			return err
 		}
-		_, err = db.NewQuery("DELETE FROM _sync_meta WHERE collection={:c} AND record={:r}").
-			Bind(dbx.Params{"c": col.Id, "r": id}).Execute()
-		return err
+		return deleteMeta(db, col.Id, id)
 	default:
 		return upsertMeta(db, col.Id, id, h, node, hash)
 	}
@@ -210,9 +278,7 @@ func (m *Module) captureReplica(tx kernel.App, op string, rec *core.Record, p *p
 		if err := putTombstone(db, col.Id, rec.Id, "delete", h, node, actor, "", m.created()); err != nil {
 			return err
 		}
-		_, err := db.NewQuery("DELETE FROM _sync_meta WHERE collection={:c} AND record={:r}").
-			Bind(dbx.Params{"c": col.Id, "r": rec.Id}).Execute()
-		return err
+		return deleteMeta(db, col.Id, rec.Id)
 	}
 	hash, err := RecordHash(rec, p)
 	if err != nil {
@@ -374,20 +440,31 @@ func (m *Module) insertChange(tx kernel.App, c *change) error {
 func (m *Module) maybePersistFloor(tx kernel.App, st *txState) error {
 	clock := m.Clock()
 	h, due := clock.NeedsFloor()
-	if !due || (st != nil && st.floorSet) {
+	if !due || (st != nil && st.floorH != 0) {
 		return nil
 	}
 	if err := hlc.SaveFloor(dbState{db: tx.NonconcurrentDB()}, h); err != nil {
 		return err
 	}
 	if st != nil {
-		st.floorSet = true
+		st.mu.Lock()
+		st.floorH = h
+		st.mu.Unlock()
 	}
 	if info := tx.TxInfo(); info != nil {
 		info.OnComplete(func(txErr error) error {
-			if txErr == nil {
-				clock.Persisted(h)
+			if txErr != nil {
+				return nil
 			}
+			if st != nil {
+				st.mu.Lock()
+				kept := st.floorH == h // false when a savepoint rolled the write back
+				st.mu.Unlock()
+				if !kept {
+					return nil
+				}
+			}
+			clock.Persisted(h)
 			return nil
 		})
 	}
@@ -419,44 +496,4 @@ func randomHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
-}
-
-// metaHLC returns the record clock the writer saw (0 when unknown).
-func metaHLC(db dbx.Builder, colId, id string) int64 {
-	var h int64
-	if err := db.NewQuery("SELECT hlc FROM _sync_meta WHERE collection={:c} AND record={:r}").
-		Bind(dbx.Params{"c": colId, "r": id}).Row(&h); err != nil {
-		return 0
-	}
-	return h
-}
-
-func upsertMeta(db dbx.Builder, colId, id string, h int64, node string, hash []byte) error {
-	_, err := db.NewQuery(`INSERT INTO _sync_meta (collection, record, hlc, node, hash) VALUES ({:c}, {:r}, {:h}, {:n}, {:x})
-  ON CONFLICT(collection, record) DO UPDATE SET hlc=excluded.hlc, node=excluded.node, hash=excluded.hash`).
-		Bind(dbx.Params{"c": colId, "r": id, "h": h, "n": node, "x": hash}).Execute()
-	return err
-}
-
-// guardTombstone refuses to create a record whose id has a tombstone.
-func guardTombstone(db dbx.Builder, colId, id string) error {
-	var n int
-	if err := db.NewQuery("SELECT COUNT(*) FROM _sync_tombstones WHERE collection={:c} AND record={:r}").
-		Bind(dbx.Params{"c": colId, "r": id}).Row(&n); err != nil {
-		return err
-	}
-	if n > 0 {
-		return validation.Errors{"id": validation.NewError("validation_sync_tombstoned",
-			"This record id was deleted (tombstone) and cannot be created again.")}
-	}
-	return nil
-}
-
-func putTombstone(db dbx.Builder, colId, id, kind string, h int64, node, actor, reason, created string) error {
-	_, err := db.NewQuery(`INSERT INTO _sync_tombstones (collection, record, kind, hlc, node, actor, reason, created)
-  VALUES ({:c}, {:r}, {:k}, {:h}, {:n}, {:a}, {:why}, {:t})
-  ON CONFLICT(collection, record) DO UPDATE SET hlc=excluded.hlc, node=excluded.node, actor=excluded.actor, created=excluded.created
-  WHERE kind='delete'`).
-		Bind(dbx.Params{"c": colId, "r": id, "k": kind, "h": h, "n": node, "a": actor, "why": reason, "t": created}).Execute()
-	return err
 }

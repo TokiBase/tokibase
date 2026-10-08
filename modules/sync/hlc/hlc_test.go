@@ -237,3 +237,57 @@ func TestFloorPersistence(t *testing.T) {
 		t.Fatalf("boot picks the max, got %v", st)
 	}
 }
+
+func TestObserveNeverDecreasesAtMax(t *testing.T) {
+	f := &fakeNow{t: t0}
+	c := NewClock(f.now, 0)
+	c.Observe(HLC(1<<63 - 1)) // clamped to the int64 range
+	prev := c.Last()
+	if int64(prev) < 0 {
+		t.Fatalf("last %v is not an int64", prev)
+	}
+	for i := 0; i < 5; i++ {
+		n := c.Now()
+		if n < prev || int64(n) < 0 {
+			t.Fatalf("clock went down or out of range: %v after %v", n, prev)
+		}
+		prev = n
+	}
+	c.Observe(HLC(1 << 63)) // top bit set: clamped, still not lower
+	if c.Last() < prev {
+		t.Fatal("Observe decreased last")
+	}
+}
+
+func TestObserveBounded(t *testing.T) {
+	f := &fakeNow{t: t0}
+	c := NewClock(f.now, 0)
+	ok := Make(t0.Add(4*time.Minute).UnixMilli(), 0)
+	if _, err := c.ObserveBounded(ok, 5*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	before := c.Last()
+	far := Make(t0.Add(time.Hour).UnixMilli(), 0)
+	if _, err := c.ObserveBounded(far, 5*time.Minute); err != ErrFutureHLC {
+		t.Fatalf("err %v", err)
+	}
+	if _, err := c.ObserveBounded(HLC(1<<63), 5*time.Minute); err != ErrFutureHLC {
+		t.Fatalf("err %v", err)
+	}
+	if c.Last() != before {
+		t.Fatal("a refused remote must not move the clock")
+	}
+}
+
+func TestBootTakesMaxOfSeen(t *testing.T) {
+	s := memStore{}
+	if err := SaveFloor(s, 50); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := Boot(s, 10, 70, 60); h != 70 {
+		t.Fatalf("boot %v", h)
+	}
+	if h, _ := Boot(s, 10); h != 50 {
+		t.Fatalf("boot %v", h)
+	}
+}

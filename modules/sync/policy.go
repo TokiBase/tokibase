@@ -52,25 +52,47 @@ func (c *policyCache) bind() {
 	app.OnRecordAfterCreateSuccess(PoliciesCollection).Bind(&hook.Handler[*core.RecordEvent]{Id: hookId + "pol", Func: inv})
 	app.OnRecordAfterUpdateSuccess(PoliciesCollection).Bind(&hook.Handler[*core.RecordEvent]{Id: hookId + "pol", Func: inv})
 	app.OnRecordAfterDeleteSuccess(PoliciesCollection).Bind(&hook.Handler[*core.RecordEvent]{Id: hookId + "pol", Func: inv})
+	// a collection created, renamed or deleted changes what a policy ref resolves to
+	invCol := func(e *core.CollectionEvent) error {
+		err := e.Next()
+		c.invalidate()
+		return err
+	}
+	app.OnCollectionAfterCreateSuccess().Bind(&hook.Handler[*core.CollectionEvent]{Id: hookId + "polcol", Func: invCol})
+	app.OnCollectionAfterUpdateSuccess().Bind(&hook.Handler[*core.CollectionEvent]{Id: hookId + "polcol", Func: invCol})
+	app.OnCollectionAfterDeleteSuccess().Bind(&hook.Handler[*core.CollectionEvent]{Id: hookId + "polcol", Func: invCol})
 }
 
-func (c *policyCache) load() map[string]*policy {
+// policyRetry is how long a failed reload keeps serving the last good set
+// before it is tried again.
+const policyRetry = time.Second
+
+// load returns the policies by collection name and id. A load error is never
+// cached as "no policies": with a previous good set that set keeps being used
+// (and the reload is retried after policyRetry), without one the error is
+// returned and capture refuses the write.
+func (c *policyCache) load() (map[string]*policy, error) {
 	c.mu.RLock()
 	rows, fresh := c.rows, !c.stale && time.Since(c.loaded) < policyTTL
 	c.mu.RUnlock()
 	if fresh && rows != nil {
-		return rows
+		return rows, nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !c.stale && c.rows != nil && time.Since(c.loaded) < policyTTL {
+		return c.rows, nil // another goroutine reloaded meanwhile
+	}
 	recs, err := c.m.app.FindAllRecords(PoliciesCollection)
 	if err != nil {
-		c.m.app.Logger().Warn("sync: failed to load policies", "error", err)
 		if c.rows == nil {
-			c.rows = map[string]*policy{}
+			c.m.app.Logger().Error("sync: failed to load policies, writes are refused", "error", err)
+			return nil, err
 		}
-		c.loaded = time.Now()
-		return c.rows
+		c.m.app.Logger().Warn("sync: failed to reload policies, keeping the last good set", "error", err)
+		c.loaded = time.Now().Add(policyRetry - policyTTL)
+		c.stale = false
+		return c.rows, nil
 	}
 	out := make(map[string]*policy, len(recs)*2)
 	for _, r := range recs {
@@ -100,24 +122,34 @@ func (c *policyCache) load() map[string]*policy {
 		}
 	}
 	c.rows, c.loaded, c.stale = out, time.Now(), false
-	return out
+	return out, nil
+}
+
+// eligible reports whether col can ever be captured as data: system
+// collections (names starting with "_") and views never are.
+func eligible(col *core.Collection) bool {
+	return col != nil && !col.System && !col.IsView() && len(col.Name) > 0 && col.Name[0] != '_'
 }
 
 // For returns the policy that makes col captured, or nil. System collections
-// (names starting with "_") and views are never captured as data.
-func (c *policyCache) For(col *core.Collection) *policy {
-	if col == nil || col.System || col.IsView() || len(col.Name) == 0 || col.Name[0] == '_' {
-		return nil
+// (names starting with "_") and views are never captured as data. A policy
+// load error is returned: the caller must refuse the write (fail closed).
+func (c *policyCache) For(col *core.Collection) (*policy, error) {
+	if !eligible(col) {
+		return nil, nil
 	}
-	rows := c.load()
+	rows, err := c.load()
+	if err != nil {
+		return nil, err
+	}
 	p := rows[col.Id]
 	if p == nil {
 		p = rows[col.Name]
 	}
 	if p == nil || p.Direction == DirNone {
-		return nil
+		return nil, nil
 	}
-	return p
+	return p, nil
 }
 
 func rawJSON(r *core.Record, name string) []byte {
