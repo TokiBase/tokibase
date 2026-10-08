@@ -20,7 +20,8 @@ func TestOnSyncConflictForIsPerApp(t *testing.T) {
 	}
 	defer b.Cleanup()
 
-	if kernel.OnSyncConflictFor(a) != kernel.OnSyncConflictFor(a) || kernel.OnSyncConflictFor(a) == kernel.OnSyncConflictFor(b) {
+	first := kernel.OnSyncConflictFor(a)
+	if first != kernel.OnSyncConflictFor(a) || first == kernel.OnSyncConflictFor(b) {
 		t.Fatal("one handler list per app instance")
 	}
 	kernel.OnSyncConflictFor(a).BindFunc(func(e *kernel.SyncConflictEvent) error {
