@@ -725,6 +725,10 @@ func TestTCPStubSilentStatusStillPrints(t *testing.T) {
 	if got := e.job(t, res.ID).GetString("state"); got != StateDone {
 		t.Fatalf("state=%s", got)
 	}
+	// the stub reads on its own goroutine: the job is done once the write returned
+	for i := 0; i < 100 && !bytes.Contains(stub.bytes(), []byte("hello")); i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if !bytes.Contains(stub.bytes(), []byte("hello")) {
 		t.Fatal("payload not received")
 	}
