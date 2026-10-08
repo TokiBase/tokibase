@@ -179,6 +179,7 @@ func (c *Client) pushAll(ctx context.Context, res *Result) error {
 				c.recordOutcome(row, r)
 			case r.Status == proto.ResParked || (r.Status == proto.ResDuplicate && r.Was == proto.ResParked):
 				res.Parked++
+				res.Rejected++ // PR4 counted a parked change as rejected; Parked is the finer count
 				c.emit(Event{Type: EventParked, ID: r.ID, Code: r.Code, Message: "the change waits for an admin (toki sync conflicts)"})
 				c.recordOutcome(row, r)
 			default:
