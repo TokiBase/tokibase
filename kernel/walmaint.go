@@ -56,12 +56,12 @@ type WALMaintainer interface {
 
 // PoolStats is a snapshot of a connection pool.
 type PoolStats struct {
-	MaxOpen   int           `json:"maxOpen"`
-	Open      int           `json:"open"`
-	InUse     int           `json:"inUse"`
-	Idle      int           `json:"idle"`
-	WaitCount int64         `json:"waitCount"`
-	WaitTime  time.Duration `json:"waitTimeNs"`
+	MaxOpen   int   `json:"maxOpen"`
+	Open      int   `json:"open"`
+	InUse     int   `json:"inUse"`
+	Idle      int   `json:"idle"`
+	WaitCount int64 `json:"waitCount"`
+	WaitMs    int64 `json:"waitMs"`
 }
 
 // DBStatus is the runtime status of one database (data or auxiliary).
@@ -99,7 +99,7 @@ func (app *BaseApp) DBStatus() map[string]DBStatus {
 				InUse:     s.InUse,
 				Idle:      s.Idle,
 				WaitCount: s.WaitCount,
-				WaitTime:  s.WaitDuration,
+				WaitMs:    s.WaitDuration.Milliseconds(),
 			}
 		}
 
