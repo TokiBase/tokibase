@@ -189,9 +189,18 @@ ST="$(curl -fsS -b "$JAR" "$URL_S1/api/kiosk/status")" || fail "kiosk status"
 log "(1) kiosk paired, session for gate_devices/$ACTOR"
 
 # ---- 5. a scan arrives through the pty and is visible to the kiosk session ----
+# the reader flips to "connected" a moment before termios is set raw, and a pty drops what was
+# written in between: probe until the first scan arrives, then send the real ones
+ev_codes() { curl -fsS "$URL_S1/api/scan/events?scanner=belt" -H "Authorization: $TOK" | jget '",".join(i["code"] for i in d["items"])'; }
+for _ in $(seq 1 40); do
+  send_scan "PROBE-0001"
+  sleep 0.5
+  case "$(ev_codes)" in *PROBE-0001*) break ;; esac
+done
+case "$(ev_codes)" in *PROBE-0001*) ;; *) fail "the serial reader never delivered the probe scan" ;; esac
 send_scan "TKT-0001"; send_scan "lower-case"; send_scan "TKT-0002"
-wait_for "scan events" '[ "$(curl -fsS "$URL_S1/api/scan/events?scanner=belt" -H "Authorization: $TOK" | jget "len(d[\"items\"])")" = 2 ]'
-curl -fsS "$URL_S1/api/scan/events?scanner=belt" -H "Authorization: $TOK" | jget '",".join(i["code"] for i in d["items"])' | grep -qx 'TKT-0001,TKT-0002' || fail "scan events do not match"
+wait_for "scan events" 'case "$(ev_codes)" in *TKT-0002*) true ;; *) false ;; esac'
+[ "$(ev_codes)" = "PROBE-0001,TKT-0001,TKT-0002" ] || fail "scan events do not match: $(ev_codes)"
 [ "$(code_of "$URL_S1/api/scan/events?scanner=belt")" != 200 ] || fail "a guest read the scan events"
 log "(2) pty scans visible on /api/scan/events for the kiosk session (filtered code dropped)"
 
