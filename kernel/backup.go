@@ -25,6 +25,11 @@ const (
 )
 
 // generateBackupName generates a new backup name based on the app name and current date.
+// GenerateBackupName returns the default backup file name (prefix + app name + UTC timestamp).
+func GenerateBackupName(app App, prefix string) string {
+	return generateBackupName(app, prefix)
+}
+
 func generateBackupName(app App, prefix string) string {
 	appName := inflector.Snakecase(app.Settings().Meta.AppName)
 	if len(appName) > 50 {

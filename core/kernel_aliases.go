@@ -119,6 +119,7 @@ var (
 	DefaultFieldIdValidationRule   = kernel.DefaultFieldIdValidationRule
 	DefaultFieldNameValidationRule = kernel.DefaultFieldNameValidationRule
 	GenerateDefaultRandomId        = kernel.GenerateDefaultRandomId
+	GenerateBackupName             = kernel.GenerateBackupName
 	NewAuthCollection              = kernel.NewAuthCollection
 	NewAuthOrigin                  = kernel.NewAuthOrigin
 	NewBaseCollection              = kernel.NewBaseCollection
