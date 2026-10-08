@@ -100,14 +100,16 @@ func Register(app core.App) *Module {
 		return err
 	}
 	for _, n := range []string{RolesName, MembershipsName} {
-		app.OnRecordAfterCreateSuccess(n).Bind(&hook.Handler[*core.RecordEvent]{Id: hookId, Func: inval})
-		app.OnRecordAfterUpdateSuccess(n).Bind(&hook.Handler[*core.RecordEvent]{Id: hookId, Func: inval})
-		app.OnRecordAfterDeleteSuccess(n).Bind(&hook.Handler[*core.RecordEvent]{Id: hookId, Func: inval})
+		// handler ids must differ per collection: tagged hooks share one underlying hook
+		// and a repeated id would replace the earlier handler
+		app.OnRecordAfterCreateSuccess(n).Bind(&hook.Handler[*core.RecordEvent]{Id: hookId + "create" + n, Func: inval})
+		app.OnRecordAfterUpdateSuccess(n).Bind(&hook.Handler[*core.RecordEvent]{Id: hookId + "update" + n, Func: inval})
+		app.OnRecordAfterDeleteSuccess(n).Bind(&hook.Handler[*core.RecordEvent]{Id: hookId + "delete" + n, Func: inval})
 	}
 
 	// role names are matched exactly: refuse look-alikes with surrounding whitespace
 	app.OnRecordValidate(RolesName).Bind(&hook.Handler[*core.RecordEvent]{
-		Id: hookId, Priority: -1,
+		Id: hookId + "validateRoles", Priority: -1,
 		Func: func(e *core.RecordEvent) error {
 			name := e.Record.GetString("name")
 			if name != strings.TrimSpace(name) || strings.ContainsAny(name, "\"'\\\r\n\t") {
