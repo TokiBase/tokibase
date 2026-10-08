@@ -25,7 +25,7 @@ var errHookBudget = errors.New("the hook time budget of this push is used up")
 // hookPushBudget is the total time the guests may spend on the conflicts of
 // ONE push (the hub holds applyMu meanwhile). A guest cannot run before the
 // lock is taken: its input is the stored state, which only the lock fixes.
-const hookPushBudget = 10 * time.Second
+var hookPushBudget = 10 * time.Second // a variable for tests
 
 var errNoHookHandler = errors.New("no handler answered the sync conflict (is the wasm module loaded and subscribed?)")
 
@@ -96,13 +96,21 @@ func (m *Module) decide(tx kernel.App, nodeID string, c *hubChange, col *core.Co
 	}
 	in := ResolveInput{
 		Strategy: p.Strategy, Review: p.Review, Concurrent: true,
-		MetaHLC: hlc.HLC(metaH), MetaNode: metaNode, Base: min(c.base, hlc.HLC(metaH)), // a node cannot claim a base newer than the hub record (P56-15)
-		HLC: c.hlc, Node: nodeID,
+		MetaHLC: hlc.HLC(metaH), MetaNode: metaNode, Base: c.base, HLC: c.hlc, Node: nodeID,
 		Patch: c.patch, Types: p.Types, Current: cur,
 	}
 	if p.Strategy == StratFieldMerge || p.Strategy == StratHook {
 		if in.Clocks, err = readFieldClocks(tx.NonconcurrentDB(), col.Id, c.Record); err != nil {
 			return Resolution{}, err
+		}
+	}
+	if p.Strategy == StratFieldMerge && len(in.Clocks) == 0 && metaH > 0 {
+		// the policy was switched to field-merge after the record was last written:
+		// no field has a clock yet, and "clock 0 <= base" would let every old edit
+		// through. The record clock stands in for them (lww until clocks exist).
+		in.Clocks = map[string]hlc.HLC{}
+		for name := range c.patch {
+			in.Clocks[name] = hlc.HLC(metaH)
 		}
 	}
 	if p.Strategy == StratHook {
