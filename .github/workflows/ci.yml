@@ -147,6 +147,14 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod }
       - run: tests/e2e/failover.sh
+  e2e-printer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: tests/e2e/printer.sh
   e2e-sync:
     runs-on: [self-hosted, tokibuild]
     steps:

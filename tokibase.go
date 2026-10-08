@@ -31,6 +31,7 @@ import (
 	"github.com/tokibase/tokibase/modules/nativeauth"
 	"github.com/tokibase/tokibase/modules/passkey"
 	"github.com/tokibase/tokibase/modules/payments"
+	"github.com/tokibase/tokibase/modules/printer"
 	"github.com/tokibase/tokibase/modules/push"
 	"github.com/tokibase/tokibase/modules/roles"
 	"github.com/tokibase/tokibase/modules/ruleguard"
@@ -442,6 +443,23 @@ func NewWithConfig(config Config) *PocketBase {
 		}
 	}
 
+	// ESC/POS receipt and ticket printing through durable jobs (opt-in: TOKI_PRINTER=on)
+	if printer.Enabled() {
+		printer.Register(pb.App.(core.App))
+		if auditLog != nil {
+			printer.SetAuditSink(func(action, collection, record string, details map[string]any) {
+				after, _ := json.Marshal(details)
+				afterStr := string(after)
+				if err := auditLog.Append(&audit.Entry{
+					ActorKind: "system", Action: action, Collection: collection,
+					Record: record, After: &afterStr,
+				}); err != nil {
+					pb.Logger().Warn("audit: failed to record "+action, "error", err)
+				}
+			})
+		}
+	}
+
 	// provider-neutral payments: webhooks, intents, entitlements (TOKI_PAYMENTS=off disables)
 	if payments.Enabled() {
 		payments.Register(pb.App.(core.App))
@@ -573,6 +591,9 @@ func (pb *PocketBase) Start() error {
 	}
 	if push.Enabled() {
 		pb.RootCmd.AddCommand(push.NewCommand(pb))
+	}
+	if printer.Enabled() {
+		pb.RootCmd.AddCommand(printer.NewCommand(pb))
 	}
 	pb.RootCmd.AddCommand(cmd.NewLockoutCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewSessionsCommand(pb))

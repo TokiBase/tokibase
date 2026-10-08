@@ -19,7 +19,7 @@ make edge GOOS=linux GOARCH=arm64   # cross-compile
 | team | none (= solo) | 42.8 MiB | 40.4 MiB | 46 MiB |
 | cluster | `replica_s3` | 51.1 MiB | 47.6 MiB | 55 MiB |
 | edge | `no_payments no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd no_roles` | 25.5 MiB | 24.0 MiB | 28 MiB |
-| nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo no_thumbs no_oauth2 no_s3fs` (edge already has `no_roles`) | 21.1 MiB | 19.9 MiB | 22 MiB |
+| nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo no_thumbs no_oauth2 no_s3fs no_printer` (edge already has `no_roles`) | 21.1 MiB | 19.9 MiB | 22 MiB |
 
 Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.  darwin/arm64 solo measures 41.6 MiB.
 
@@ -31,6 +31,7 @@ Each edge module PR records its measured cost here (linux/amd64, stripped, `make
 | --- | --- | --- | --- | --- |
 | 0 | kernel providers (`NodeIdentity`, `SyncStatus`, `DeviceCerts`) | 27,623,584 B (26.34 MiB, includes PR 0) | same | small interfaces, not measurable |
 | 1 | `internal/devio` + `internal/escpos` (all entry points forced reachable with a temporary probe, nothing links them yet) | 27,623,584 B | 27,742,368 B (26.46 MiB) | +118,784 B (116 KiB); linux/arm64 with probe 25,886,880 B (24.69 MiB) |
+| 2 | `modules/printer` (collections, `print.send`, `/api/print*`, `toki print`; compiled in, runtime opt-in) | 27,660,448 B (26.38 MiB, origin/main) | 27,914,400 B (26.62 MiB) | +253,952 B (248 KiB); budget 28 MiB leaves 1.38 MiB |
 
 `go-qrcode` (raster QR fallback) is already linked into edge through `modules/totp`, so it adds nothing; a hand written encoder was not needed. `x/text/encoding/charmap` is not linked in edge, so the codepages are hand tables (about 2 KiB). The 25.5 MiB in the table above predates later PRs; the measured baseline at PR 1 is 26.34 MiB.
 
@@ -63,6 +64,7 @@ Each edge module PR records its measured cost here (linux/amd64, stripped, `make
 | roles | `no_roles` | yes | yes | no | no |
 | payments | `no_payments` (runtime: `TOKI_PAYMENTS=off`) | yes | yes | no | no |
 | sync | `no_sync` (runtime: `TOKI_SYNC_ROLE=off`, the default) | yes | yes | yes | yes |
+| printer | `no_printer` (runtime: opt-in `TOKI_PRINTER=on`) | yes | yes | yes | no |
 | jsvm plugin (pb_hooks, JS migrations) | `no_jsvm` | yes | yes | no | no |
 | migrate command | `no_migratecmd` | yes | yes | no | no |
 | ghupdate (`update` command) | `no_ghupdate` | yes | yes | no | no |

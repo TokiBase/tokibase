@@ -335,7 +335,7 @@ Order matters. PRs 1 to 3 have no hardware dependency and can be built and teste
 | --- | --- | --- | --- |
 | 0 (done) | `kernel: edge provider interfaces` | `kernel/nodeident.go` (`NodeIdentity`: node id, hub id, hub pub, cert, `Sign(msg)`), `kernel/syncstatus.go` (`SyncStatus`: hub reachable, pending count, last sync), `kernel/devicecerts.go` (provider registration). Sync implements and registers them. No behavior change, unit tests only. | none |
 | 1 (done) | `internal/devio` + `internal/escpos` | Linux serial and evdev readers, TCP/file dialer with the CIDR policy, ESC/POS builder, codepages, QR (native plus raster). Pure unit tests with fakes. | none |
-| 2 | `printer` PR1 | Collections, template DSL, `print.send` handler, status/paper-out logic, `/api/print*`, CLI, marker/stub, `no_printer`, docs, TCP-stub integration test. | 1 |
+| 2 (done) | `printer` PR1 | Collections, template DSL, `print.send` handler, status/paper-out logic, `/api/print*`, CLI, marker/stub, `no_printer`, docs, TCP-stub integration test. | 1 |
 | 3 | `scanner` PR1 | `_scanners`/`_scan_events`, serial and web ingestion, dedupe, `@scan` topic, `/api/scan*`, CLI, `no_scanner`, docs. | 1 |
 | 4 | `kiosk` PR1 | `_kiosk_devices`, pair/session/status/lock/unlock, embedded `kiosk.js` (indicator, wedge capture, lock overlay), CLI, `no_kiosk`, docs. Wires in the scanner wedge hook if PR 3 is merged. | 0, optionally 3 |
 | 5 | `scanner` PR2 | evdev reader with `EVIOCGRAB`, `toki scan devices`, 32/64-bit struct tests, udev docs. | 3 |
@@ -347,6 +347,14 @@ Order matters. PRs 1 to 3 have no hardware dependency and can be built and teste
 
 - **PR 0.** `kernel/nodeident.go` (`NodeIdentity`, `SetNodeIdentity`, `NodeIdentityOf`), `kernel/syncstatus.go` (`SyncStatus`, `SetSyncStatusProvider`, `SyncStatusOf`; the plan's `kernel.SyncStatus(app)` is spelled `SyncStatusOf` because the struct owns the name), `kernel/devicecerts.go` (`DeviceCertProvider` with `Issue`/`Lookup`/`Revoke`, `SetDeviceCerts`, `DeviceCertsOf`). Registries are per app, nil safe, and dropped by `ReleaseEdgeProviders`. `modules/sync/providers.go` registers identity and status at `Register` (one added line in `RegisterRole`); under `no_sync` nothing registers, so `NodeIdentityOf` returns nil. Nothing implements `DeviceCertProvider` yet (PR 6).
 - **PR 1.** `internal/devio`: Linux serial (termios, raw 8N1, bauds 1200 to 230400, deadlines), evdev `KeyScanner` (16 and 24 byte `input_event`, US keymap, shift and caps, Enter terminator, `EVIOCGRAB`), `LineReader`, and a `Dialer` with the CIDR `Policy`. `internal/escpos`: `Builder`, codepages CP437/CP858/WPC1252 (hand tables; `x/text/encoding/charmap` is not linked into edge), `DLE EOT` status parsing, `Render` for the template DSL with limits. Decisions: QR raster uses `github.com/skip2/go-qrcode`, which edge already links through `modules/totp`, so it costs no bytes; no encoder was written. The `@qr` directive is `@qr [size=N] [ec=L|M|Q|H] DATA`. A directive comment needs two spaces or a tab before `#`.
+
+### Status of PR 2 (done)
+
+`modules/printer` as specified in section 2, with these decisions:
+- The paper-out re-enqueue cannot reuse the running job's `Unique` key (the unique index covers `running` rows, so `Enqueue` would return the running job itself and the polling would stop). It uses `print:<id>:w<n>` with a counter stored in `_print_jobs.waits`.
+- Status is checked before the write (paper end, cover open, mechanical error give `waiting_paper` without sending anything) and once after it (paper end stop or an error stop give `waiting_paper`; a closed connection is an error and the queue retries). A printer that does not answer `DLE EOT` within `timeout_ms` prints anyway.
+- `modules/sync` excludes every system collection from `_sync_policies` (`eligible()`), so the planned pull-only provisioning of `_printers` and `_print_templates` is not possible yet; `_print_jobs` is safe by that same rule and by an explicit `IsSyncReplica` guard. Admitting these two collections is a sync follow-up.
+- `_print_jobs.waits` and `updated` are extra fields. `cut`/`drawer` on a printer are defaults appended to rendered jobs that lack `@cut`/`@drawer`. Templates see the paper width as `{{._cols}}`.
 
 Parallelism: after PR 0 and 1, PRs 2, 3 and 6 are independent.
 
