@@ -3,7 +3,6 @@
 package sync
 
 import (
-	"time"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -15,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/apis"

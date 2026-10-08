@@ -222,7 +222,6 @@ func writeSidecar(dir string, s sidecar) {
 	}
 }
 
-
 // noteHead raises max_seq_seen to the current head, in the database and in the
 // sidecar file next to it (called on handshakes, pushes, pulls and compaction;
 // cheap when the head did not move). The boot check compares it with the head.
