@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
+        with: { go-version-file: go.mod, cache: false }
       - run: go vet -structtag=false ./...  # upstream test fixture has an intentional unexported tagged field
       - run: go test ./... -short
   test-rule-ast:
@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
+        with: { go-version-file: go.mod, cache: false }
       - run: go test ./kernel/rule/... ./tools/search/... ./kernel/... ./apis/... ./modules/... -short
   test-race:
     # data race detector on the kernel + sync suites (notify watcher / cleanup goroutines)
@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
+        with: { go-version-file: go.mod, cache: false }
       - run: go test ./kernel/... ./modules/sync/... -short -race -p 2 -timeout 25m
   build-matrix:
     runs-on: ubuntu-latest
@@ -100,7 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
+        with: { go-version-file: go.mod, cache: false }
       - run: go test ./embed/... ./mobile/... -short -race
       - name: nano tags
         run: |
@@ -122,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
+        with: { go-version-file: go.mod, cache: false }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: tests/e2e/run.sh
@@ -132,20 +132,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
-      - uses: dart-lang/setup-dart@v1
-        with: { sdk: stable }
-      - uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: pub-${{ runner.os }}-${{ hashFiles('tests/e2e/dart/pubspec.yaml') }}
+        with: { go-version-file: go.mod, cache: false }
+      - run: echo /usr/local/dart-sdk/bin >> "$GITHUB_PATH"   # Dart is preinstalled on the toki-build runners (PUB_CACHE is per runner)
       - run: tests/e2e/run-dart.sh
   failover:
     runs-on: [self-hosted, tokibuild]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
+        with: { go-version-file: go.mod, cache: false }
       - run: tests/e2e/failover.sh
   e2e-printer:
     runs-on: ubuntu-latest
@@ -160,5 +155,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
+        with: { go-version-file: go.mod, cache: false }
       - run: tests/e2e/sync.sh
