@@ -94,6 +94,13 @@ func (m *Module) bindRoutes() {
 				Bind(apis.SkipSuccessActivityLog(), m.throttle("handshake"), apis.BodyLimit(64<<10), rateTag("sync:handshake"))
 			g.GET(proto.PathPing, m.pingHandler).
 				Bind(apis.SkipSuccessActivityLog(), rateTag("sync:ping"), m.nodeAuth())
+			// the push body limit is enforced by the handler (413 sync_batch_too_large)
+			g.POST(proto.PathPush, m.pushHandler).
+				Bind(apis.SkipSuccessActivityLog(), rateTag("sync:push"), m.nodeAuth())
+			g.GET(proto.PathPull, m.pullHandler).
+				Bind(apis.SkipSuccessActivityLog(), rateTag("sync:pull"), m.nodeAuth())
+			g.POST(proto.PathAck, m.ackHandler).
+				Bind(apis.SkipSuccessActivityLog(), apis.BodyLimit(1<<20), rateTag("sync:ack"), m.nodeAuth())
 			return se.Next()
 		},
 	})
@@ -553,6 +560,40 @@ func (m *Module) handshakePolicies() []proto.Policy {
 	return out
 }
 
+// sessionNode validates `Authorization: Bearer <session_token>` and returns
+// the node id. On failure status is the HTTP status (0 = ok) with the error
+// code and message of docs/SYNC_DESIGN.md §3.12.
+func (m *Module) sessionNode(app core.App, authz string) (nodeID string, status int, code, msg string) {
+	if !m.hubReady() {
+		return "", http.StatusServiceUnavailable, proto.CodeHubUnavailable, "sync hub is not ready"
+	}
+	f := strings.Fields(authz)
+	if len(f) != 2 || !strings.EqualFold(f[0], "bearer") {
+		return "", http.StatusUnauthorized, proto.CodeUnauthorized, "A node session token is required."
+	}
+	invalid := func() (string, int, string, string) {
+		return "", http.StatusUnauthorized, proto.CodeUnauthorized, "The session token is invalid or expired."
+	}
+	claims := jwt.MapClaims{}
+	_, err := jwt.ParseWithClaims(f[1], claims, func(*jwt.Token) (any, error) { return m.hub.secret, nil },
+		jwt.WithValidMethods([]string{"HS256"}), jwt.WithTimeFunc(m.now), jwt.WithExpirationRequired())
+	sub, _ := claims["sub"].(string)
+	if typ, _ := claims["typ"].(string); err != nil || typ != proto.SessionTokenType || sub == "" {
+		return invalid()
+	}
+	node, err := app.FindRecordById(NodesCollection, sub)
+	if err != nil {
+		return invalid()
+	}
+	switch node.GetString("status") {
+	case NodeRevoked:
+		return "", http.StatusForbidden, proto.CodeNodeRevoked, "This node was revoked."
+	case NodePending:
+		return invalid()
+	}
+	return sub, 0, "", ""
+}
+
 // nodeAuth is the middleware of node-authenticated routes: it validates the
 // `Authorization: Bearer <session_token>` and stores the node id in the request
 // (see NodeFrom). 401 sync_unauthorized, 403 sync_node_revoked.
@@ -560,31 +601,11 @@ func (m *Module) nodeAuth() *hook.Handler[*core.RequestEvent] {
 	return &hook.Handler[*core.RequestEvent]{
 		Id: hookId + "nodeauth", Priority: -800,
 		Func: func(e *core.RequestEvent) error {
-			if !m.hubReady() {
-				return syncErr(e, http.StatusServiceUnavailable, proto.CodeHubUnavailable, "sync hub is not ready", nil)
+			id, status, code, msg := m.sessionNode(e.App, e.Request.Header.Get("Authorization"))
+			if status != 0 {
+				return syncErr(e, status, code, msg, nil)
 			}
-			f := strings.Fields(e.Request.Header.Get("Authorization"))
-			if len(f) != 2 || !strings.EqualFold(f[0], "bearer") {
-				return syncErr(e, http.StatusUnauthorized, proto.CodeUnauthorized, "A node session token is required.", nil)
-			}
-			claims := jwt.MapClaims{}
-			_, err := jwt.ParseWithClaims(f[1], claims, func(*jwt.Token) (any, error) { return m.hub.secret, nil },
-				jwt.WithValidMethods([]string{"HS256"}), jwt.WithTimeFunc(m.now), jwt.WithExpirationRequired())
-			sub, _ := claims["sub"].(string)
-			if typ, _ := claims["typ"].(string); err != nil || typ != proto.SessionTokenType || sub == "" {
-				return syncErr(e, http.StatusUnauthorized, proto.CodeUnauthorized, "The session token is invalid or expired.", nil)
-			}
-			node, err := e.App.FindRecordById(NodesCollection, sub)
-			if err != nil {
-				return syncErr(e, http.StatusUnauthorized, proto.CodeUnauthorized, "The session token is invalid or expired.", nil)
-			}
-			switch node.GetString("status") {
-			case NodeRevoked:
-				return syncErr(e, http.StatusForbidden, proto.CodeNodeRevoked, "This node was revoked.", nil)
-			case NodePending:
-				return syncErr(e, http.StatusUnauthorized, proto.CodeUnauthorized, "The session token is invalid or expired.", nil)
-			}
-			e.Set(ctxNodeKey, sub)
+			e.Set(ctxNodeKey, id)
 			return e.Next()
 		},
 	}

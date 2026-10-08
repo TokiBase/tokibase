@@ -21,6 +21,7 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/modules/sync/client"
 	"github.com/tokibase/tokibase/modules/sync/hlc"
 	"github.com/tokibase/tokibase/modules/sync/proto"
 	"github.com/tokibase/tokibase/tools/hook"
@@ -97,6 +98,11 @@ type Module struct {
 	nonces nonceCache
 	// guards holds the per-IP throttles and counters of the hub routes.
 	guards hubGuards
+	// applyMu serializes the hub apply pipeline (push); notify wakes long-polls.
+	applyMu stdsync.Mutex
+	notify  notifier
+	// loop is the spoke client loop (nil unless role spoke and enrolled).
+	loop atomic.Pointer[client.Client]
 
 	// stash maps the record of a client request to its actor (see actor.go).
 	stash stdsync.Map // *core.Record -> string
@@ -167,6 +173,8 @@ func RegisterRole(app core.App, role Role) *Module {
 	m.bindCapture()
 	m.pol.bind()
 	m.bindRoutes()
+	m.bindHubNotify()
+	m.bindLoop()
 	return m
 }
 

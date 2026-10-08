@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -46,6 +47,8 @@ type Error struct {
 	Code    string
 	Message string
 	Data    map[string]any
+	// RetryAfter is the parsed Retry-After header (0 when absent).
+	RetryAfter time.Duration
 }
 
 func (e *Error) Error() string {
@@ -86,6 +89,24 @@ type Options struct {
 	Pin        string
 	Profile    string
 	AppVersion string
+
+	// The fields below configure the sync loop (loop.go).
+
+	// Backend connects the loop to the policies and the hashing of the sync
+	// module (required to apply pulled changes).
+	Backend Backend
+	// Interval is the idle sync interval (default TOKI_SYNC_INTERVAL or 30 s).
+	Interval time.Duration
+	// Page is the number of changes per push/pull page (default 500).
+	Page int
+	// Debounce delays the sync after a local write (default 2 s).
+	Debounce time.Duration
+	// Rand returns a value in [0,1) for the backoff jitter (default math/rand).
+	Rand func() float64
+	// NoPoke disables the realtime "@sync" subscription (also TOKI_SYNC_POKE=0).
+	NoPoke bool
+	// Logger receives loop diagnostics (optional).
+	Logger *slog.Logger
 }
 
 // Client talks to one hub.
@@ -98,6 +119,8 @@ type Client struct {
 	host    string // NormalizeHost of the hub host, part of the signed string
 	wantHub string
 	hubPub  ed25519.PublicKey
+
+	loop loopState
 
 	mu       stdsync.Mutex
 	token    string
@@ -182,6 +205,7 @@ func New(o Options) (*Client, error) {
 			}
 		}
 	}
+	c.initLoop()
 	return c, nil
 }
 

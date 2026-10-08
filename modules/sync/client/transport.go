@@ -137,6 +137,13 @@ func (c *Client) do(ctx context.Context, method, path string, hdr map[string]str
 	}
 	if res.StatusCode/100 != 2 {
 		he := &Error{Status: res.StatusCode}
+		if ra := res.Header.Get("Retry-After"); ra != "" {
+			if n, err := strconv.Atoi(strings.TrimSpace(ra)); err == nil && n > 0 {
+				he.RetryAfter = time.Duration(n) * time.Second
+			} else if t, err := http.ParseTime(ra); err == nil {
+				he.RetryAfter = max(time.Until(t), 0)
+			}
+		}
 		var eb proto.ErrorBody
 		if json.Unmarshal(b, &eb) == nil {
 			he.Message, he.Data = eb.Message, eb.Data

@@ -80,7 +80,7 @@ Exit gate: all modules on by default in profile `solo`, failover drill RTO under
 
 - [x] PR1 capture + HLC + `_changes` (no network): `modules/sync/hlc`, kernel `SyncOrigin`/`DerivedFields`/`RequestInfoContextSync`, `_changes`/`_sync_meta`/`_sync_tombstones`/`_sync_state`, capture hooks (patch diff, canonical hash, tombstone guard, tx groups), minimal `_sync_policies`, `toki sync status`, `no_sync`, `TOKI_SYNC_ROLE=off|hub|spoke` (default off).
 - [x] PR2 identity + handshake: hub key, enrollment, device cert, signed handshake, node session token, `_sync_nodes`/`_sync_cursors`, `toki sync enroll/join/revoke/peers`, clock offset measurement (`modules/sync/proto`, `modules/sync/client`).
-- [ ] PR3 push/pull + lww + client loop: `/push`, `/pull`, `/ack`, apply, lww, revert rows, spoke pull apply with rebase, backoff loop, `@sync` realtime poke, e2e `tests/e2e/sync.sh`.
+- [x] PR3 push/pull + lww + client loop: `/push`, `/pull`, `/ack`, apply, lww, revert rows, spoke pull apply with rebase, backoff loop, `@sync` realtime poke, e2e `tests/e2e/sync.sh`.
 - [ ] PR4 rule re-evaluation + actors + audit: `apis.ReplayRecordRequests`, actor grants, `kernel.SessionActive`, autodate preservation, audit sink, webhooks/wasm skip `IsSyncReplica`.
 - [ ] PR5 conflict strategies + typed fields + hook: field clocks, `field-merge`, `hub-wins`, counter/set replay, `_sync_conflicts`, `toki sync conflicts`, `OnSyncConflictFor`, wasm `sync.conflict.*`.
 - [ ] PR6 policies, partitions, tombstones, compaction: full `_sync_policies` validation, direction checks, partition evict, `pull_view_rule`, purge/legal tombstones, compaction cron, `stale` nodes, 410.
