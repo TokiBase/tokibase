@@ -39,6 +39,7 @@ jget() { python3 -c "import sys,json; d=json.load(sys.stdin); print($1)"; }
 fail() {
   log "FAIL: $*"
   for f in "$TMP"/*.log; do echo "--- $f" >&2; tail -30 "$f" >&2; done
+  echo "--- spoke sync status" >&2; spoketoki sync status 2>&1 | tail -15 >&2 || true
   exit 1
 }
 code_of() { curl -s -o /dev/null -w '%{http_code}' "$@" || true; }
@@ -90,15 +91,15 @@ spoke_env() {
     TOKI_PRINT_ALLOW_COLLECTIONS=gate_devices TOKI_SCAN_READ_AUTH=gate_devices \
     TOKI_SCAN_POST_COLLECTIONS=gate_devices GOMEMLIMIT=200MiB "$@"
 }
-hubtoki() { hub_env "$HUB_BIN" "$@" --dir "$HUB"; }
-spoketoki() { spoke_env "$EDGE_BIN" "$@" --dir "$S1"; }
+hubtoki() { hub_env "$HUB_BIN" "$@" --dev=false --dir "$HUB"; }
+spoketoki() { spoke_env "$EDGE_BIN" "$@" --dev=false --dir "$S1"; }
 start_hub() {
-  hub_env "$HUB_BIN" serve --automigrate=false --dir "$HUB" --http "127.0.0.1:$PORT_HUB" >>"$TMP/hub.log" 2>&1 &
+  hub_env "$HUB_BIN" serve --dev=false --automigrate=false --dir "$HUB" --http "127.0.0.1:$PORT_HUB" >>"$TMP/hub.log" 2>&1 &
   echo $! >"$TMP/hub.pid"
   wait_for "hub health" "curl -fs $URL_HUB/api/health >/dev/null 2>&1"
 }
 start_spoke() {
-  spoke_env "$EDGE_BIN" serve --automigrate=false --publicDir "$TMP/app" --dir "$S1" --http "127.0.0.1:$PORT_S1" >>"$TMP/s1.log" 2>&1 &
+  spoke_env "$EDGE_BIN" serve --dev=false --automigrate=false --publicDir "$TMP/app" --dir "$S1" --http "127.0.0.1:$PORT_S1" >>"$TMP/s1.log" 2>&1 &
   echo $! >"$TMP/s1.pid"
   wait_for "spoke health" "curl -fs $URL_S1/api/health >/dev/null 2>&1"
 }
