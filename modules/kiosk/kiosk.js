@@ -19,16 +19,21 @@
     }
     return { state: 'online', text: 'Online' };
   }
-  function authBlob(s) { return JSON.stringify({ token: s.token, record: s.record }); }
+  // `model` is what SDK versions before 0.26 read; `record` is the current key.
+  function authBlob(s) { return JSON.stringify({ token: s.token, record: s.record, model: s.record }); }
+  // Only these answers mean "this browser is no longer paired": keep the token
+  // on 429, 5xx and network errors (the edge may be restarting) and retry.
+  function dropsToken(status) { return status === 401 || status === 403 || status === 410; }
+  function retryDelay(n) { return Math.min(60000, POLL * Math.pow(2, Math.min(n, 4))); }
 
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { refreshDelay: refreshDelay, indicatorOf: indicatorOf, authBlob: authBlob };
+    module.exports = { refreshDelay: refreshDelay, indicatorOf: indicatorOf, authBlob: authBlob, dropsToken: dropsToken, retryDelay: retryDelay };
   }
   var d = g.document;
   if (!d || !g.fetch) return;
 
-  var toki = g.toki = { token: '', record: null, locked: false, paired: true, status: null, lock: lock, unlock: unlock };
-  var lockAfter = 0, pinRequired = false, refreshT, idleT, pill, overlay, msg, input;
+  var toki = g.toki = { token: '', record: null, locked: false, paired: true, down: false, lockError: false, status: null, lock: lock, unlock: unlock };
+  var failures = 0, lockAfter = 0, pinRequired = false, refreshT, idleT, pill, overlay, msg, input;
 
   function emit(n, detail) { d.dispatchEvent(new CustomEvent('toki:' + n, { detail: detail })); }
   function store(s) {
@@ -45,28 +50,47 @@
   }
 
   function apply(s) {
-    toki.token = s.token; toki.record = s.record; toki.locked = false; toki.paired = true;
+    toki.token = s.token; toki.record = s.record; toki.locked = false; toki.paired = true; toki.down = false; toki.lockError = false;
+    failures = 0;
     lockAfter = s.lock_after_s || 0; pinRequired = !!s.pin_required;
     store(s); hideOverlay(); emit('token', s.token);
     clearTimeout(refreshT);
     refreshT = setTimeout(session, refreshDelay(s.ttl_s));
     resetIdle();
+    draw();
+  }
+  function retry() {
+    toki.down = true; draw();
+    clearTimeout(refreshT);
+    refreshT = setTimeout(session, retryDelay(failures++));
   }
   function session() {
     return post('/session').then(function (r) {
       if (r.status === 200) return apply(r.body);
       if (r.status === 423) { pinRequired = true; return showLock(); }
-      toki.paired = false; clearToken(); draw();
-    }).catch(function () { clearTimeout(refreshT); refreshT = setTimeout(session, POLL); });
+      if (dropsToken(r.status)) { toki.paired = false; clearToken(); draw(); return; }
+      retry(); // 429, 5xx: the old token stays, try again with backoff
+    }).catch(retry);
   }
   function clearToken() { toki.token = ''; toki.record = null; store(null); clearTimeout(refreshT); }
 
+  // The screen is only locked once the edge confirmed it: on a failed POST the
+  // session stays and an error is shown (a reload would otherwise unlock without the PIN).
   function lock() {
     if (!pinRequired) return Promise.resolve(false);
     var auth = toki.token;
-    clearToken(); showLock();
-    return fetch(API + '/lock', { method: 'POST', credentials: 'same-origin', headers: auth ? { Authorization: auth } : {} })
-      .then(function () { return true; }, function () { return true; });
+    return fetch(API + '/lock', { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: auth ? { Authorization: auth } : {} })
+      .then(function (r) {
+        if (r.status === 200) { clearToken(); showLock(); return true; }
+        if (dropsToken(r.status)) { toki.paired = false; clearToken(); draw(); return false; }
+        return lockFailed();
+      }, lockFailed);
+  }
+  function lockFailed() {
+    toki.lockError = true; draw(); emit('lockerror', true);
+    clearTimeout(idleT);
+    if (lockAfter > 0) idleT = setTimeout(lock, POLL); // idle auto-lock keeps trying
+    return false;
   }
   function note(t) { if (msg) msg.textContent = t; }
   function unlock(pin) {
@@ -81,7 +105,7 @@
     var e = d.createElement(tag); e.style.cssText = css; (parent || d.body).appendChild(e); return e;
   }
   function showLock() {
-    toki.locked = true; clearToken(); clearTimeout(idleT);
+    toki.locked = true; toki.lockError = false; clearToken(); clearTimeout(idleT);
     if (!overlay) {
       overlay = el('div', 'position:fixed;inset:0;z-index:2147483646;background:#111;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;font:20px system-ui');
       el('div', 'font-size:28px', overlay).textContent = 'Locked';
@@ -106,6 +130,8 @@
   function draw() {
     if (!d.body) return;
     var i = indicatorOf(toki.status), c = { down: '#c0392b', offline: '#d68910', online: '#1e8449' }[i.state];
+    if (toki.down) { i = { text: 'Edge down' }; c = '#c0392b'; }
+    if (toki.lockError) { i = { text: 'Lock failed - retrying' }; c = '#c0392b'; }
     if (!toki.paired) { i = { text: 'Not paired' }; c = '#7f8c8d'; }
     if (!pill) pill = el('div', 'position:fixed;right:8px;bottom:8px;z-index:2147483645;padding:4px 10px;border-radius:12px;color:#fff;font:13px system-ui;pointer-events:none;opacity:.9');
     pill.style.background = c; pill.textContent = i.text;

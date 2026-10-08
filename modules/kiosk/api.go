@@ -91,15 +91,22 @@ func (m *Module) session(d *Device) (map[string]any, int, string, string) {
 		}
 	}
 	ttl := time.Duration(d.TTLHours) * time.Hour
-	if kernel.RevokeSession == nil {
-		ttl = min(ttl, noSessionsTTL)
+	gen, err := generation(m.app, d.ID)
+	if err != nil {
+		return nil, http.StatusInternalServerError, "token", "failed to issue the token"
 	}
 	tok, err := actor.NewStaticAuthToken(ttl)
 	if err != nil {
 		return nil, http.StatusInternalServerError, "token", "failed to issue the token"
 	}
+	// add the device claims and re-sign with the key of the actor: the token then
+	// dies with the next RevokeDevice even when no session store exists
 	claims, _ := security.ParseUnverifiedJWT(tok)
-	m.rememberSID(d.ID, cast.ToString(claims["sid"]))
+	claims[claimDev], claims[claimGen] = d.ID, gen
+	if tok, err = security.NewJWT(claims, actor.TokenKey()+actor.Collection().AuthToken.Secret, ttl); err != nil {
+		return nil, http.StatusInternalServerError, "token", "failed to issue the token"
+	}
+	m.rememberSID(d.ID, cast.ToString(claims["sid"]), m.now().Add(ttl))
 	m.touchSeen(d.ID)
 	return map[string]any{
 		"token":   tok,
@@ -122,6 +129,9 @@ func (m *Module) handlePair(e *core.RequestEvent) error {
 	if !allowRemote() && !isLoopback(e.Request) {
 		return kioskError(e, http.StatusForbidden, "remote_pairing",
 			"pairing is only allowed from the device itself (set TOKI_KIOSK_ALLOW_REMOTE=1 to allow remote pairing)")
+	}
+	if !m.allow("pair", e.RealIP(), pairPerWindow) {
+		return kioskError(e, http.StatusTooManyRequests, "rate_limited", "too many pairing attempts, try again later")
 	}
 	var req pairRequest
 	if err := e.BindBody(&req); err != nil || req.Code == "" || len(req.Code) > 256 {
@@ -200,27 +210,44 @@ func (m *Module) handleLock(e *core.RequestEvent) error {
 	if err := m.setLocked(d.ID, true); err != nil {
 		return e.InternalServerError("Failed to lock the device.", err)
 	}
-	sids := m.takeSIDs(d.ID)
-	// the token of this very request, when it is the one of the actor (survives a restart)
-	if h := strings.TrimPrefix(e.Request.Header.Get("Authorization"), "Bearer "); h != "" {
-		if cl, err := security.ParseUnverifiedJWT(h); err == nil && cast.ToString(cl["id"]) == d.AuthRecord {
-			sids = append(sids, cast.ToString(cl["sid"]))
+	// the sid of the request token counts only when the token was verified by the
+	// auth loader and belongs to the actor of this device (never trust unverified claims)
+	if a := e.Auth; a != nil && a.Id == d.AuthRecord && (a.Collection().Name == d.AuthCollection || a.Collection().Id == d.AuthCollection) {
+		claims, _ := security.ParseUnverifiedJWT(bearer(e.Request))
+		if sid := cast.ToString(claims["sid"]); sid != "" && cast.ToString(claims[claimDev]) == d.ID {
+			m.rememberSID(d.ID, sid, m.now().Add(time.Duration(d.TTLHours)*time.Hour))
 		}
 	}
-	revoked := 0
-	if fn := kernel.RevokeSession; fn != nil {
-		for _, sid := range sids {
-			if sid == "" {
-				continue
-			}
-			if ok, err := fn(m.app, sid, "kiosk lock"); err != nil {
-				m.app.Logger().Warn("kiosk: failed to revoke a session", "error", err)
-			} else if ok {
-				revoked++
-			}
-		}
+	revoked, err := RevokeDevice(m.app, d.ID, "kiosk lock")
+	if err != nil {
+		return e.InternalServerError("Failed to revoke the tokens of the device.", err)
 	}
-	return e.JSON(http.StatusOK, map[string]any{"locked": true, "revoked": revoked, "revocable": kernel.RevokeSession != nil})
+	return e.JSON(http.StatusOK, map[string]any{"locked": true, "revoked": revoked, "revocable": true})
+}
+
+func bearer(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	if len(h) > 7 && strings.EqualFold(h[:7], "Bearer ") {
+		return h[7:]
+	}
+	return h
+}
+
+// guard drops the auth context of a kiosk token whose device generation is stale
+// (the device was locked, revoked or rotated since the token was issued).
+func (m *Module) guard(e *core.RequestEvent) error {
+	if e.Auth == nil {
+		return e.Next()
+	}
+	claims, _ := security.ParseUnverifiedJWT(bearer(e.Request))
+	dev := cast.ToString(claims[claimDev])
+	if dev == "" {
+		return e.Next()
+	}
+	if gen, err := generation(m.app, dev); err != nil || gen != cast.ToInt64(claims[claimGen]) {
+		e.Auth = nil
+	}
+	return e.Next()
 }
 
 type unlockRequest struct {
@@ -235,13 +262,22 @@ func (m *Module) handleUnlock(e *core.RequestEvent) error {
 	if !d.HasPin {
 		return kioskError(e, http.StatusConflict, "no_pin", "the device has no PIN")
 	}
-	if ok, wait := m.pinAllowed(d.ID); !ok {
-		e.Response.Header().Set("Retry-After", strconv.Itoa(int(wait/time.Second)+1))
-		return kioskError(e, http.StatusTooManyRequests, "pin_locked", "too many wrong PINs, try again later")
+	if !m.allow("unlock", e.RealIP(), unlockPerWin) {
+		e.Response.Header().Set("Retry-After", "60")
+		return kioskError(e, http.StatusTooManyRequests, "rate_limited", "too many attempts, try again later")
 	}
 	var req unlockRequest
 	if err := e.BindBody(&req); err != nil {
 		return kioskError(e, http.StatusBadRequest, "bad_request", "invalid JSON body")
+	}
+	// check, compare and record under one per-device mutex: parallel attempts
+	// cannot all pass the brake before the first failure is counted
+	mu := m.deviceMu(d.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	if ok, wait := m.pinAllowed(d.ID); !ok {
+		e.Response.Header().Set("Retry-After", strconv.Itoa(int(wait/time.Second)+1))
+		return kioskError(e, http.StatusTooManyRequests, "pin_locked", "too many wrong PINs, try again later")
 	}
 	if !d.checkPin(req.PIN) {
 		n, lock := m.pinFailed(d.ID)
@@ -252,12 +288,13 @@ func (m *Module) handleUnlock(e *core.RequestEvent) error {
 		return kioskError(e, http.StatusUnauthorized, "bad_pin", "wrong PIN")
 	}
 	m.pinOK(d.ID)
-	if err := m.setLocked(d.ID, false); err != nil {
-		return e.InternalServerError("Failed to unlock the device.", err)
-	}
+	// issue the session first: when it fails the device stays locked
 	out, st, code, msg := m.session(d)
 	if out == nil {
 		return kioskError(e, st, code, msg)
+	}
+	if err := m.setLocked(d.ID, false); err != nil {
+		return e.InternalServerError("Failed to unlock the device.", err)
 	}
 	e.Response.Header().Set("Cache-Control", "no-store")
 	return e.JSON(http.StatusOK, out)
@@ -331,6 +368,9 @@ func (m *Module) bindRoutes() {
 		Id: hookId + "routes",
 		Func: func(se *core.ServeEvent) error {
 			g := se.Router
+			g.Bind(&hook.Handler[*core.RequestEvent]{
+				Id: hookId + "gen", Priority: apis.DefaultLoadAuthTokenMiddlewarePriority + 2, Func: m.guard,
+			})
 			quiet := apis.SkipSuccessActivityLog()
 			g.POST("/api/kiosk/pair", m.handlePair).Bind(apis.BodyLimit(4<<10), rateTag("kiosk"))
 			g.POST("/api/kiosk/session", m.handleSession).Bind(quiet, apis.BodyLimit(4<<10), rateTag("kiosk"))

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Kiosk e2e (docs/modules/kiosk.md): provision a device with the CLI, pair with
 # the one-time code, trade the cookie for an actor token, read status, lock and
-# unlock with the PIN. curl only; random loopback port; killed by PID file.
+# unlock with the PIN. curl only; free loopback port probed with python (retried); killed by PID file.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -37,12 +37,26 @@ export TOKI_KIOSK=on
 DATA="$TMP/pb_data"
 "$TOKI" superuser upsert "$EMAIL" "$PASS" --dir "$DATA" >/dev/null
 
-PORT=$((20000 + RANDOM % 20000))
-URL="http://127.0.0.1:$PORT"
-"$TOKI" serve --dir "$DATA" --http "127.0.0.1:$PORT" >"$TMP/server.log" 2>&1 &
-echo $! >"$TMP/server.pid"
-for _ in $(seq 1 300); do curl -fs "$URL/api/health" >/dev/null 2>&1 && break; sleep 0.1; done
-curl -fs "$URL/api/health" >/dev/null || fail "server did not start"
+free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
+start_server() {
+  local try
+  for try in 1 2 3; do
+    PORT="$(free_port)"
+    URL="http://127.0.0.1:$PORT"
+    "$TOKI" serve --dir "$DATA" --http "127.0.0.1:$PORT" >"$TMP/server.log" 2>&1 &
+    SPID=$!
+    echo "$SPID" >"$TMP/server.pid"
+    for _ in $(seq 1 300); do
+      kill -0 "$SPID" 2>/dev/null || break # died (port taken): try another port
+      curl -fs "$URL/api/health" >/dev/null 2>&1 && return 0
+      sleep 0.1
+    done
+    kill -9 "$SPID" 2>/dev/null || true
+    wait "$SPID" 2>/dev/null || true
+  done
+  fail "server did not start"
+}
+start_server
 
 SU="$(curl -fsS "$URL/api/collections/_superusers/auth-with-password" -H 'Content-Type: application/json' \
   -d "{\"identity\":\"$EMAIL\",\"password\":\"$PASS\"}" | jget 'd["token"]')"
@@ -76,6 +90,7 @@ grep -i '^set-cookie: toki_kiosk=' "$TMP/pair.hdr" | grep -qi 'Path=/api/kiosk' 
 [ "$(code_of -X POST "$URL/api/kiosk/pair" -H 'Content-Type: application/json' -d "{\"code\":\"$CODE\"}")" = 403 ] || fail "the pairing code must be single use"
 log "pairing ok"
 
+EARLY="$(curl -fsS -b "$JAR" -X POST "$URL/api/kiosk/session" | jget 'd["token"]')" || fail "early session"
 S="$(curl -fsS -b "$JAR" -X POST "$URL/api/kiosk/session")" || fail "session"
 TOK="$(echo "$S" | jget 'd["token"]')"
 [ "$(echo "$S" | jget 'd["ttl_s"]')" = 43200 ] || fail "default TTL is 12 h: $S"
@@ -92,6 +107,7 @@ echo "$ST" | jget '",".join(sorted(d))' | grep -q 'printers' || fail "status has
 # lock: the token dies, no new session until the PIN
 curl -fsS -b "$JAR" -X POST "$URL/api/kiosk/lock" -H "Authorization: $TOK" >/dev/null || fail "lock"
 [ "$(code_of "$URL/api/collections/gate_devices/records/$ACTOR" -H "Authorization: $TOK")" != 200 ] || fail "token still works after lock"
+[ "$(code_of "$URL/api/collections/gate_devices/records/$ACTOR" -H "Authorization: $EARLY")" != 200 ] || fail "an earlier token still works after lock"
 [ "$(code_of -b "$JAR" -X POST "$URL/api/kiosk/session")" = 423 ] || fail "session while locked"
 [ "$(code_of -b "$JAR" -X POST "$URL/api/kiosk/unlock" -H 'Content-Type: application/json' -d '{"pin":"0000"}')" = 401 ] || fail "wrong PIN"
 U="$(curl -fsS -b "$JAR" -X POST "$URL/api/kiosk/unlock" -H 'Content-Type: application/json' -d '{"pin":"1234"}')" || fail "unlock"
@@ -110,6 +126,8 @@ curl -fs "$URL/kiosk/pair" | grep -q kiosk.js || fail "pair page"
 "$TOKI" kiosk list --dir "$DATA" | grep -q '^gate-1' || fail "kiosk list"
 NEW="$("$TOKI" kiosk rotate gate-1 --dir "$DATA" --url "$URL" | tail -n 1)" || fail "rotate"
 [ "$(code_of -b "$JAR" -X POST "$URL/api/kiosk/session")" = 401 ] || fail "the old cookie must stop working after rotate"
+[ "$(code_of "$URL/api/collections/gate_devices/records/$ACTOR" -H "Authorization: $TOK2")" != 200 ] || fail "a token issued before rotate must die"
+[ "$(code_of "$URL/api/collections/gate_devices/records/$ACTOR" -H "Authorization: $TOK2")" != 200 ] || fail "a token issued before rotate must die"
 [ "$(code_of -X POST "$URL/api/kiosk/pair" -H 'Content-Type: application/json' -d "{\"code\":\"${NEW#*#}\"}")" = 200 ] || fail "pair after rotate"
 "$TOKI" kiosk revoke gate-1 --dir "$DATA" >/dev/null || fail "revoke"
 "$TOKI" kiosk set-pin gate-1 --pin 4321 --dir "$DATA" || fail "set-pin"
