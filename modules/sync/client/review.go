@@ -3,13 +3,11 @@
 package client
 
 import (
-	"context"
 	"strings"
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/kernel"
-	"github.com/tokibase/tokibase/modules/sync/hlc"
 	"github.com/tokibase/tokibase/modules/sync/proto"
 )
 
@@ -64,25 +62,4 @@ func PendingReview(app core.App) ([]ReviewItem, error) {
 		out = append(out, ReviewItem{Collection: parts[0], Record: parts[1], Notice: notice, Code: code})
 	}
 	return out, nil
-}
-
-// applyEvict removes the local copy of a record that left the view of this
-// node, WITHOUT a tombstone (the record still exists on the hub, so a later
-// create must not be blocked and nothing is pushed back).
-func (c *Client) applyEvict(tx kernel.App, col *core.Collection, ch *proto.PullChange) (bool, error) {
-	if err := clearReview(tx.NonconcurrentDB(), col.Id, ch.Record); err != nil {
-		return false, err
-	}
-	rec, _ := tx.FindRecordById(col.Id, ch.Record)
-	if rec == nil {
-		return false, nil
-	}
-	h, _ := hlc.Parse(ch.HLC)
-	ctx := kernel.WithSyncOrigin(context.Background(), &kernel.SyncOrigin{Mode: kernel.SyncModePull, Node: ch.Node, HLC: uint64(h), ChangeID: ch.ID})
-	if err := tx.DeleteWithContext(ctx, rec); err != nil {
-		return false, err
-	}
-	_, err := tx.NonconcurrentDB().NewQuery("DELETE FROM _sync_tombstones WHERE collection={:c} AND record={:r} AND kind='delete'").
-		Bind(dbx.Params{"c": col.Id, "r": ch.Record}).Execute()
-	return true, err
 }

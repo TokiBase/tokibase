@@ -444,8 +444,7 @@ func (m *Module) invisibleNotice(pc proto.PullChange, p *policy) proto.PullChang
 	pc.Patch, pc.Hash = json.RawMessage(`{}`), ""
 	pc.Code = revertInvisible
 	if p.EvictInvisible || envFlag(EnvEvictInvisible) {
-		pc.Op, pc.Evict = OpDelete, true
-		return pc
+		return evictChange(pc) // the PR6 eviction: a local delete without tombstone
 	}
 	pc.Notice = proto.NoticeInvisible
 	return pc

@@ -117,10 +117,7 @@ func (c *Client) applyChange(tx kernel.App, ch *proto.PullChange) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	if ch.Evict {
-		return c.applyEvict(tx, col, ch)
-	}
-	if ch.Revert || ch.Op == "d" || ch.Op == "p" {
+	if ch.Revert || ch.Evict || ch.Op == "d" || ch.Op == "p" || ch.Op == "x" {
 		// the hub decided about this record: it is no longer pending review
 		if err := clearReview(tx.NonconcurrentDB(), col.Id, ch.Record); err != nil {
 			return false, err
