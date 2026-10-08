@@ -37,10 +37,14 @@ type groupState struct {
 	exists map[gkey]bool
 	meta   map[gkey]gmeta
 	tomb   map[gkey]string
+	// part is the partition key of a record as the earlier changes of the group
+	// leave it
+	part   map[gkey]string
+	params map[string]string // partition parameters of the pushing node (lazy)
 }
 
 func newGroupState() *groupState {
-	return &groupState{exists: map[gkey]bool{}, meta: map[gkey]gmeta{}, tomb: map[gkey]string{}}
+	return &groupState{exists: map[gkey]bool{}, meta: map[gkey]gmeta{}, tomb: map[gkey]string{}, part: map[gkey]string{}}
 }
 
 // prepared is one change ready to be finished after the replay.
@@ -62,6 +66,11 @@ type prepared struct {
 	clockFields []string // plain fields written (field-merge clocks)
 	nh          int64
 	nn          string
+
+	// partBefore / partAfter are the partition key of the record before and after
+	// this change (policies with a partition only)
+	partBefore string
+	partAfter  string
 }
 
 // applyFault is a test seam: a non-nil error aborts the apply of a group like an
@@ -225,6 +234,22 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 		exists = rec != nil
 	}
 
+	if exists {
+		if v, ok := gs.part[key]; ok {
+			pr.partBefore = v
+		} else if rec != nil {
+			pr.partBefore = partValue(rec, p)
+		}
+	}
+	nodePart, partOK := "", true
+	if p.PartField != "" {
+		if gs.params == nil {
+			gs.params = nodeParams(tx, nodeID)
+		}
+		nodePart = gs.params[p.PartParam]
+		partOK = nodePart != ""
+	}
+
 	base := "/api/collections/" + col.Id + "/records"
 	switch c.Op {
 	case OpPurge:
@@ -234,6 +259,10 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 			pr.skip = true
 			return pr, nil
 		}
+		if p.PartField != "" && (!partOK || pr.partBefore != nodePart) {
+			return nil, reject(proto.CodePolicyPartition, "the record is outside the partition of the node")
+		}
+		gs.part[key] = ""
 		// deletes are final (§4.2): a delete older than a concurrent update still deletes
 		pr.req = &core.InternalRequest{Method: http.MethodDelete, URL: base + "/" + c.Record}
 		gs.exists[key], gs.tomb[key] = false, "delete"
@@ -257,6 +286,23 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 	}
 	if rj := validateTyped(p.Types, allowed, c.patch, !exists); rj != nil {
 		return nil, rj
+	}
+	// partition (§7.1): the record must be inside the partition of the node before
+	// the change AND after it; a node can neither touch records of another
+	// partition nor move one into or out of its own
+	pr.partAfter = pr.partBefore
+	if p.PartField != "" {
+		if exists && (!partOK || pr.partBefore != nodePart) {
+			return nil, reject(proto.CodePolicyPartition, "the record is outside the partition of the node")
+		}
+		if _, ok := allowed[p.PartField]; ok {
+			if v, has := c.patch[p.PartField]; has {
+				pr.partAfter = partString(v)
+			}
+		}
+		if !partOK || pr.partAfter != nodePart {
+			return nil, reject(proto.CodePolicyPartition, "the change would put the record outside the partition of the node")
+		}
 	}
 	patch := c.patch
 	pr.clockFields = plainFields(p.Types, c.patch)
@@ -333,6 +379,7 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 	}
 	gs.exists[key] = true
 	gs.meta[key] = gmeta{pr.nh, pr.nn, true}
+	gs.part[key] = pr.partAfter
 	return pr, nil
 }
 
@@ -345,7 +392,7 @@ func (m *Module) finish(tx kernel.App, db dbx.Builder, nodeID string, p *prepare
 	if c.Op == OpDelete {
 		seq, err := m.insertHubRow(db, &hubRow{
 			node: nodeID, oseq: c.oseq, hlc: int64(c.hlc), base: int64(c.base), col: col.Id, rec: c.Record, op: OpDelete,
-			patch: "{}", actor: c.Actor, tx: c.Tx, status: StatusApplied,
+			patch: "{}", actor: c.Actor, tx: c.Tx, status: StatusApplied, partOld: p.partBefore,
 		})
 		if err != nil {
 			return nil, err
@@ -384,9 +431,13 @@ func (m *Module) finish(tx kernel.App, db dbx.Builder, nodeID string, p *prepare
 			return nil, err
 		}
 	}
+	partNew := p.partAfter
+	if isLast && fresh != nil {
+		partNew = partValue(fresh, p.pol) // the stored record is the authority
+	}
 	seq, err := m.insertHubRow(db, &hubRow{
 		node: nodeID, oseq: c.oseq, hlc: int64(c.hlc), base: int64(c.base), col: col.Id, rec: c.Record, op: c.Op,
-		patch: enc, hash: hash, actor: c.Actor, tx: c.Tx, status: StatusApplied,
+		patch: enc, hash: hash, actor: c.Actor, tx: c.Tx, status: StatusApplied, partOld: p.partBefore, partNew: partNew,
 	})
 	if err != nil {
 		return nil, err
@@ -405,6 +456,9 @@ func (m *Module) finish(tx kernel.App, db dbx.Builder, nodeID string, p *prepare
 			if err := bumpFieldClocks(db, col.Id, c.Record, written, c.hlc); err != nil {
 				return nil, err
 			}
+		}
+		if err := setMetaPart(db, col.Id, c.Record, partNew); err != nil {
+			return nil, err
 		}
 	}
 	st := proto.ResApplied

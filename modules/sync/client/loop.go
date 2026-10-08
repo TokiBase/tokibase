@@ -338,8 +338,8 @@ func (c *Client) run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if errors.Is(res.Err, ErrRevoked) {
-			return
+		if errors.Is(res.Err, ErrRevoked) || errors.Is(res.Err, ErrRebootstrap) {
+			return // nothing a retry can fix: the status says why (revoked / rebootstrap_required)
 		}
 		var wait time.Duration
 		c.loop.mu.Lock()
