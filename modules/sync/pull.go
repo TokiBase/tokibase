@@ -421,13 +421,18 @@ func (m *Module) pullChange(app kernel.App, vw *viewer, r *pullRow) (proto.PullC
 // rejected change may not view.
 const revertInvisible = "invisible"
 
+// EnvPullViewRule makes the view rule check of pulled rows the default for
+// every collection whose policy does not set `pull_view_rule` (the column is a
+// plain bool, so an explicit false cannot be told from unset: PR6 keeps it a
+// per-policy choice and this variable is the global default).
+const EnvPullViewRule = "TOKI_SYNC_PULL_VIEW_RULE"
+
 // pullRuleOn tells whether the collection view rule is evaluated for the
-// service actor of the pulling node. An explicit policy `pull_view_rule` always
-// does; otherwise it is the default whenever the node has a service actor to
-// evaluate it for (P4-7), unless the policy opts out with SkipViewRule. A node
-// without service actor has no identity and is not filtered.
+// service actor of the pulling node: the policy's `pull_view_rule`, or the
+// TOKI_SYNC_PULL_VIEW_RULE default for nodes that have a service actor to
+// evaluate it for (P4-7), unless the policy opts out with SkipViewRule.
 func (m *Module) pullRuleOn(vw *viewer, p *policy) bool {
-	return p.PullViewRule || (!p.SkipViewRule && vw.actor != nil)
+	return p.PullViewRule || (envFlag(EnvPullViewRule) && !p.SkipViewRule && vw.actor != nil)
 }
 
 // visibleForNode is the single view check of the rows a node pulls: what the

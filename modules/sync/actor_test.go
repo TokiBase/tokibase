@@ -436,7 +436,7 @@ func TestRevertCarriesNoDataOutsideTheViewRule(t *testing.T) { // P3-2
 	hidden := h.create(t, map[string]any{"title": "secret", "qty": 7})
 	h.setRules(t, sp(""), sp("title != 'secret'"), sp(""), sp("title != 'secret'"))
 	tok := a.token(t)
-	c := pc(a.m.NodeID(), 1, nowHLC(0, 60000), 0, h.items.Id, hidden.Id, "u", map[string]any{"title": "probe"})
+	c := pc(a.m.NodeID(), 1, nowHLC(1000, 0), 0, h.items.Id, hidden.Id, "u", map[string]any{"title": "probe"})
 	if r := pushOne(t, h, a, c); r.Status != proto.ResRejected || r.Code != proto.CodeRuleDenied {
 		t.Fatalf("probe: %+v", r)
 	}

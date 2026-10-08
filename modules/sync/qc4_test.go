@@ -270,6 +270,7 @@ func TestInvisibleRevertKeepsLocalDataUnlessEvictIsOn(t *testing.T) { // P4-6
 }
 
 func TestViewRuleAppliesToNormalPullRows(t *testing.T) { // P4-7
+	t.Setenv(EnvPullViewRule, "1")
 	h, a, _ := actorHub(t)
 	h.setRules(t, sp(""), sp(""), sp(""), sp("title != 'secret'"))
 	h.create(t, map[string]any{"title": "secret"})
