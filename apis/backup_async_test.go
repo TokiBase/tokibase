@@ -1,6 +1,7 @@
 package apis_test
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -41,19 +42,25 @@ func TestBackupsCreateAsync(t *testing.T) {
 			ExpectedStatus:  202,
 			ExpectedContent: []string{`"state":"running"`, `"name":"async_test.zip"`},
 			AfterTestFunc: func(t testing.TB, app *tests.TestApp, res *http.Response) {
+				// the listing can race with the temp file rename of the backups
+				// filesystem, so poll the job state and only then list
 				deadline := time.Now().Add(30 * time.Second)
 				for {
-					files, err := getBackupFiles(app)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if len(files) == 1 && files[0].Key == "async_test.zip" && !app.Store().Has("@activeBackup") {
+					if strings.Contains(fmt.Sprintf("%+v", app.Store().Get("@tokiBackupJob")), "State:done") {
 						break
 					}
 					if time.Now().After(deadline) {
-						t.Fatalf("the async backup did not finish: %v", files)
+						t.Fatal("the async backup did not finish")
 					}
 					time.Sleep(50 * time.Millisecond)
+				}
+
+				files, err := getBackupFiles(app)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(files) != 1 || files[0].Key != "async_test.zip" {
+					t.Fatalf("expected async_test.zip, got %v", files)
 				}
 			},
 		},
