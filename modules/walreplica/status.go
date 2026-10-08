@@ -196,14 +196,14 @@ type ReplicaInfo struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
 
-	LatestTXID       uint64     `json:"latestTxid"`
-	LatestAt         *time.Time `json:"latestAt,omitempty"` // creation time of the newest file
-	Snapshots        int        `json:"snapshots"`
-	LatestSnapshotAt *time.Time `json:"latestSnapshotAt,omitempty"`
-	OldestRestoreAt  *time.Time `json:"oldestRestoreAt,omitempty"` // oldest snapshot
-	OldestAt         *time.Time `json:"oldestAt,omitempty"` // creation time of the oldest file (oldest segment)
-	Files            int        `json:"files"`
-	Bytes            int64      `json:"bytes"`
+	LatestTXID       uint64      `json:"latestTxid"`
+	LatestAt         *time.Time  `json:"latestAt,omitempty"` // creation time of the newest file
+	Snapshots        int         `json:"snapshots"`
+	LatestSnapshotAt *time.Time  `json:"latestSnapshotAt,omitempty"`
+	OldestRestoreAt  *time.Time  `json:"oldestRestoreAt,omitempty"` // oldest snapshot
+	OldestAt         *time.Time  `json:"oldestAt,omitempty"`        // creation time of the oldest file (oldest segment)
+	Files            int         `json:"files"`
+	Bytes            int64       `json:"bytes"`
 	Levels           []LevelInfo `json:"levels"`
 }
 
