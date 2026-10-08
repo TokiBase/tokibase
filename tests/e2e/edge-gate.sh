@@ -221,7 +221,7 @@ gate_call() { # prints the http code (000 when the TLS handshake fails)
 wait_for "spoke TLS listener with a leaf" "curl -fs --cacert $TMP/root.pem https://127.0.0.1:$TLS_S1/api/health >/dev/null 2>&1"
 wait_for "gate controller admitted" '[ "$(gate_call)" = 200 ]'
 [ "$(code_of --cacert "$TMP/root.pem" -X POST -H 'Content-Type: application/json' -d '{"scanner":"door","code":"GATE-CTRL-IN"}' "https://127.0.0.1:$TLS_S1/api/scan")" = 401 ] || fail "no client certificate must get 401"
-[ "$(code_of --cacert "$TMP/root.pem" --cert "$OUT/gate-ctrl.crt.pem" --key "$OUT/gate-ctrl.key.pem" "https://127.0.0.1:$TLS_S1/api/collections/tickets/records")" != 200 ] || fail "the certificate must not reach /api/collections"
+[ "$(code_of --cacert "$TMP/root.pem" --cert "$OUT/gate-ctrl.crt.pem" --key "$OUT/gate-ctrl.key.pem" "https://127.0.0.1:$TLS_S1/api/collections/_superusers/records")" != 200 ] || fail "the certificate must not reach /api/collections"
 log "(4) gate controller: /api/scan on the TLS port with its client certificate, no token -> 200"
 
 # ---- 8. the hub revokes it ----
