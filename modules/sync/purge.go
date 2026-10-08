@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/pocketbase/dbx"
@@ -37,6 +38,39 @@ type PurgeResult struct {
 	Blanked int64 `json:"blanked"`
 	// Seq is the hub seq of the `p` row (0 when Already).
 	Seq int64 `json:"seq"`
+	// Scrubbed is true when the WAL was checkpointed and truncated after the
+	// purge. Copies in walreplica streams, backups and file system snapshots
+	// are NOT reached (docs/modules/sync.md, "Purge").
+	Scrubbed bool `json:"scrubbed"`
+}
+
+// secureDelete switches PRAGMA secure_delete on for the connection of db and
+// returns the function that restores the previous setting.
+func secureDelete(db dbx.Builder) func() {
+	var old int
+	if err := db.NewQuery("PRAGMA secure_delete").Row(&old); err != nil {
+		return func() {}
+	}
+	if _, err := db.NewQuery("PRAGMA secure_delete=ON").Execute(); err != nil {
+		return func() {}
+	}
+	return func() {
+		_, _ = db.NewQuery("PRAGMA secure_delete=" + strconv.Itoa(old)).Execute()
+	}
+}
+
+// scrubFreePages returns freed space of an incremental-vacuum database to the OS
+// and truncates the WAL so that old page images of the erased rows leave the
+// live database files. It reports whether the checkpoint completed.
+func (m *Module) scrubFreePages() bool {
+	db := m.app.NonconcurrentDB()
+	_, _ = db.NewQuery("PRAGMA incremental_vacuum").Execute()
+	var busy, logFrames, ckpt int
+	if err := db.NewQuery("PRAGMA wal_checkpoint(TRUNCATE)").Row(&busy, &logFrames, &ckpt); err != nil || busy != 0 {
+		m.app.Logger().Warn("sync: purge could not truncate the WAL (readers active); run `toki sync compact --vacuum` later", "busy", busy, "error", err)
+		return false
+	}
+	return true
 }
 
 // ErrPurgeInput marks a purge request that is wrong (HTTP 400).
@@ -56,9 +90,15 @@ func putLegalTombstone(db dbx.Builder, colId, id string, h int64, node, actor, r
 
 // blankChanges erases the patch and hash of every `_changes` row of a record
 // (own rows, rejected and parked rows, reverts) and returns the row count.
-func blankChanges(db dbx.Builder, colId, id string) (int64, error) {
-	res, err := db.NewQuery("UPDATE _changes SET patch='{}', hash=NULL WHERE collection={:c} AND record={:r} AND (patch!='{}' OR hash IS NOT NULL)").
-		Bind(dbx.Params{"c": colId, "r": id}).Execute()
+//
+// Rows are matched by collection id AND name: a node can push the name, and the
+// hub stores refused and parked rows as pushed (P56-7). colName may be "".
+func blankChanges(db dbx.Builder, colId, colName, id string) (int64, error) {
+	if colName == "" {
+		colName = colId
+	}
+	res, err := db.NewQuery("UPDATE _changes SET patch='{}', hash=NULL WHERE collection IN ({:c},{:n}) AND record={:r} AND (patch!='{}' OR hash IS NOT NULL)").
+		Bind(dbx.Params{"c": colId, "n": colName, "r": id}).Execute()
 	if err != nil {
 		return 0, err
 	}
@@ -119,12 +159,14 @@ func (m *Module) Purge(collection, id, reason, actor string, cli bool) (*PurgeRe
 	if err != nil {
 		return nil, fmt.Errorf("%w: collection %q not found", ErrPurgeInput, collection)
 	}
+	if !eligible(col) {
+		return nil, fmt.Errorf("%w: collection %q holds no synced data (system collection or view)", ErrPurgeInput, col.Name)
+	}
+	// purge is hub-local: it also works for a collection whose policy is none,
+	// disabled or removed (old `_changes` rows still hold patches). p may be nil.
 	p, err := m.pol.For(col)
 	if err != nil {
 		return nil, err
-	}
-	if p == nil {
-		return nil, fmt.Errorf("%w: collection %q is not synced", ErrPurgeInput, col.Name)
 	}
 
 	m.applyMu.Lock()
@@ -137,6 +179,8 @@ func (m *Module) Purge(collection, id, reason, actor string, cli bool) (*PurgeRe
 		if _, err := db.NewQuery("UPDATE _sync_state SET value=value WHERE key={:k}").Bind(dbx.Params{"k": keyNodeID}).Execute(); err != nil {
 			return err
 		}
+		// freed cells are zeroed instead of left in free pages (P56-8)
+		defer secureDelete(db)()
 		h := int64(m.Clock().Now())
 		partOld := ""
 		if tombstoneKind(db, col.Id, id) == "legal" {
@@ -161,12 +205,15 @@ func (m *Module) Purge(collection, id, reason, actor string, cli bool) (*PurgeRe
 				return err
 			}
 		}
-		n, err := blankChanges(db, col.Id, id)
+		n, err := blankChanges(db, col.Id, col.Name, id)
 		if err != nil {
 			return err
 		}
 		res.Blanked = n
 		if err := blankConflicts(tx, col.Id, id); err != nil {
+			return err
+		}
+		if _, err := db.NewQuery("DELETE FROM _sync_sent WHERE collection={:c} AND record={:r}").Bind(dbx.Params{"c": col.Id, "r": id}).Execute(); err != nil {
 			return err
 		}
 		if res.Already {
@@ -183,6 +230,7 @@ func (m *Module) Purge(collection, id, reason, actor string, cli bool) (*PurgeRe
 	if err != nil {
 		return nil, err
 	}
+	res.Scrubbed = m.scrubFreePages()
 	if !res.Already {
 		m.notifyHead()
 	}

@@ -92,6 +92,9 @@ type Module struct {
 
 	pol policyCache
 
+	// sentOnce guards initSentLegacy (sent.go).
+	sentOnce stdsync.Once
+
 	// hub is the hub key material (role hub), spoke the node keys (role spoke).
 	hub   *hubIdentity
 	spoke *proto.Identity
@@ -101,7 +104,11 @@ type Module struct {
 	guards hubGuards
 	// applyMu serializes the hub apply pipeline (push); notify wakes long-polls.
 	applyMu stdsync.Mutex
-	notify  notifier
+	// hookDeadline / hookTripped: the shared hook budget of the push being
+	// applied (guarded by applyMu, see hub_resolve.go).
+	hookDeadline time.Time
+	hookTripped  bool
+	notify       notifier
 	// loop is the spoke client loop (nil unless role spoke and enrolled).
 	loop atomic.Pointer[client.Client]
 

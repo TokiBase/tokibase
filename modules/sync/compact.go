@@ -134,6 +134,10 @@ func (m *Module) Compact(ctx context.Context) (*CompactReport, error) {
 		return nil, err
 	}
 	rep.LowWater = m.lowWater()
+	if rep.ChangesDeleted > 0 || rep.StaleNodes > 0 || rep.TombstonesDeleted > 0 {
+		emit(AuditCompact, "", "", map[string]any{"role": rep.Role, "changes_deleted": rep.ChangesDeleted,
+			"stale_nodes": rep.StaleNodes, "tombstones_deleted": rep.TombstonesDeleted, "low_water": rep.LowWater})
+	}
 	return rep, nil
 }
 
@@ -146,6 +150,11 @@ func (m *Module) compactHub(tx kernel.App, db dbx.Builder, now time.Time, retCut
 		return err
 	}
 	rep.StaleNodes, _ = res.RowsAffected()
+
+	// the sent sets of nodes that no longer exist
+	if _, err := db.NewQuery("DELETE FROM _sync_sent WHERE node NOT IN (SELECT id FROM " + NodesCollection + ")").Execute(); err != nil {
+		return err
+	}
 
 	// 2. safe = the lowest seq every active node has pulled. Without an active
 	// node nothing is known to be pulled, so only the retention deletes rows.

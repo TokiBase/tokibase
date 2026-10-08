@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"sync"
+	"time"
 
 	"github.com/tokibase/tokibase/tools/hook"
 )
@@ -61,6 +62,9 @@ type SyncConflictEvent struct {
 	// FieldClocks are the per-field clocks of the record (only filled for
 	// collections that keep them).
 	FieldClocks map[string]uint64
+	// Deadline is the end of the hook time budget shared by all conflicts of one
+	// push (zero = no limit); handlers must not run past it.
+	Deadline time.Time
 
 	// Set by handlers.
 	Resolution string

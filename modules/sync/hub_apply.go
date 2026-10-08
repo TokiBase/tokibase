@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	stdatomic "sync/atomic"
+	"time"
 
 	"github.com/pocketbase/dbx"
 	"github.com/tokibase/tokibase/core"
@@ -153,11 +154,17 @@ func (m *Module) pushHandler(e *core.RequestEvent) error {
 		if err != nil {
 			return syncErr(e, http.StatusBadRequest, proto.CodeBadRequest, err.Error(), nil)
 		}
+		// rows are stored (and later purged) under the collection ID, whatever
+		// the node pushed (P56-7)
+		if col, cerr := e.App.FindCachedCollectionByNameOrId(hc.Collection); cerr == nil && col != nil {
+			hc.Collection = col.Id
+		}
 		chs = append(chs, hc)
 	}
 
 	m.applyMu.Lock()
 	defer m.applyMu.Unlock()
+	m.hookDeadline, m.hookTripped = time.Now().Add(hookPushBudget), false // guarded by applyMu
 
 	pushed, err := m.pushedSeq(e.App, nodeID)
 	if err != nil {
