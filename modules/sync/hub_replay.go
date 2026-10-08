@@ -62,9 +62,20 @@ type prepared struct {
 	nn         string
 }
 
+// applyFault is a test seam: a non-nil error aborts the apply of a group like an
+// infrastructure failure would. It is nil in production.
+var applyFault func(c *hubChange) error
+
 // applyGroup applies a tx group (or one change) inside tx. A refusal comes back
 // as *rejection.
 func (m *Module) applyGroup(tx kernel.App, nodeID, ip string, group []*hubChange) ([]*outcome, error) {
+	if f := applyFault; f != nil {
+		for _, c := range group {
+			if err := f(c); err != nil {
+				return nil, err
+			}
+		}
+	}
 	// ---- the actor of the group (a hook-written change of a user request has
 	// actor "node" but belongs to the user's request: the group runs as the user)
 	groupAID := ""

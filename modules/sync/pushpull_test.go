@@ -36,6 +36,12 @@ type itemsSpoke struct {
 
 func newItemsSpoke(t *testing.T, h *hubEnv, name string) *itemsSpoke {
 	t.Helper()
+	return newItemsSpokeWith(t, h, name, h.enroll(t, name, nil))
+}
+
+// newItemsSpokeWith joins with an enrollment code created by the caller.
+func newItemsSpokeWith(t *testing.T, h *hubEnv, name, code string) *itemsSpoke {
+	t.Helper()
 	s := newSpoke(t)
 	open := ""
 	c := core.NewBaseCollection("items")
@@ -56,7 +62,7 @@ func newItemsSpoke(t *testing.T, h *hubEnv, name string) *itemsSpoke {
 	if err := s.app.Save(c); err != nil {
 		t.Fatal(err)
 	}
-	h.join(t, s, h.enroll(t, name, nil))
+	h.join(t, s, code)
 	cl := s.client(t, h, func(o *client.Options) {
 		o.Backend = backend{s.m}
 		o.Interval = time.Hour
@@ -611,10 +617,12 @@ func TestPullImplicitAckAndLowWater(t *testing.T) {
 	if pulled() != pr.Next {
 		t.Fatalf("pulled_seq %d, want %d (implicit ack of `after`)", pulled(), pr.Next)
 	}
-	// acking beyond the head is clamped
-	rawPull(t, h, tok, "after=999999")
-	if pulled() != head {
-		t.Fatalf("clamped pulled_seq %d, want %d", pulled(), head)
+	// a cursor beyond the head is refused (P3-7) and never acks beyond the head
+	if st, _ := rawPull(t, h, tok, "after=999999"); st != http.StatusGone {
+		t.Fatalf("after > head: %d, want 410", st)
+	}
+	if pulled() > head {
+		t.Fatalf("pulled_seq %d beyond the head %d", pulled(), head)
 	}
 	// below the low water mark => 410
 	if err := (dbState{db: h.app.NonconcurrentDB()}).Set(keyLowWater, "100"); err != nil {

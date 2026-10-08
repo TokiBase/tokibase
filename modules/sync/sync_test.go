@@ -503,7 +503,7 @@ func TestBatchCapturesAllWithSameTx(t *testing.T) {
 		t.Fatalf("op: %+v", rows[3])
 	}
 	jsonEq(t, patchOf(t, rows[3])["qty"], `{"$inc":9}`)
-	wantActor := "rec:" + e.su.Collection().Id + ":" + e.su.Id
+	wantActor := ActorNode // superusers never hold a grant
 	for _, r := range rows[1:] {
 		if r.Actor != wantActor {
 			t.Fatalf("actor = %q, want %q", r.Actor, wantActor)
