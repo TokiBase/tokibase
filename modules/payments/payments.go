@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/kernel"
+	"github.com/tokibase/tokibase/tools/dbutils"
 	"github.com/tokibase/tokibase/tools/hook"
 	"github.com/tokibase/tokibase/tools/types"
 )
@@ -25,6 +27,10 @@ const (
 	RefundsCollection       = "_refunds"
 	SubscriptionsCollection = "_subscriptions"
 	EntitlementsCollection  = "_entitlements"
+	// GrantsCollection is the per-intent ledger of what each paid intent
+	// added to an entitlement (days, balance), so a refund takes back exactly
+	// that contribution.
+	GrantsCollection = "_entitlement_grants"
 )
 
 const (
@@ -46,6 +52,8 @@ const (
 	ActionEntitlement = "payments.entitlement"
 	ActionRefund      = "payments.refund"
 	ActionWebhookBad  = "payments.webhook_invalid"
+	ActionLate        = "payments.late_payment" // money arrived for a failed/expired intent (details.level = error)
+	ActionDead        = "payments.event_dead"   // an event gave up after MaxEventAttempts
 )
 
 // Enabled reports whether the module is on (env TOKI_PAYMENTS=off disables it).
@@ -85,11 +93,16 @@ type PaidEvent struct {
 	hook.Event
 	App    core.App
 	Intent *core.Record
+	// Late is true when the payment reached the intent after it had failed or
+	// expired (re-opened by the framework or granted by an operator). The
+	// consumer may want to treat the order differently (it may have been cancelled).
+	Late bool
 }
 
 const (
 	moduleStoreKey = "__tokiPaymentsModule__"
 	paidHookKey    = "__tokiPaymentsOnPaid__"
+	lateHookKey    = "__tokiPaymentsOnLate__"
 )
 
 var storeMu sync.Mutex
@@ -98,14 +111,28 @@ var storeMu sync.Mutex
 // Go consumers (and WASM/webhook bridges built on top). There is no generic
 // custom-event path in modules/webhooks (it captures record events of user
 // collections only), so consumers bind here; see docs/modules/payments.md.
-func OnPaid(app core.App) *hook.Hook[*PaidEvent] {
+//
+// OnPaid is at-most-once: it fires in the process that committed the
+// transition, after the commit. A crash between the commit and the handler, or
+// a handler error (only logged), loses the notification; make fulfilment
+// idempotent and able to find paid intents again (`toki payments intents list
+// --status paid`).
+func OnPaid(app core.App) *hook.Hook[*PaidEvent] { return paidHook(app, paidHookKey) }
+
+// OnLatePayment is triggered when a verified payment reached an intent that
+// had failed or expired and was too old to be re-opened (status paid_late).
+// Nothing is granted yet; the operator decides. Fires after the commit, with
+// the same at-most-once semantics as OnPaid.
+func OnLatePayment(app core.App) *hook.Hook[*PaidEvent] { return paidHook(app, lateHookKey) }
+
+func paidHook(app core.App, key string) *hook.Hook[*PaidEvent] {
 	storeMu.Lock()
 	defer storeMu.Unlock()
-	if h, ok := app.Store().Get(paidHookKey).(*hook.Hook[*PaidEvent]); ok {
+	if h, ok := app.Store().Get(key).(*hook.Hook[*PaidEvent]); ok {
 		return h
 	}
 	h := &hook.Hook[*PaidEvent]{}
-	app.Store().Set(paidHookKey, h)
+	app.Store().Set(key, h)
 	return h
 }
 
@@ -118,6 +145,21 @@ type Module struct {
 	providers map[string]Provider
 
 	rl *ipLimiter
+	// bad caps how many failed webhook attempts per IP and hour are stored/audited.
+	bad *hourCap
+
+	// LateWindow: a verified payment for a failed/expired intent that changed
+	// less than this long ago, with a matching provider reference, re-opens
+	// the intent to paid; otherwise it becomes paid_late for an operator.
+	LateWindow time.Duration
+	// RefundPendingTTL: a pending API refund not confirmed after this long is marked failed (alert).
+	RefundPendingTTL time.Duration
+	// MaxEventAttempts: a webhook event that keeps failing is dead-lettered after this many tries.
+	MaxEventAttempts int
+	// IntentPerMinute / MaxOpenIntents: default per-customer brakes on CreateIntent
+	// (they apply even when no `payments:intent` rate limit rule is configured).
+	IntentPerMinute int
+	MaxOpenIntents  int
 
 	// ReconcileAfter: pending intents older than this are checked with the provider.
 	ReconcileAfter time.Duration
@@ -143,9 +185,14 @@ func envInt(name string, def int) int {
 func Register(app core.App) *Module {
 	m := &Module{
 		app: app, Now: time.Now, providers: map[string]Provider{},
-		ReconcileAfter: time.Duration(envInt("TOKI_PAYMENTS_RECONCILE_MINUTES", 10)) * time.Minute,
-		IntentTTL:      time.Duration(envInt("TOKI_PAYMENTS_INTENT_TTL_HOURS", 168)) * time.Hour,
-		rl:             newIPLimiter(envInt("TOKI_PAYMENTS_WEBHOOK_RPM", 300)),
+		ReconcileAfter:   time.Duration(envInt("TOKI_PAYMENTS_RECONCILE_MINUTES", 10)) * time.Minute,
+		IntentTTL:        time.Duration(envInt("TOKI_PAYMENTS_INTENT_TTL_HOURS", 168)) * time.Hour,
+		rl:               newIPLimiter(envInt("TOKI_PAYMENTS_WEBHOOK_RPM", 300)),
+		bad:              newHourCap(envInt("TOKI_PAYMENTS_INVALID_STORE_PER_HOUR", 20)),
+		LateWindow:       time.Duration(envInt("TOKI_PAYMENTS_LATE_WINDOW_HOURS", 24)) * time.Hour,
+		RefundPendingTTL: 24 * time.Hour, MaxEventAttempts: envInt("TOKI_PAYMENTS_MAX_EVENT_ATTEMPTS", 12),
+		IntentPerMinute: envInt("TOKI_PAYMENTS_INTENT_PER_MINUTE", 30),
+		MaxOpenIntents:  envInt("TOKI_PAYMENTS_MAX_OPEN_INTENTS", 20),
 	}
 	app.Store().Set(moduleStoreKey, m)
 	m.loadProviders()
@@ -304,7 +351,7 @@ func EnsureCollections(app core.App) error {
 				&core.TextField{Name: "raw", Max: 1 << 20},
 				&core.JSONField{Name: "headers", MaxSize: 16 << 10},
 				&core.JSONField{Name: "event", MaxSize: 64 << 10},
-				sel("status", "received", "processed", "ignored", "rejected", "failed", "invalid"),
+				sel("status", "received", "processed", "ignored", "rejected", "failed", "invalid", "pending_order", "dead"),
 				&core.NumberField{Name: "attempts", OnlyInt: true},
 				&core.TextField{Name: "error", Max: 2000},
 				&core.DateField{Name: "processed_at"},
@@ -318,11 +365,11 @@ func EnsureCollections(app core.App) error {
 				&core.TextField{Name: "slug", Required: true},
 				&core.BoolField{Name: "enabled"},
 				&core.TextField{Name: "name"},
-				&core.NumberField{Name: "amount", OnlyInt: true}, // 0 = client may choose (server side only)
+				&core.NumberField{Name: "amount", OnlyInt: true}, // must be > 0 with a currency: the price is always the product's
 				&core.TextField{Name: "currency"},
 				&core.TextField{Name: "entitlement_key"},
 				&core.NumberField{Name: "duration_days", OnlyInt: true}, // 0 = does not expire
-				&core.NumberField{Name: "trial_days", OnlyInt: true},
+				&core.NumberField{Name: "trial_days", OnlyInt: true},    // reserved, not used yet (trials are granted by hand)
 				&core.NumberField{Name: "grace_days", OnlyInt: true},
 				&core.NumberField{Name: "quota", OnlyInt: true},
 				&core.NumberField{Name: "balance_add", OnlyInt: true},
@@ -346,6 +393,20 @@ func EnsureCollections(app core.App) error {
 			c.Fields.Add(auto()...)
 			c.AddIndex("idx_payref_idem", true, "[[intent]], [[idempotency_key]]", "[[idempotency_key]] != ''")
 			c.AddIndex("idx_payref_ref", false, "[[provider_ref]]", "")
+			c.AddIndex("idx_payref_ref_u", true, "[[provider_ref]]", "[[provider_ref]] != ''")
+		}},
+		{GrantsCollection, func(c *core.Collection) {
+			c.Fields.Add(
+				&core.TextField{Name: "entitlement", Required: true},
+				&core.TextField{Name: "intent"}, // empty = manual grant
+				&core.NumberField{Name: "days", OnlyInt: true},
+				&core.NumberField{Name: "balance", OnlyInt: true},
+				&core.DateField{Name: "ends"}, // the entitlement's end right after this grant (empty = no end)
+				&core.BoolField{Name: "revoked"},
+			)
+			c.Fields.Add(auto()...)
+			c.AddIndex("idx_payegr_ent", false, "[[entitlement]], [[revoked]]", "")
+			c.AddIndex("idx_payegr_intent", false, "[[intent]]", "")
 		}},
 		{SubscriptionsCollection, func(c *core.Collection) {
 			c.Fields.Add(
@@ -382,15 +443,52 @@ func EnsureCollections(app core.App) error {
 		}},
 	}
 	for _, d := range defs {
+		want := core.NewBaseCollection(d.name)
+		want.System = true // rules stay nil: superusers only; clients use /api/payments/*
+		d.build(want)
 		if c, _ := app.FindCollectionByNameOrId(d.name); c != nil {
+			if upgradeCollection(c, want) {
+				if err := app.Save(c); err != nil {
+					return err
+				}
+			}
 			continue
 		}
-		c := core.NewBaseCollection(d.name)
-		c.System = true // rules stay nil: superusers only; clients use /api/payments/*
-		d.build(c)
-		if err := app.Save(c); err != nil {
+		if err := app.Save(want); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// upgradeCollection adds the fields, select values and indexes a newer
+// version of the module defines to a collection created by an older one
+// (additive only, nothing is removed or retyped). It reports whether it changed anything.
+func upgradeCollection(have, want *core.Collection) bool {
+	changed := false
+	for _, f := range want.Fields {
+		cur := have.Fields.GetByName(f.GetName())
+		if cur == nil {
+			have.Fields.Add(f)
+			changed = true
+			continue
+		}
+		ws, ok1 := f.(*core.SelectField)
+		cs, ok2 := cur.(*core.SelectField)
+		if ok1 && ok2 {
+			for _, v := range ws.Values {
+				if !slices.Contains(cs.Values, v) {
+					cs.Values = append(cs.Values, v)
+					changed = true
+				}
+			}
+		}
+	}
+	for _, ix := range want.Indexes {
+		if name := dbutils.ParseIndex(ix).IndexName; name != "" && have.GetIndex(name) == "" {
+			have.Indexes = append(have.Indexes, ix)
+			changed = true
+		}
+	}
+	return changed
 }

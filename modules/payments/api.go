@@ -86,6 +86,8 @@ func (m *Module) createHandler(e *core.RequestEvent) error {
 			return e.Error(http.StatusConflict, err.Error(), nil)
 		case errors.Is(err, ErrInvalid):
 			return e.BadRequestError(strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "), nil)
+		case errors.Is(err, ErrTooManyIntents):
+			return e.TooManyRequestsError("Too many open payment intents, try again later.", nil)
 		}
 		m.app.Logger().Error("payments: create intent failed", "error", err)
 		return e.Error(http.StatusBadGateway, "The payment provider rejected the request.", nil)

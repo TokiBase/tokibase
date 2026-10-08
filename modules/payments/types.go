@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -24,6 +25,11 @@ const (
 	StatusExpired           = "expired"
 	StatusRefunded          = "refunded"
 	StatusPartiallyRefunded = "partially_refunded"
+	// StatusPaidLate marks a verified payment that arrived for an intent that
+	// had already failed or expired and was too old to be re-opened
+	// automatically: the money is with the merchant, an operator must decide
+	// (grant with `toki payments intents resolve`, or refund).
+	StatusPaidLate = "paid_late"
 )
 
 // Normalized webhook event types produced by adapters.
@@ -34,6 +40,9 @@ const (
 	EventRefunded = "refunded" // Amount = refunded amount of this event (0 = whole payment)
 	EventApproved = "approved" // buyer approved, merchant must capture (PayPal)
 	EventIgnored  = "ignored"  // verified but irrelevant
+	// EventUnknown is a verified payload whose status the adapter does not
+	// understand. It never changes an intent (fail closed) and is logged.
+	EventUnknown = "unknown"
 )
 
 // Errors returned by adapters and the framework.
@@ -43,6 +52,12 @@ var (
 	ErrNotConfigured     = errors.New("payments: provider is not configured")
 	ErrIllegalTransition = errors.New("payments: illegal status transition")
 	ErrUnknownProvider   = errors.New("payments: unknown provider")
+	// ErrVerifyUnavailable is returned (wrapped) by an adapter when the
+	// verification could not run (provider API down). It is not a verdict:
+	// the webhook endpoint answers 503 so the provider retries, and nothing is stored.
+	ErrVerifyUnavailable = errors.New("payments: webhook verification is unavailable")
+	// ErrAmountMismatch: a paid event or status disagrees with (or lacks) the intent's amount/currency.
+	ErrAmountMismatch = errors.New("payments: amount or currency does not match the intent")
 )
 
 var transitions = map[string][]string{
@@ -50,14 +65,18 @@ var transitions = map[string][]string{
 	StatusPending:           {StatusPaid, StatusFailed, StatusExpired},
 	StatusPaid:              {StatusRefunded, StatusPartiallyRefunded},
 	StatusPartiallyRefunded: {StatusPartiallyRefunded, StatusRefunded},
-	StatusFailed:            nil,
-	StatusExpired:           nil,
-	StatusRefunded:          nil,
+	// A payment may still arrive after the intent gave up: it is never
+	// dropped, it becomes paid_late (or is re-opened by the framework within
+	// the late window, see Module.LateWindow).
+	StatusFailed:   {StatusPaidLate},
+	StatusExpired:  {StatusPaidLate},
+	StatusPaidLate: {StatusPaid, StatusRefunded, StatusPartiallyRefunded},
+	StatusRefunded: nil,
 }
 
 // Statuses lists every intent status.
 func Statuses() []string {
-	return []string{StatusCreated, StatusPending, StatusPaid, StatusFailed, StatusExpired, StatusRefunded, StatusPartiallyRefunded}
+	return []string{StatusCreated, StatusPending, StatusPaid, StatusFailed, StatusExpired, StatusRefunded, StatusPartiallyRefunded, StatusPaidLate}
 }
 
 // CanTransition reports whether from -> to is allowed. from == to is never a
@@ -197,7 +216,9 @@ func EnvKey(provider, name string) string {
 // Getenv is os.Getenv with whitespace trimmed (the default factory env source).
 func Getenv(k string) string { return strings.TrimSpace(os.Getenv(k)) }
 
-var zeroExp = map[string]bool{"IDR": true, "JPY": true, "KRW": true, "VND": true, "CLP": true, "ISK": true, "UGX": true, "PYG": true, "XAF": true, "XOF": true, "XPF": true, "RWF": true, "KMF": true, "GNF": true, "DJF": true, "BIF": true, "VUV": true}
+var zeroExp = map[string]bool{"IDR": true, "JPY": true, "KRW": true, "VND": true, "CLP": true, "ISK": true, "UGX": true, "PYG": true, "XAF": true, "XOF": true, "XPF": true, "RWF": true, "KMF": true, "GNF": true, "DJF": true, "BIF": true, "VUV": true,
+	// PayPal does not support decimals for these two (the amount is whole units)
+	"HUF": true, "TWD": true}
 
 // MinorExponent is the number of decimals between a currency's major and the
 // stored minor unit. IDR is treated as 0 (providers charge whole rupiah).
@@ -221,31 +242,52 @@ func FormatAmount(minor int64, currency string) string {
 	return fmt.Sprintf("%s%d.%02d", neg, minor/100, minor%100)
 }
 
-// ParseAmount converts a decimal string to minor units.
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// ParseAmount converts a decimal string to minor units. Anything but digits
+// (and one optional leading minus and decimal point) is an error.
 func ParseAmount(s, currency string) (int64, error) {
-	s = strings.TrimSpace(s)
+	orig := strings.TrimSpace(s)
+	s = orig
+	neg := strings.HasPrefix(s, "-")
+	s = strings.TrimPrefix(s, "-")
 	whole, frac, _ := strings.Cut(s, ".")
 	e := MinorExponent(currency)
+	if !allDigits(whole) || len(whole) > 15 || (frac != "" && !allDigits(frac)) {
+		return 0, fmt.Errorf("payments: bad amount %q", orig)
+	}
 	for len(frac) < e {
 		frac += "0"
 	}
 	frac = frac[:e]
-	var w, f int64
-	if _, err := fmt.Sscanf(whole, "%d", &w); err != nil {
-		return 0, fmt.Errorf("payments: bad amount %q", s)
+	w, err := strconv.ParseInt(whole, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("payments: bad amount %q", orig)
 	}
+	var f int64
 	if frac != "" {
-		if _, err := fmt.Sscanf(frac, "%d", &f); err != nil {
-			return 0, fmt.Errorf("payments: bad amount %q", s)
+		if f, err = strconv.ParseInt(frac, 10, 64); err != nil {
+			return 0, fmt.Errorf("payments: bad amount %q", orig)
 		}
 	}
-	if e == 0 {
-		return w, nil
+	v := w
+	if e == 2 {
+		v = w*100 + f
 	}
-	if strings.HasPrefix(s, "-") {
-		return w*100 - f, nil
+	if neg {
+		v = -v
 	}
-	return w*100 + f, nil
+	return v, nil
 }
 
 // NewFromFactory builds a registered provider with an explicit env source (tests).

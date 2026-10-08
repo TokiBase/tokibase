@@ -17,7 +17,8 @@ import (
 //	entitled("pro") = true
 //
 // It is true when the authenticated record holds the entitlement in status
-// active, trial or grace and `until` has not passed. Guests never match.
+// active, trial or grace and `until` has not passed (or, with grace_seconds,
+// until + grace has not passed). Guests never match.
 func init() {
 	search.TokenFunctions["entitled"] = entitledFunc
 	search.TokenFunctions["@entitled"] = entitledFunc
@@ -57,7 +58,9 @@ func entitledFunc(
 		"[[_ent.subject]] = " + id.Identifier + " AND [[_ent.subject_collection]] = " + col.Identifier +
 		" AND [[_ent.key]] = " + key.Identifier +
 		" AND [[_ent.status]] IN ('active','trial','grace')" +
-		" AND ([[_ent.until]] = '' OR [[_ent.until]] > strftime('%Y-%m-%d %H:%M:%fZ','now')))" +
+		" AND ([[_ent.until]] = '' OR [[_ent.until]] > strftime('%Y-%m-%d %H:%M:%fZ','now')" +
+		" OR ([[_ent.status]] IN ('active','grace') AND [[_ent.grace_seconds]] > 0 AND" +
+		" strftime('%Y-%m-%d %H:%M:%fZ', [[_ent.until]], '+' || [[_ent.grace_seconds]] || ' seconds') > strftime('%Y-%m-%d %H:%M:%fZ','now'))))" +
 		" THEN 1 ELSE 0 END)"
 
 	return &search.ResolverResult{

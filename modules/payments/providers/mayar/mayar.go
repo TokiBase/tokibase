@@ -11,6 +11,8 @@
 //	TOKI_PAYMENTS_MAYAR_WEBHOOK_HEADER header carrying it (default x-callback-token)
 //	TOKI_PAYMENTS_MAYAR_REDIRECT_URL   default redirect after payment
 //	TOKI_PAYMENTS_MAYAR_CONFIRM        1 = re-read the payment from the API before reporting paid
+//	                                   (default 1 in live mode, 0 = off explicitly; a paid webhook without
+//	                                   a usable amount is always confirmed through the API)
 //
 // The adapter is pure over bytes/JSON (see payments.Provider) so it can move
 // into a WASM guest unchanged.
@@ -50,8 +52,10 @@ func init() {
 			return nil, nil
 		}
 		base := getenv(payments.EnvKey("mayar", "BASE_URL"))
+		live := false
 		switch strings.ToLower(getenv(payments.EnvKey("mayar", "MODE"))) {
 		case "live", "production":
+			live = true
 			if base == "" {
 				base = liveBase
 			}
@@ -69,11 +73,22 @@ func init() {
 		return &Provider{
 			base: strings.TrimRight(base, "/"), apiKey: key, webhookToken: getenv(payments.EnvKey("mayar", "WEBHOOK_TOKEN")),
 			webhookHeader: hdr, redirect: getenv(payments.EnvKey("mayar", "REDIRECT_URL")),
-			confirm: getenv(payments.EnvKey("mayar", "CONFIRM")) == "1",
+			confirm: confirmDefault(getenv(payments.EnvKey("mayar", "CONFIRM")), live),
 			client:  netguard.NewClient(15*time.Second, AllowPrivateEnv, errBlocked),
 			now:     time.Now,
 		}, nil
 	})
+}
+
+// confirmDefault: an explicit CONFIRM value wins; otherwise live mode confirms.
+func confirmDefault(v string, live bool) bool {
+	switch v {
+	case "1", "true":
+		return true
+	case "0", "false":
+		return false
+	}
+	return live
 }
 
 // Provider implements payments.Provider for Mayar.
@@ -245,28 +260,43 @@ func (p *Provider) VerifyWebhook(ctx context.Context, headers map[string]string,
 			ev.AltRefs = append(ev.AltRefs, a)
 		}
 	}
-	if n, err := wb.Data.Amount.Int64(); err == nil {
-		ev.Amount = n
+	if n, err := wb.Data.Amount.Int64(); err == nil && n > 0 {
+		ev.Amount = n // anything else (absent, 0, 15000.50) stays 0 = unknown
 	}
 	if wb.Event == "payment.received" {
 		switch s := statusText(wb.Data.Status); s {
+		case "paid", "success", "settled", "completed":
+			ev.Type = payments.EventPaid
 		case "failed", "cancelled", "canceled":
 			ev.Type = payments.EventFailed
 		case "expired":
 			ev.Type = payments.EventExpired
-		case "unpaid", "pending", "false", "created":
+		case "unpaid", "pending", "false", "created", "waiting", "processing":
 			ev.Type = payments.EventIgnored
 		default:
-			ev.Type = payments.EventPaid
+			// absent, null, refunded, closed, anything new: never a payment
+			ev.Type = payments.EventUnknown
 		}
 	}
-	if ev.Type == payments.EventPaid && p.confirm {
-		st, err := p.FetchStatus(ctx, wb.Data.ID, nil)
-		if err != nil {
-			return nil, err
-		}
-		if st.State != payments.StatusPaid {
-			ev.Type = payments.EventIgnored
+	if ev.Type == payments.EventPaid {
+		if wb.Data.ID == "" {
+			ev.Type = payments.EventUnknown
+		} else if p.confirm || ev.Amount <= 0 {
+			// The webhook body is only as trustworthy as the shared token. Without
+			// a usable amount the API is the only source of the price, so the
+			// re-read is mandatory; an API outage is not a verdict (503, retried).
+			st, err := p.FetchStatus(ctx, wb.Data.ID, nil)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", payments.ErrVerifyUnavailable, err)
+			}
+			switch {
+			case st.State != payments.StatusPaid:
+				ev.Type = payments.EventIgnored
+			case st.Amount <= 0:
+				ev.Type = payments.EventUnknown
+			default:
+				ev.Amount = st.Amount // the API is authoritative over the webhook body
+			}
 		}
 	}
 	return []payments.WebhookEvent{ev}, nil
@@ -298,8 +328,9 @@ func (p *Provider) FetchStatus(ctx context.Context, ref string, _ map[string]any
 		st.Amount = n
 	}
 	switch strings.ToLower(r.Data.Status) {
-	case "paid", "success", "settled", "closed", "completed":
+	case "paid", "success", "settled", "completed":
 		st.State = payments.StatusPaid
+	// "closed" (a link/invoice closed in the dashboard) is NOT proof of payment: pending
 	case "expired":
 		st.State = payments.StatusExpired
 	case "failed", "cancelled", "canceled":

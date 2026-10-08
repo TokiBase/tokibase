@@ -4,10 +4,14 @@ package payments
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/netip"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -16,10 +20,32 @@ import (
 	"github.com/tokibase/tokibase/kernel"
 )
 
-const (
-	maxWebhookBody  = 1 << 20
-	maxInvalidStore = 16 << 10
-)
+// maxWebhookBody caps a webhook body (PayPal and Mayar events are a few KiB).
+const maxWebhookBody = 64 << 10
+
+// hourCap counts events per key in a fixed one hour window and bounds its own memory.
+type hourCap struct {
+	mu    sync.Mutex
+	max   int
+	start time.Time
+	hits  map[string]int
+}
+
+func newHourCap(max int) *hourCap { return &hourCap{max: max, hits: map[string]int{}} }
+
+// take reports whether key is still under the cap (and counts the hit).
+func (c *hourCap) take(key string, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if now.Sub(c.start) >= time.Hour {
+		c.start, c.hits = now, map[string]int{}
+	}
+	if _, ok := c.hits[key]; !ok && len(c.hits) >= 10000 {
+		return false // too many distinct sources: fail closed on the store, never on memory
+	}
+	c.hits[key]++
+	return c.hits[key] <= c.max
+}
 
 // ipLimiter is the webhook endpoint's own per-IP fixed window limiter.
 type ipLimiter struct {
@@ -98,11 +124,18 @@ type IngestResult struct {
 	Ignored    int
 }
 
-// Ingest verifies a webhook with the provider adapter, stores the raw verified
-// payload (or the rejected attempt) in _payment_events and dispatches the
-// processing jobs. Verification happens before anything is stored as
-// verified, and storage before processing.
+// Ingest is IngestFrom without a client address (Go callers, tests).
 func (m *Module) Ingest(ctx context.Context, providerName string, headers map[string]string, body []byte) (IngestResult, error) {
+	return m.IngestFrom(ctx, "", providerName, headers, body)
+}
+
+// IngestFrom verifies a webhook with the provider adapter, stores the raw
+// verified payload in _payment_events and dispatches the processing jobs.
+// Nothing unverified is stored with its body: a failed verification leaves at
+// most one small row (body hash + length, header names), and only for the
+// first few failures per source address and hour. Verification that cannot
+// run (ErrVerifyUnavailable) stores nothing and is returned as is.
+func (m *Module) IngestFrom(ctx context.Context, ip, providerName string, headers map[string]string, body []byte) (IngestResult, error) {
 	var res IngestResult
 	prov, err := m.Provider(providerName)
 	if err != nil {
@@ -110,8 +143,14 @@ func (m *Module) Ingest(ctx context.Context, providerName string, headers map[st
 	}
 	evs, verr := prov.VerifyWebhook(ctx, headers, body)
 	if verr != nil {
-		m.storeInvalid(providerName, headers, body, verr)
-		audit(ActionWebhookBad, EventsCollection, "", map[string]any{"provider": providerName, "error": truncate(verr.Error(), 300)})
+		if errors.Is(verr, ErrVerifyUnavailable) {
+			m.app.Logger().Warn("payments: webhook verification unavailable", "provider", providerName, "error", verr)
+			return res, verr
+		}
+		if m.bad.take(ip, m.now()) {
+			m.storeInvalid(providerName, headers, body, verr)
+			audit(ActionWebhookBad, EventsCollection, "", map[string]any{"provider": providerName, "error": truncate(verr.Error(), 300)})
+		}
 		return res, verr
 	}
 	col, err := m.app.FindCachedCollectionByNameOrId(EventsCollection)
@@ -130,7 +169,8 @@ func (m *Module) Ingest(ctx context.Context, providerName string, headers map[st
 		rec.Set("raw", string(body))
 		rec.Set("headers", red)
 		rec.Set("event", ev)
-		if ev.Type == EventIgnored {
+		quiet := ev.Type == EventIgnored || ev.Type == EventUnknown
+		if quiet {
 			rec.Set("status", "ignored")
 		} else {
 			rec.Set("status", "received")
@@ -138,12 +178,24 @@ func (m *Module) Ingest(ctx context.Context, providerName string, headers map[st
 		if err := m.app.Save(rec); err != nil {
 			if isUnique(err) {
 				res.Duplicates++
+				// a redelivery of an event that was stored but never finished
+				// (enqueue failed, process died): dispatch it again
+				if ex, _ := m.app.FindFirstRecordByFilter(EventsCollection, "provider={:p} && event_id={:e}",
+					map[string]any{"p": strings.ToLower(providerName), "e": ev.EventID}); ex != nil {
+					if st := ex.GetString("status"); st == "received" || st == "failed" {
+						m.dispatch(ctx, ex.Id)
+					}
+				}
 				continue
 			}
 			return res, err
 		}
-		if ev.Type == EventIgnored {
+		if quiet {
 			res.Ignored++
+			if ev.Type == EventUnknown {
+				m.app.Logger().Warn("payments: webhook with an unrecognized status ignored (intent stays as is)",
+					"provider", providerName, "event", rec.Id, "provider_ref", ev.ProviderRef)
+			}
 			continue
 		}
 		res.Accepted++
@@ -152,18 +204,26 @@ func (m *Module) Ingest(ctx context.Context, providerName string, headers map[st
 	return res, nil
 }
 
+// storeInvalid keeps a minimal trace of a rejected delivery: the SHA-256 and
+// size of the body and the header names. Never the body, never header values.
 func (m *Module) storeInvalid(provider string, headers map[string]string, body []byte, verr error) {
 	col, err := m.app.FindCachedCollectionByNameOrId(EventsCollection)
 	if err != nil {
 		return
 	}
+	names := make([]string, 0, len(headers))
+	for k := range headers {
+		names = append(names, strings.ToLower(k))
+	}
+	sort.Strings(names)
+	sum := sha256.Sum256(body)
 	rec := core.NewRecord(col)
 	rec.Set("provider", strings.ToLower(provider))
 	rec.Set("verified", false)
 	rec.Set("status", "invalid")
 	rec.Set("verify_error", truncate(verr.Error(), 1900))
-	rec.Set("raw", truncate(string(body), maxInvalidStore))
-	rec.Set("headers", redactHeaders(headers))
+	rec.Set("raw", fmt.Sprintf("sha256:%s len=%d", hex.EncodeToString(sum[:]), len(body)))
+	rec.Set("headers", map[string]any{"names": truncate(strings.Join(names, ","), 2000)})
 	if err := m.app.Save(rec); err != nil {
 		m.app.Logger().Warn("payments: failed to store rejected webhook", "error", err)
 	}
@@ -200,21 +260,31 @@ func (m *Module) webhookHandler(e *core.RequestEvent) error {
 		return e.NotFoundError("Unknown payment provider.", nil)
 	}
 	ip := e.RealIP()
-	if !ipAllowed(name, ip) {
-		audit(ActionWebhookBad, EventsCollection, "", map[string]any{"provider": name, "ip": ip, "error": "ip not allowed"})
-		return e.ForbiddenError("", nil)
-	}
+	// own limiter first: it is the cheapest check and bounds everything below
 	if !m.rl.allow(ip, time.Now()) {
 		return e.TooManyRequestsError("", nil)
 	}
+	if !ipAllowed(name, ip) {
+		if m.bad.take(ip, m.now()) {
+			audit(ActionWebhookBad, EventsCollection, "", map[string]any{"provider": name, "ip": ip, "error": "ip not allowed"})
+		}
+		return e.ForbiddenError("", nil)
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(e.Response, e.Request.Body, maxWebhookBody))
 	if err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			return e.Error(http.StatusRequestEntityTooLarge, "Webhook body too large.", nil)
+		}
 		return e.BadRequestError("Invalid body.", nil)
 	}
-	res, err := m.Ingest(e.Request.Context(), name, lowerHeaders(e.Request.Header), body)
+	res, err := m.IngestFrom(e.Request.Context(), ip, name, lowerHeaders(e.Request.Header), body)
 	if err != nil {
-		if errors.Is(err, ErrInvalidSignature) {
+		switch {
+		case errors.Is(err, ErrInvalidSignature):
 			return e.UnauthorizedError("", nil)
+		case errors.Is(err, ErrVerifyUnavailable):
+			return e.Error(http.StatusServiceUnavailable, "Webhook verification is temporarily unavailable.", nil)
 		}
 		return e.BadRequestError("Invalid webhook.", nil)
 	}
