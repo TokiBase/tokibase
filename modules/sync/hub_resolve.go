@@ -12,7 +12,6 @@ import (
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/modules/sync/hlc"
-	"github.com/tokibase/tokibase/modules/sync/proto"
 )
 
 // The glue between the hub apply pipeline and the pure resolver (resolve.go):
