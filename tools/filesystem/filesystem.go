@@ -9,7 +9,6 @@ import (
 	"path"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/fatih/color"

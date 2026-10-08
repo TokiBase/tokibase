@@ -2,6 +2,9 @@
 # Builds the mobile bindings with gomobile. Not run in CI.
 #   mobile/build.sh android|ios|all     (default: all)
 # Tags: the nano tag set from profiles.txt; override with TAGS="..." (space separated).
+# ANDROID_TARGETS: gomobile target list, default "android" (all four ABIs);
+#   e.g. ANDROID_TARGETS=android/arm64,android/amd64 for a smaller/faster build.
+# Works on macOS and Linux (see "Android AAR on Linux" in docs/EMBED.md).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -30,13 +33,26 @@ MSG
 fi
 
 build_android() {
-  if [ -z "${ANDROID_NDK_HOME:-}" ] && [ -z "${ANDROID_HOME:-}" ] && [ -z "${ANDROID_SDK_ROOT:-}" ]; then
-    echo "error: Android SDK/NDK not found. Install Android Studio, then the NDK (SDK Manager > SDK Tools > NDK)" >&2
-    echo "       and set ANDROID_HOME (and ANDROID_NDK_HOME if the NDK is not under \$ANDROID_HOME/ndk)." >&2
+  sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+  if [ -z "${ANDROID_NDK_HOME:-}" ] && [ -n "$sdk" ] && [ -d "$sdk/ndk" ]; then
+    # newest NDK under the SDK root when ANDROID_NDK_HOME is not set
+    ANDROID_NDK_HOME="$sdk/ndk/$(ls "$sdk/ndk" | sort -V | tail -1)"
+    export ANDROID_NDK_HOME
+  fi
+  if [ -z "${ANDROID_NDK_HOME:-}" ] || [ ! -d "$ANDROID_NDK_HOME" ]; then
+    echo "error: Android NDK not found. Install it (Android Studio SDK Manager, or" >&2
+    echo "       sdkmanager --sdk_root=\$ANDROID_HOME 'ndk;27.2.12479018') and set ANDROID_HOME" >&2
+    echo "       (and ANDROID_NDK_HOME if the NDK is not under \$ANDROID_HOME/ndk)." >&2
     exit 1
   fi
-  echo "==> android (tags: $tags)"
-  gomobile bind -target android -androidapi 24 -trimpath -ldflags "-s -w" -tags "$tags" -o out/tokibase.aar ./mobile
+  # gomobile needs the SDK platform (android.jar) and a JDK (javac) to compile the Java glue.
+  need javac "Install a JDK 17+ (for example Temurin) and put it on PATH / set JAVA_HOME."
+  echo "==> android (tags: $tags, targets: ${ANDROID_TARGETS:-android}, ndk: $ANDROID_NDK_HOME)"
+  # -mod=mod lets the go command add golang.org/x/mobile/bind (needed by the generated bindings)
+  # to go.mod/go.sum for this build; those two files are restored afterwards.
+  cp go.mod out/go.mod.bak; cp go.sum out/go.sum.bak
+  trap 'cp out/go.mod.bak go.mod; cp out/go.sum.bak go.sum' EXIT
+  GOFLAGS="${GOFLAGS:--mod=mod}" gomobile bind -target "${ANDROID_TARGETS:-android}" -androidapi 24 -trimpath -ldflags "-s -w" -tags "$tags" -o out/tokibase.aar ./mobile
   ls -l out/tokibase.aar
 }
 
