@@ -50,7 +50,7 @@ toki() { # role dir args...
 }
 start() { # name role dir port
   TOKI_SYNC_ROLE="$2" TOKI_SYNC_INSECURE=1 TOKI_SYNC_INTERVAL=1s TOKI_SYNC_PAGE=25 \
-    "$TOKI" serve --dir "$3" --http "127.0.0.1:$4" >>"$TMP/$1.log" 2>&1 &
+    "$TOKI" serve --automigrate=false --dir "$3" --http "127.0.0.1:$4" >>"$TMP/$1.log" 2>&1 &
   echo $! >"$TMP/$1.pid"
 }
 wait_health() { # url seconds
@@ -96,7 +96,6 @@ enroll_spoke() { # name dir port url
   wait_health "$4" 30 || fail "$1 did not start"
   local t
   t="$(token "$4")"
-  api "$t" GET "$4" "/api/collections/e2eitems" >/dev/null 2>&1 && log "DEBUG $1 already has e2eitems: $(api "$t" GET "$4" /api/collections/e2eitems)"
   api "$t" POST "$4" /api/collections "$COLL" >/dev/null
 }
 enroll_spoke s1 "$S1" "$PORT_S1" "$URL_S1"
