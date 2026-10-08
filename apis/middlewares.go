@@ -499,6 +499,7 @@ func stripSyncNodeHeader() *hook.Handler[*core.RequestEvent] {
 			return e.Next()
 		},
 	}
+}
 
 // EnvLogsSampleOK keeps 1 of every N successful (status < 400) GET request
 // logs. 1 (default) logs all of them; errors and non-GET requests are always logged.
