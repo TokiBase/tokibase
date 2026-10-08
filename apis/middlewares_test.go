@@ -684,7 +684,7 @@ func TestSyncNodeHeaderIsStripped(t *testing.T) {
 			Headers: map[string]string{
 				"Authorization": "eyJhbGciOiJIUzI1NiJ9.eyJpZCI6ImdrMzkwcWVnczR5NDd3biIsInR5cGUiOiJhdXRoIiwiY29sbGVjdGlvbklkIjoidjg1MXE0cjc5MHJoa25sIiwiZXhwIjoyNTI0NjA0NDYxLCJyZWZyZXNoYWJsZSI6dHJ1ZX0.0ONnm_BsvPRZyDNT31GN1CKUB6uQRxvVvQ-Wc9AZfG0",
 			},
-			Body: strings.NewReader(`{"requests":[{"method":"POST","url":"/api/collections/demo2/records","body":{"title":"x"},"headers":{"X-Toki-Sync-Node":"gate-1"}}]}`),
+			Body: strings.NewReader(`{"requests":[{"method":"POST","url":"/api/collections/demo2/records","body":{"title":"xyz"},"headers":{"X-Toki-Sync-Node":"gate-1"}}]}`),
 			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
 				got = nil
 				app.OnRecordCreateRequest("demo2").BindFunc(func(e *core.RecordRequestEvent) error {
