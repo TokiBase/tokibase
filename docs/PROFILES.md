@@ -19,7 +19,7 @@ make edge GOOS=linux GOARCH=arm64   # cross-compile
 | team | none (= solo) | 42.8 MiB | 40.4 MiB | 46 MiB |
 | cluster | `replica_s3` | 51.1 MiB | 47.6 MiB | 55 MiB |
 | edge | `no_payments no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd no_roles` | 25.5 MiB | 24.0 MiB | 28 MiB |
-| nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo no_thumbs no_oauth2 no_s3fs no_printer` (edge already has `no_roles`) | 21.1 MiB | 19.9 MiB | 22 MiB |
+| nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo no_thumbs no_oauth2 no_s3fs no_printer` (edge already has `no_roles`) | 21.1 MiB | 19.9 MiB | 23 MiB |
 
 Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.  darwin/arm64 solo measures 41.6 MiB.
 
@@ -136,7 +136,7 @@ If anything is found the process refuses to start with an error listing the modu
 | `no_migratecmd` | `plugins/migratecmd` | no `migrate` command, no automigrate; the `--migrationsDir`/`--automigrate` flags are still accepted and ignored |
 | `no_ghupdate` | `plugins/ghupdate` | no `update` command |
 
-Without any of these tags (solo, team, cluster) the binary, its flags and its behavior are unchanged. The three plugins weigh about 7 MiB together; with them removed, edge reaches 25.5 MiB and nano 21.1 MiB (linux/amd64), under the CI budgets (edge 28 MiB, nano 22 MiB). nano also drops `totp`, `geo` and the three library tags above (-1.0 MiB together). The original 28 MiB (edge) and 14 MiB (nano) design goals of the architecture doc are not met by `./examples/base`; see [NANO_SIZE.md](NANO_SIZE.md) for where the bytes are and what it would take.
+Without any of these tags (solo, team, cluster) the binary, its flags and its behavior are unchanged. The three plugins weigh about 7 MiB together; with them removed, edge reaches 25.5 MiB and nano 21.1 MiB (linux/amd64), under the CI budgets (edge 28 MiB, nano 23 MiB). nano also drops `totp`, `geo` and the three library tags above (-1.0 MiB together). The original 28 MiB (edge) and 14 MiB (nano) design goals of the architecture doc are not met by `./examples/base`; see [NANO_SIZE.md](NANO_SIZE.md) for where the bytes are and what it would take.
 
 Like the module tags, a binary without `no_migratecmd`/`no_jsvm` removed features: databases migrated by JS migrations (`pb_migrations/*.js`) are not migrated by a build with `no_jsvm`.
 

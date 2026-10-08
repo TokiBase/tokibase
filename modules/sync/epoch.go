@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync/atomic"
 	"time"
 
 	"github.com/tokibase/tokibase/kernel"
@@ -223,7 +222,6 @@ func writeSidecar(dir string, s sidecar) {
 	}
 }
 
-var lastSidecarWrite atomic.Int64
 
 // noteHead raises max_seq_seen to the current head, in the database and in the
 // sidecar file next to it (called on handshakes, pushes, pulls and compaction;
@@ -237,10 +235,7 @@ func (m *Module) noteHead() {
 		return
 	}
 	m.seenHead.Store(head)
-	if now := time.Now().UnixNano(); now-lastSidecarWrite.Load() > int64(250*time.Millisecond) {
-		lastSidecarWrite.Store(now)
-		writeSidecar(m.app.DataDir(), sidecar{MaxSeqSeen: head, Epoch: m.hub.epoch})
-	}
+	writeSidecar(m.app.DataDir(), sidecar{MaxSeqSeen: head, Epoch: m.hub.epoch})
 	_, _ = m.app.NonconcurrentDB().NewQuery("INSERT INTO _sync_state (key, value) VALUES ({:k}, CAST({:v} AS TEXT)) " +
 		"ON CONFLICT(key) DO UPDATE SET value=CAST({:v} AS TEXT) WHERE CAST(value AS INTEGER) < {:v}").
 		Bind(map[string]any{"k": keyMaxSeqSeen, "v": head}).Execute()
