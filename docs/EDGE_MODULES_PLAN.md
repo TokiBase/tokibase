@@ -333,8 +333,8 @@ Order matters. PRs 1 to 3 have no hardware dependency and can be built and teste
 
 | # | PR | Content | Depends on |
 | --- | --- | --- | --- |
-| 0 | `kernel: edge provider interfaces` | `kernel/nodeident.go` (`NodeIdentity`: node id, hub id, hub pub, cert, `Sign(msg)`), `kernel/syncstatus.go` (`SyncStatus`: hub reachable, pending count, last sync), `kernel/devicecerts.go` (provider registration). Sync implements and registers them. No behavior change, unit tests only. | none |
-| 1 | `internal/devio` + `internal/escpos` | Linux serial and evdev readers, TCP/file dialer with the CIDR policy, ESC/POS builder, codepages, QR (native plus raster). Pure unit tests with fakes. | none |
+| 0 (done) | `kernel: edge provider interfaces` | `kernel/nodeident.go` (`NodeIdentity`: node id, hub id, hub pub, cert, `Sign(msg)`), `kernel/syncstatus.go` (`SyncStatus`: hub reachable, pending count, last sync), `kernel/devicecerts.go` (provider registration). Sync implements and registers them. No behavior change, unit tests only. | none |
+| 1 (done) | `internal/devio` + `internal/escpos` | Linux serial and evdev readers, TCP/file dialer with the CIDR policy, ESC/POS builder, codepages, QR (native plus raster). Pure unit tests with fakes. | none |
 | 2 | `printer` PR1 | Collections, template DSL, `print.send` handler, status/paper-out logic, `/api/print*`, CLI, marker/stub, `no_printer`, docs, TCP-stub integration test. | 1 |
 | 3 | `scanner` PR1 | `_scanners`/`_scan_events`, serial and web ingestion, dedupe, `@scan` topic, `/api/scan*`, CLI, `no_scanner`, docs. | 1 |
 | 4 | `kiosk` PR1 | `_kiosk_devices`, pair/session/status/lock/unlock, embedded `kiosk.js` (indicator, wedge capture, lock overlay), CLI, `no_kiosk`, docs. Wires in the scanner wedge hook if PR 3 is merged. | 0, optionally 3 |
@@ -342,6 +342,11 @@ Order matters. PRs 1 to 3 have no hardware dependency and can be built and teste
 | 6 | `devicecert` PR1 | Hub CA with wrapped key, `_device_certs`, `/api/sync/devcert` and spoke renewal in `modules/sync`, leaf key, `:8443` listener, `toki devicecert ca|status|list`, `no_devicecert`. | 0 |
 | 7 | `devicecert` PR2 | Client-cert issue/revoke, mTLS route allowlist, deny-list sync policy, `/api/device/identity` and `/api/device/attest`, rotate-ca. | 6 |
 | 8 | `edge` integration | `profiles.txt` (nano tags), size measurement and `docs/PROFILES.md`, `docs/EDGE_GATE.md`, parking e2e (`tests/e2e/edge-gate.sh`: hub, spoke, TCP printer stub, pty scanner, kiosk pair, 48 h offline compressed with `TOKI_SYNC_TEST_CLOCK_OFFSET`). Feeds SYNC_DESIGN PR10. | 2 to 7 |
+
+### Status of PR 0 and PR 1 (done)
+
+- **PR 0.** `kernel/nodeident.go` (`NodeIdentity`, `SetNodeIdentity`, `NodeIdentityOf`), `kernel/syncstatus.go` (`SyncStatus`, `SetSyncStatusProvider`, `SyncStatusOf`; the plan's `kernel.SyncStatus(app)` is spelled `SyncStatusOf` because the struct owns the name), `kernel/devicecerts.go` (`DeviceCertProvider` with `Issue`/`Lookup`/`Revoke`, `SetDeviceCerts`, `DeviceCertsOf`). Registries are per app, nil safe, and dropped by `ReleaseEdgeProviders`. `modules/sync/providers.go` registers identity and status at `Register` (one added line in `RegisterRole`); under `no_sync` nothing registers, so `NodeIdentityOf` returns nil. Nothing implements `DeviceCertProvider` yet (PR 6).
+- **PR 1.** `internal/devio`: Linux serial (termios, raw 8N1, bauds 1200 to 230400, deadlines), evdev `KeyScanner` (16 and 24 byte `input_event`, US keymap, shift and caps, Enter terminator, `EVIOCGRAB`), `LineReader`, and a `Dialer` with the CIDR `Policy`. `internal/escpos`: `Builder`, codepages CP437/CP858/WPC1252 (hand tables; `x/text/encoding/charmap` is not linked into edge), `DLE EOT` status parsing, `Render` for the template DSL with limits. Decisions: QR raster uses `github.com/skip2/go-qrcode`, which edge already links through `modules/totp`, so it costs no bytes; no encoder was written. The `@qr` directive is `@qr [size=N] [ec=L|M|Q|H] DATA`. A directive comment needs two spaces or a tab before `#`.
 
 Parallelism: after PR 0 and 1, PRs 2, 3 and 6 are independent.
 
