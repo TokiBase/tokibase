@@ -562,6 +562,7 @@ func (pb *PocketBase) Start() error {
 	pb.RootCmd.AddCommand(cmd.NewSuperuserCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewRuleCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewBackupCommand(pb))
+	pb.RootCmd.AddCommand(cmd.NewDBCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewReplicaCommand(pb))
 	pb.RootCmd.AddCommand(cmd.NewServeCommand(pb, !pb.hideStartBanner))
 	if audit.Enabled() {

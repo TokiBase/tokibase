@@ -48,3 +48,13 @@ func defaultDataMaxOpenConns() int {
 
 	return n
 }
+
+// envNonNegativeInt is like [envPositiveInt] but accepts 0 and reports whether a valid value was set.
+func envNonNegativeInt(name string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
+	if err != nil || n < 0 {
+		return 0, false
+	}
+
+	return n, true
+}

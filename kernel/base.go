@@ -1379,6 +1379,8 @@ func (app *BaseApp) registerBaseHooks() {
 		}
 	})
 
+	app.registerWALMaintenance()
+	app.registerLogsSizeCap()
 	app.registerSettingsHooks()
 	app.registerAutobackupHooks()
 	app.registerCollectionHooks()

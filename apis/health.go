@@ -48,6 +48,13 @@ func healthCheck(e *core.RequestEvent) error {
 		}
 		resp.Data["possibleProxyHeader"] = possibleProxyHeader
 
+		// pool and WAL maintenance status of the databases (capacity monitoring)
+		if p, ok := e.App.(interface {
+			DBStatus() map[string]core.DBStatus
+		}); ok {
+			resp.Data["db"] = p.DBStatus()
+		}
+
 		// only present when WAL replication is active (modules/walreplica)
 		if walreplica.Active(e.App) {
 			healthy, reason := walreplica.Healthy(e.App)

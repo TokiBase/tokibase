@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/pocketbase/dbx"
@@ -82,6 +83,9 @@ type conn struct {
 	cfg             kernel.DBConfig
 	concurrentDB    *dbx.DB
 	nonconcurrentDB *dbx.DB
+
+	walMu sync.Mutex
+	wal   kernel.WALStatus
 }
 
 func (c *conn) Concurrent() *dbx.DB    { return c.concurrentDB }

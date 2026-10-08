@@ -31,6 +31,8 @@ type (
 	DBConn                   = kernel.DBConn
 	DBConnectFunc            = kernel.DBConnectFunc
 	DBOpener                 = kernel.DBOpener
+	DBStatus                 = kernel.DBStatus
+	WALStatus                = kernel.WALStatus
 	DBExporter               = kernel.DBExporter
 	DateField                = kernel.DateField
 	DriverValuer             = kernel.DriverValuer
