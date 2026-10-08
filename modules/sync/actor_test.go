@@ -452,7 +452,7 @@ func TestBatchguardRunsForTxGroupsOnly(t *testing.T) {
 		return e.Next()
 	})
 	if _, err := batchguard.Save(h.app, batchguard.Rule{
-		Name: "nope", Enabled: true, Match: []batchguard.Match{{"items", "POST"}},
+		Name: "nope", Enabled: true, Match: []batchguard.Match{{Collection: "items", Method: "POST"}},
 		Assert: "sum(items, qty) == 999", Message: "no way",
 	}); err != nil {
 		t.Fatal(err)
