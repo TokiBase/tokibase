@@ -64,10 +64,41 @@ func (c *Client) recordOK(hubID, epoch string, offset time.Duration) {
 		Bind(dbx.Params{"e": epoch, "o": offset.Milliseconds(), "t": time.Now().UTC().Format("2006-01-02 15:04:05.000Z"), "h": hubID}).Execute()
 }
 
+// storeCert keeps a renewed device certificate.
+func (c *Client) storeCert(hubID, cert string) {
+	if c.o.App == nil {
+		return
+	}
+	_, _ = c.o.App.NonconcurrentDB().NewQuery("UPDATE _sync_cursors SET cert={:c} WHERE hub_id={:h}").
+		Bind(dbx.Params{"c": cert, "h": hubID}).Execute()
+}
+
+const maxLastError = 512
+
+// cleanError truncates hub-controlled text and strips control characters.
+func cleanError(s string) string {
+	b := make([]rune, 0, len(s))
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			r = ' '
+		}
+		b = append(b, r)
+		if len(b) >= maxLastError {
+			break
+		}
+	}
+	return string(b)
+}
+
 func (c *Client) recordError(err error) {
 	if c.o.App == nil || err == nil {
 		return
 	}
-	_, _ = c.o.App.NonconcurrentDB().NewQuery("UPDATE _sync_cursors SET last_error={:e}").
-		Bind(dbx.Params{"e": err.Error()}).Execute()
+	q := "UPDATE _sync_cursors SET last_error={:e}"
+	p := dbx.Params{"e": cleanError(err.Error())}
+	if c.wantHub != "" {
+		q += " WHERE hub_id={:h}"
+		p["h"] = c.wantHub
+	}
+	_, _ = c.o.App.NonconcurrentDB().NewQuery(q).Bind(p).Execute()
 }

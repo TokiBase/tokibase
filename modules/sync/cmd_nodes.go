@@ -3,9 +3,12 @@
 package sync
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,15 +71,19 @@ func enrollCommand(app core.App) *cobra.Command {
 
 func joinCommand(app core.App) *cobra.Command {
 	return &cobra.Command{
-		Use:          "join <hub-url> <code>",
-		Short:        "Spoke: enroll this node on a hub with a one-time code",
+		Use:          "join <hub-url> [<code>|-]",
+		Short:        "Spoke: enroll this node on a hub with a one-time code (read from stdin with '-', or from TOKI_SYNC_ENROLL_CODE)",
 		SilenceUsage: true,
-		Args:         cobra.ExactArgs(2),
+		Args:         cobra.RangeArgs(1, 2),
 		RunE: func(c *cobra.Command, args []string) error {
 			if err := requireRole(RoleSpoke); err != nil {
 				return err
 			}
 			if err := ensureSchema(app); err != nil {
+				return err
+			}
+			code, err := joinCode(c, args)
+			if err != nil {
 				return err
 			}
 			id, err := proto.LoadOrCreateIdentity(filepath.Join(app.DataDir(), NodeKeyFile), os.Getenv(EnvNodeKey))
@@ -86,7 +93,7 @@ func joinCommand(app core.App) *cobra.Command {
 			ctx, cancel := context.WithTimeout(c.Context(), 2*client.RequestTimeout)
 			defer cancel()
 			res, err := client.Join(ctx, app, client.EnrollParams{
-				HubURL: args[0], Code: args[1], Identity: id, Profile: profileFromEnv(), AppVersion: appVersion(),
+				HubURL: args[0], Code: code, Identity: id, Profile: profileFromEnv(), AppVersion: appVersion(),
 			})
 			if err != nil {
 				return err
@@ -95,6 +102,32 @@ func joinCommand(app core.App) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// EnvEnrollCode lets `toki sync join` take the code from the environment, so
+// it does not show up in the process list or the shell history.
+const EnvEnrollCode = "TOKI_SYNC_ENROLL_CODE"
+
+// joinCode returns the one-time code: argument, "-" (first line of stdin) or
+// the environment.
+func joinCode(c *cobra.Command, args []string) (string, error) {
+	code := ""
+	switch {
+	case len(args) == 2 && args[1] == "-":
+		line, err := bufio.NewReader(io.LimitReader(c.InOrStdin(), 1024)).ReadString('\n')
+		if err != nil && line == "" {
+			return "", errors.New("sync: no code on stdin")
+		}
+		code = line
+	case len(args) == 2:
+		code = args[1]
+	default:
+		code = os.Getenv(EnvEnrollCode)
+	}
+	if code = strings.TrimSpace(code); code == "" {
+		return "", errors.New("sync: the enrollment code is missing (argument, '-' for stdin or " + EnvEnrollCode + ")")
+	}
+	return code, nil
 }
 
 func profileFromEnv() string {

@@ -28,20 +28,27 @@ func TestNonceCache(t *testing.T) {
 	}
 }
 
-func TestNonceCacheIsBounded(t *testing.T) {
+func TestNonceCacheIsBoundedPerNode(t *testing.T) {
 	var c nonceCache
 	now := time.Unix(1_700_000_000, 0)
-	for i := 0; i < nonceMax+100; i++ {
-		c.Use("n", strconv.Itoa(i), now)
+	if !c.Use("victim", "v-1", now) {
+		t.Fatal("first use must pass")
 	}
-	if c.ll.Len() != nonceMax || len(c.m) != nonceMax {
-		t.Fatalf("size %d/%d", c.ll.Len(), len(c.m))
+	// one node floods: only its own entries are evicted
+	for i := 0; i < nonceMaxPerNode*4; i++ {
+		c.Use("flood", strconv.Itoa(i), now)
 	}
-	// the oldest were evicted, the newest are kept
-	if !c.Use("n", "0", now) {
-		t.Fatal("oldest entry must be evicted")
+	if got := c.size("flood"); got != nonceMaxPerNode {
+		t.Fatalf("flooding node holds %d entries, want %d", got, nonceMaxPerNode)
 	}
-	if c.Use("n", strconv.Itoa(nonceMax+99), now) {
+	if c.Use("victim", "v-1", now) {
+		t.Fatal("a flooding node must not evict the entries of another node (replay)")
+	}
+	// the oldest of the flooding node are gone, the newest are kept
+	if !c.Use("flood", "0", now) {
+		t.Fatal("oldest entry of the flooding node must be evicted")
+	}
+	if c.Use("flood", strconv.Itoa(nonceMaxPerNode*4-1), now) {
 		t.Fatal("newest entry must be kept")
 	}
 }
