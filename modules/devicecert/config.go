@@ -33,6 +33,19 @@ const (
 	LeafCertFile = "devicecert_leaf.pem"
 	CAFile       = "devicecert_ca.pem"
 
+	// BundleFile holds the leaf and the root bundle in ONE file, written with a
+	// single atomic rename (LeafCertFile and CAFile are derived copies).
+	BundleFile = "devicecert_bundle.pem"
+
+	// DefaultCAOverlapDays is how long a rotated-out root stays trusted
+	// (TOKI_DEVICECERT_CA_OVERLAP_DAYS).
+	DefaultCAOverlapDays = 30
+
+	// HeaderDevice is the request header that carries the name of a trusted
+	// mTLS device. The server strips it from every inbound request and sets it
+	// only for a verified client certificate whose route_scope covers the path.
+	HeaderDevice = "X-Toki-Device"
+
 	// NodeDNSSuffix is the DNS name suffix of a node: <node_id>.edge.toki.local.
 	NodeDNSSuffix = ".edge.toki.local"
 )
@@ -71,6 +84,14 @@ func LeafDays() int {
 		return min(n, MaxLeafDays)
 	}
 	return DefaultLeafDays
+}
+
+// CAOverlapDays is TOKI_DEVICECERT_CA_OVERLAP_DAYS (default 30).
+func CAOverlapDays() int {
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("TOKI_DEVICECERT_CA_OVERLAP_DAYS"))); err == nil && n >= 0 {
+		return min(n, 3650)
+	}
+	return DefaultCAOverlapDays
 }
 
 // MTLSMode is TOKI_DEVICECERT_MTLS (default off).

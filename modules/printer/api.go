@@ -9,6 +9,7 @@ import (
 
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/internal/edgeguard"
 	"github.com/tokibase/tokibase/tools/hook"
 )
 
@@ -32,6 +33,9 @@ func authMiddleware() *hook.Handler[*core.RequestEvent] {
 		Id: hookId + "auth", Priority: -950,
 		Func: func(e *core.RequestEvent) error {
 			if e.Auth == nil {
+				if edgeguard.Device(e) != "" { // a trusted mTLS device inside its route_scope
+					return e.Next()
+				}
 				return e.UnauthorizedError("The request requires valid record authorization token.", nil)
 			}
 			if !e.HasSuperuserAuth() {
@@ -72,7 +76,7 @@ func (m *Module) bindRoutes(se *core.ServeEvent) {
 
 func actorOf(e *core.RequestEvent) string {
 	if e.Auth == nil {
-		return ""
+		return edgeguard.DeviceActor(e)
 	}
 	return e.Auth.Collection().Name + "/" + e.Auth.Id
 }

@@ -270,7 +270,7 @@ toki kiosk provision | list | rotate <name> | revoke <name> | set-pin <name>
 ### Design
 - **Hub CA.**
   - One ECDSA P-256 CA (not Ed25519: Chromium's support for Ed25519 certificates in TLS is not something to depend on for the kiosk browser). 10-year self-signed root.
-  - The private key is stored in `_devicecert_state` (plain table in data.db), AES-GCM wrapped under a key derived by HKDF from the hub sync key (info `toki_devicecert/ca/v1`). A copy of `data.db` without the hub key therefore reveals nothing, consistent with how `deriveSessionSecret` treats the session secret. It follows the hub failover for free, because the hub key does.
+  - The private key is stored in `_devicecert_state` (plain table in data.db), AES-GCM wrapped under a key derived by HKDF from the hub sync key (info `toki_devicecert/ca/v1`). A copy of `data.db` without the hub key therefore reveals nothing (only when the hub key is kept outside the database with `TOKI_SYNC_HUB_KEY_FILE`; otherwise both live in `data.db`), consistent with how `deriveSessionSecret` treats the session secret. It follows the hub failover for free, because the hub key does.
   - `toki devicecert ca` prints the root PEM and fingerprint, for installing in the Pi's browser trust store, tablets and so on.
 - **Edge server leaf (fixes G2).**
   - The spoke generates a P-256 key locally in `<dataDir>/devicecert_leaf.key` (0600). The hub never sees it.
@@ -340,7 +340,7 @@ Order matters. PRs 1 to 3 have no hardware dependency and can be built and teste
 | 4 (done) | `kiosk` PR1 | `_kiosk_devices`, pair/session/status/lock/unlock, embedded `kiosk.js` (indicator, wedge capture, lock overlay), CLI, `no_kiosk`, docs. Wires in the scanner wedge hook if PR 3 is merged. | 0, optionally 3 |
 | 5 (evdev reader and `devices` done in PR 3) | `scanner` PR2 | evdev reader with `EVIOCGRAB`, `toki scan devices`, 32/64-bit struct tests, udev docs. | 3 |
 | 6 (done) | `devicecert` PR1 | Hub CA with wrapped key, `_device_certs`, `/api/sync/devcert` and spoke renewal in `modules/sync`, leaf key, `:8443` listener, `toki devicecert ca|status|list`, `no_devicecert`. | 0 |
-| 7 | `devicecert` PR2 | Client-cert issue/revoke, mTLS route allowlist, deny-list sync policy, `/api/device/identity` and `/api/device/attest`, rotate-ca. | 6 |
+| 7 (done) | `devicecert` PR2 | Client-cert issue/revoke, mTLS route allowlist, deny-list sync policy, `/api/device/identity` and `/api/device/attest`, rotate-ca. | 6 |
 | 8 | `edge` integration | `profiles.txt` (nano tags), size measurement and `docs/PROFILES.md`, `docs/EDGE_GATE.md`, parking e2e (`tests/e2e/edge-gate.sh`: hub, spoke, TCP printer stub, pty scanner, kiosk pair, 48 h offline compressed with `TOKI_SYNC_TEST_CLOCK_OFFSET`). Feeds SYNC_DESIGN PR10. | 2 to 7 |
 
 ### Status of PR 0 and PR 1 (done)
@@ -379,6 +379,16 @@ Order matters. PRs 1 to 3 have no hardware dependency and can be built and teste
 - `kernel.DeviceCert` gained `CAPEM`. The hub filters the SANs a node asks for (`.local`, `.lan`, `.home.arpa`, `.internal`, never `.edge.toki.local`, at most 12) and always adds the node's own name.
 - `TOKI_DEVICECERT_MTLS` is wired (`VerifyClientCertIfGiven` or `RequireAndVerifyClientCert` against the CA pool plus a deny list read from `_device_certs`); a verified client certificate grants no route yet (PR 7).
 - `tlscheck` reads the environment (`TOKI_DEVICECERT=on` and `TOKI_DEVICECERT_LISTEN`) and the module marker to know the listener is on; the plain port stays open.
+
+### Status of PR 7 (done)
+
+`modules/devicecert` PR2 as in section 6, with these decisions:
+- `toki devicecert issue|revoke|rotate-ca` on the hub. `issue --name --days --scope [--p12] [--out dir]` writes `<name>.key.pem` (0600), `<name>.crt.pem` and `ca.pem`; `--p12` shells out to `openssl pkcs12` (the standard library has no encoder; no new dependency). `revoke` by serial revokes one row, by name every unrevoked row of that name.
+- The deny list travels as a pull-only policy on `_device_certs`. System collections were never syncable, so `modules/sync/syscollections.go` holds an explicit allowlist (only `_device_certs`; pulled without the view-rule check, `trusted`); `eligible()` in `policy.go` consults it. The policy is added on the hub (`toki sync policies set _device_certs --direction pull`) BEFORE the nodes handshake: nodes read policies at the handshake. The deny set is re-read lazily (15 s) and by a background refresh.
+- A verified client certificate whose `kind=client` row has a `route_scope` covering the path is an unauthenticated-but-trusted device: `edgeguard.Device(e)`, request header `X-Toki-Device` (stripped from every inbound request, set only inside the scope). Scanner, printer and kiosk status serve it; it is neither a user nor the service actor (v1.1: actor mapping).
+- Review fixes from the PR 6 review (D1 to D14) are part of this PR: server leaf is `serverAuth` only and a client certificate `clientAuth` only (D2), the deny check runs in `VerifyConnection` so resumed sessions are checked (D1), `tlscheck` strict keeps refusing plain HTTP (D4), a node pins the first root it receives (D6), stricter SAN policy on the hub (D5). See the table in the PR description and `docs/modules/devicecert.md`.
+- `GET /api/device/identity` and `POST /api/device/attest` live in `modules/devicecert` (public, throttled 30 per minute per address). Attest signs `toki-attest/v1|<node_id>|<nonce>|<ts>` with `NodeIdentity.Sign`.
+- Rotation: the new CA signs, the previous root stays in the pool (hub) and in the bundle sent to nodes with a `Toki-Retire-At` PEM header for `TOKI_DEVICECERT_CA_OVERLAP_DAYS` (default 30). Nodes learn the new root with their next leaf renewal.
 
 Parallelism: after PR 0 and 1, PRs 2, 3 and 6 are independent.
 

@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -30,8 +31,8 @@ type leafStore struct {
 	mu   sync.RWMutex
 	cert *tls.Certificate
 	leaf *x509.Certificate
-	root *x509.Certificate
-	pool *x509.CertPool
+	// roots is the bundle received with the leaf, newest first.
+	roots []Root
 	// lastReq is the SAN set of the last request, so a hub that filters some
 	// of them does not make the node renew again and again.
 	lastReq string
@@ -41,11 +42,18 @@ func newLeafStore(dir string) *leafStore { return &leafStore{dir: dir} }
 
 func (s *leafStore) path(name string) string { return filepath.Join(s.dir, name) }
 
-// key loads the leaf key or creates it (ECDSA P-256, mode 0600).
+// key loads the leaf key or creates it (ECDSA P-256, mode 0600). The key is
+// written to a temporary file and linked into place, so a reader never sees a
+// partial file and a crash leaves no truncated key; a key file that cannot be
+// parsed is replaced.
 func (s *leafStore) key() (*ecdsa.PrivateKey, error) {
 	p := s.path(LeafKeyFile)
+	exists := false
 	if b, err := os.ReadFile(p); err == nil {
-		return ParseKeyPEM(b)
+		if k, perr := ParseKeyPEM(b); perr == nil {
+			return k, nil
+		}
+		exists = true // corrupt: replaced below
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -60,56 +68,104 @@ func (s *leafStore) key() (*ecdsa.PrivateKey, error) {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, os.ErrExist) { // another process won the race
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return nil, err
-		}
-		return ParseKeyPEM(b)
-	}
+	tmp, err := writeTemp(s.dir, b, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	_, werr := f.Write(b)
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
+	defer os.Remove(tmp)
+	if exists {
+		if err := os.Rename(tmp, p); err != nil {
+			return nil, err
+		}
+		return k, nil
 	}
-	if werr != nil {
-		_ = os.Remove(p)
-		return nil, werr
+	if err := os.Link(tmp, p); err != nil {
+		if errors.Is(err, os.ErrExist) { // another process won the race
+			b, rerr := os.ReadFile(p)
+			if rerr != nil {
+				return nil, rerr
+			}
+			return ParseKeyPEM(b)
+		}
+		if rerr := os.Rename(tmp, p); rerr != nil { // no hard links on this file system
+			return nil, rerr
+		}
 	}
 	return k, nil
 }
 
+// writeTemp writes data to a unique temporary file in dir and returns its path.
+func writeTemp(dir string, data []byte, mode os.FileMode) (string, error) {
+	f, err := os.CreateTemp(dir, ".devicecert-*.tmp")
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	_, werr := f.Write(data)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Chmod(name, mode)
+	}
+	if werr != nil {
+		_ = os.Remove(name)
+		return "", werr
+	}
+	return name, nil
+}
+
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, mode); err != nil {
+	tmp, err := writeTemp(filepath.Dir(path), data, mode)
+	if err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp, mode); err != nil {
+	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, path)
+	return nil
 }
 
-// install checks and stores a leaf and its root. The leaf must certify the
-// local key and be signed by the root.
-func (s *leafStore) install(certPEM, caPEM []byte, persist bool) error {
+// install checks and stores a leaf and its root bundle (newest root first).
+// The leaf must certify the local key and be signed by a root of the bundle.
+// With pin set (a node that got the answer from the hub) the leaf must be
+// valid now and the bundle must contain a root the node already trusts
+// (trust on first use: the first root received is kept; see
+// docs/modules/devicecert.md for the manual reset).
+func (s *leafStore) install(certPEM, bundlePEM []byte, persist, pin bool) error {
 	leaf, err := ParseCertPEM(certPEM)
 	if err != nil {
 		return err
 	}
-	root, err := ParseCertPEM(caPEM)
+	roots, err := ParseBundle(bundlePEM)
 	if err != nil {
 		return err
 	}
-	if !root.IsCA {
-		return errors.New("devicecert: the root is not a CA certificate")
+	now := time.Now()
+	var signed bool
+	for _, r := range roots {
+		if !r.Cert.IsCA {
+			return errors.New("devicecert: the root is not a CA certificate")
+		}
+		if r.Active(now) && leaf.CheckSignatureFrom(r.Cert) == nil {
+			signed = true
+		}
 	}
-	if err := leaf.CheckSignatureFrom(root); err != nil {
-		return fmt.Errorf("devicecert: the leaf is not signed by the root: %w", err)
+	if !signed {
+		return errors.New("devicecert: the leaf is not signed by a root of the bundle")
+	}
+	if pin {
+		if now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
+			return fmt.Errorf("devicecert: the leaf is not valid now (%s .. %s)", leaf.NotBefore.UTC().Format(time.RFC3339), leaf.NotAfter.UTC().Format(time.RFC3339))
+		}
+		s.mu.RLock()
+		known := s.roots
+		s.mu.RUnlock()
+		if len(known) > 0 && !sharesRoot(known, roots) {
+			return errors.New("devicecert: the hub sent a root this node does not trust (it pins the root it received first); " +
+				"if the hub CA was replaced on purpose, delete " + BundleFile + ", " + CAFile + " and " + LeafCertFile + " in the data dir")
+		}
 	}
 	k, err := s.key()
 	if err != nil {
@@ -123,24 +179,48 @@ func (s *leafStore) install(certPEM, caPEM []byte, persist bool) error {
 		return errors.New("devicecert: the leaf has no serverAuth usage")
 	}
 	if persist {
-		if err := writeFileAtomic(s.path(CAFile), caPEM, 0o644); err != nil {
+		var bundle []byte
+		for _, r := range roots {
+			bundle = append(bundle, EncodeRoot(r.PEM, r.RetireAt)...)
+		}
+		leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Raw})
+		// one file, one rename: a crash cannot leave a leaf next to a stale root
+		if err := writeFileAtomic(s.path(BundleFile), append(append([]byte{}, leafPEM...), bundle...), 0o644); err != nil {
 			return err
 		}
-		if err := writeFileAtomic(s.path(LeafCertFile), certPEM, 0o644); err != nil {
-			return err
-		}
+		// derived copies for `toki devicecert ca` and operators
+		_ = writeFileAtomic(s.path(CAFile), bundle, 0o644)
+		_ = writeFileAtomic(s.path(LeafCertFile), leafPEM, 0o644)
 	}
-	pool := x509.NewCertPool()
-	pool.AddCert(root)
 	s.mu.Lock()
 	s.cert = &tls.Certificate{Certificate: [][]byte{leaf.Raw}, PrivateKey: k, Leaf: leaf}
-	s.leaf, s.root, s.pool = leaf, root, pool
+	s.leaf, s.roots = leaf, roots
 	s.mu.Unlock()
 	return nil
 }
 
-// load reads the stored leaf and root, if any.
+func sharesRoot(a, b []Root) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x.Cert.Equal(y.Cert) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// load reads the stored leaf and roots, if any.
 func (s *leafStore) load() error {
+	if b, err := os.ReadFile(s.path(BundleFile)); err == nil {
+		blk, rest := pem.Decode(b)
+		if blk == nil || blk.Type != "CERTIFICATE" {
+			return errors.New("devicecert: invalid " + BundleFile)
+		}
+		return s.install(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: blk.Bytes}), rest, false, false)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	c, err := os.ReadFile(s.path(LeafCertFile))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -152,13 +232,32 @@ func (s *leafStore) load() error {
 	if err != nil {
 		return err
 	}
-	return s.install(c, ca, false)
+	return s.install(c, ca, false, false)
 }
 
+// current returns the leaf, the newest root and the pool of the roots that
+// are active now.
 func (s *leafStore) current() (leaf, root *x509.Certificate, pool *x509.CertPool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.leaf, s.root, s.pool
+	if len(s.roots) > 0 {
+		root = s.roots[0].Cert
+		pool = PoolOf(s.roots, time.Now())
+	}
+	return s.leaf, root, pool
+}
+
+// rootCount is the number of roots this node trusts now.
+func (s *leafStore) rootCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, r := range s.roots {
+		if r.Active(time.Now()) {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *leafStore) getCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {

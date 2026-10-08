@@ -219,8 +219,8 @@ func ParseSPKI(der []byte) (*ecdsa.PublicKey, error) {
 }
 
 // Issue signs a leaf. The NotBefore is backdated by [Backdate] so a device
-// with a bad clock accepts it. A server leaf is valid for serverAuth and
-// clientAuth; a client leaf for clientAuth only.
+// with a bad clock accepts it. A server leaf is valid for serverAuth only; a
+// client leaf for clientAuth only.
 func (c *CA) Issue(now time.Time, p LeafParams) (*x509.Certificate, []byte, error) {
 	pub, err := ParseSPKI(p.SPKI)
 	if err != nil {
@@ -241,9 +241,11 @@ func (c *CA) Issue(now time.Time, p LeafParams) (*x509.Certificate, []byte, erro
 	if err != nil {
 		return nil, nil, err
 	}
+	// the usages are split: a server leaf can never act as a client
+	// certificate of a LAN peer, and a client certificate cannot serve TLS
 	eku := []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
 	if p.Kind != kernel.DeviceCertClient {
-		eku = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+		eku = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
 	}
 	notAfter := now.Add(time.Duration(days) * 24 * time.Hour)
 	if notAfter.After(c.Cert.NotAfter) {
@@ -343,4 +345,86 @@ func ParseKeyPEM(p []byte) (*ecdsa.PrivateKey, error) {
 		return nil, fmt.Errorf("devicecert: key is %T, want ECDSA", k)
 	}
 	return x509.ParseECPrivateKey(b.Bytes)
+}
+
+// retireHeader is the PEM header that marks a rotated-out root in a bundle:
+// the root stays in the trust pool until that time (RFC 3339).
+const retireHeader = "Toki-Retire-At"
+
+// Root is one certificate of a root bundle.
+type Root struct {
+	Cert *x509.Certificate
+	// PEM is the root as stored (without the retire header).
+	PEM []byte
+	// RetireAt is when the root leaves the trust pool; zero for the current root.
+	RetireAt time.Time
+}
+
+// Active reports whether the root is still trusted at now.
+func (r Root) Active(now time.Time) bool { return r.RetireAt.IsZero() || now.Before(r.RetireAt) }
+
+// EncodeRoot returns the bundle block of a root; retireAt adds the retire header.
+func EncodeRoot(certPEM []byte, retireAt time.Time) []byte {
+	b, _ := pem.Decode(certPEM)
+	if b == nil {
+		return nil
+	}
+	blk := &pem.Block{Type: b.Type, Bytes: b.Bytes}
+	if !retireAt.IsZero() {
+		blk.Headers = map[string]string{retireHeader: retireAt.UTC().Format(time.RFC3339)}
+	}
+	return pem.EncodeToMemory(blk)
+}
+
+// ParseBundle parses every certificate of a PEM bundle (newest root first).
+func ParseBundle(p []byte) ([]Root, error) {
+	var out []Root
+	for {
+		var b *pem.Block
+		b, p = pem.Decode(p)
+		if b == nil {
+			break
+		}
+		if b.Type != "CERTIFICATE" {
+			continue
+		}
+		c, err := x509.ParseCertificate(b.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		r := Root{Cert: c, PEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: b.Bytes})}
+		if v := b.Headers[retireHeader]; v != "" {
+			t, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				return nil, fmt.Errorf("devicecert: invalid %s header: %w", retireHeader, err)
+			}
+			r.RetireAt = t
+		}
+		out = append(out, r)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("devicecert: no certificate in PEM")
+	}
+	return out, nil
+}
+
+// PoolOf returns a pool of the roots that are active at now.
+func PoolOf(roots []Root, now time.Time) *x509.CertPool {
+	p := x509.NewCertPool()
+	for _, r := range roots {
+		if r.Active(now) {
+			p.AddCert(r.Cert)
+		}
+	}
+	return p
+}
+
+// hasUsage reports whether the certificate lists the extended key usage.
+func hasUsage(c *x509.Certificate, u x509.ExtKeyUsage) bool {
+	for _, e := range c.ExtKeyUsage {
+		if e == u {
+			return true
+		}
+	}
+	return false
 }

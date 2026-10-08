@@ -101,8 +101,8 @@ func TestCAIssueAndVerify(t *testing.T) {
 	if err := VerifyLeaf(ca.Cert, cert, now.Add(time.Minute), x509.ExtKeyUsageServerAuth); err != nil {
 		t.Fatalf("server usage: %v", err)
 	}
-	if err := VerifyLeaf(ca.Cert, cert, now.Add(time.Minute), x509.ExtKeyUsageClientAuth); err != nil {
-		t.Fatalf("a server leaf also has clientAuth: %v", err)
+	if err := VerifyLeaf(ca.Cert, cert, now.Add(time.Minute), x509.ExtKeyUsageClientAuth); err == nil {
+		t.Fatal("a server leaf must not be valid as a client certificate")
 	}
 	if err := cert.VerifyHostname("n123.edge.toki.local"); err != nil {
 		t.Fatal(err)
@@ -340,7 +340,7 @@ func TestLeafRenewalThreshold(t *testing.T) {
 		t.Fatal("the leaf key must be stable")
 	}
 
-	c, err := m.Issue(context.Background(), kernel.DeviceCertRequest{Name: "n", Node: "n", Kind: kernel.DeviceCertServer, SANs: req.SANs, SPKI: req.SPKI, Days: 14})
+	c, err := m.Issue(context.Background(), kernel.DeviceCertRequest{Name: "hhub000000000001", Node: "hhub000000000001", Kind: kernel.DeviceCertServer, SANs: req.SANs, SPKI: req.SPKI, Days: 14})
 	if err != nil {
 		t.Fatal(err)
 	}

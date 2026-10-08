@@ -234,6 +234,7 @@ func RevokeNode(app core.App, ref string, cli bool) (*core.Record, error) {
 	}
 	emit(AuditNodeRevoke, NodesCollection, cur.Id, map[string]any{"name": name, "cli": cli})
 	retireReservations(app, cur.Id) // PR8: the ranges of a revoked node are dead (design §7.5)
+	revokeNodeCerts(app, cur.Id)
 	return cur, nil
 }
 

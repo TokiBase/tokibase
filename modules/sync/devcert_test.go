@@ -26,6 +26,7 @@ import (
 // LeafRequest/InstallLeaf on the node.
 type fakeCerts struct {
 	got       []kernel.DeviceCertRequest
+	revoked   []string
 	spki      []byte
 	sans      []string
 	due       bool
@@ -40,7 +41,10 @@ func (f *fakeCerts) Issue(_ context.Context, r kernel.DeviceCertRequest) (*kerne
 func (f *fakeCerts) Lookup(context.Context, string) (*kernel.DeviceCert, error) {
 	return nil, kernel.ErrDeviceCertNotFound
 }
-func (f *fakeCerts) Revoke(context.Context, string) error { return nil }
+func (f *fakeCerts) Revoke(_ context.Context, ref string) error {
+	f.revoked = append(f.revoked, ref)
+	return nil
+}
 func (f *fakeCerts) LeafRequest(time.Time) (*kernel.LeafRequest, error) {
 	if !f.due {
 		return nil, nil
@@ -53,6 +57,7 @@ func (f *fakeCerts) InstallLeaf(c, ca []byte) error {
 }
 
 func TestDevCertSANsFilter(t *testing.T) {
+	hubLocalIPs = func() map[string]bool { return map[string]bool{"192.168.1.1": true} }
 	in := []string{"192.168.1.5", "127.0.0.1", "0.0.0.0", "169.254.1.2", "224.0.0.1", "evil.example.com", "x.edge.toki.local",
 		"Gate-1.LOCAL", "box.lan", ".local", "printer.home.arpa", "fe80::1", "10.0.0.1"}
 	got := devCertSANs(in)

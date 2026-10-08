@@ -20,7 +20,8 @@ const (
 	// StateTable is the plain table that holds the CA (not a collection).
 	StateTable = "_devicecert_state"
 
-	stateCA = "ca"
+	stateCA    = "ca"
+	stateCAOld = "ca_old"
 )
 
 var ensureMu sync.Mutex
@@ -80,6 +81,13 @@ func (s stateDB) putIfAbsent(key, value string) error {
 	return err
 }
 
+// put stores the value, replacing an existing one.
+func (s stateDB) put(key, value string) error {
+	_, err := s.app.NonconcurrentDB().NewQuery("INSERT INTO " + StateTable + " (key, value) VALUES ({:k},{:v}) ON CONFLICT(key) DO UPDATE SET value=excluded.value").
+		Bind(dbx.Params{"k": key, "v": value}).Execute()
+	return err
+}
+
 func recordToCert(r *core.Record) *kernel.DeviceCert {
 	return &kernel.DeviceCert{
 		Serial: r.GetString("serial"), Name: r.GetString("name"),
@@ -106,30 +114,50 @@ func (m *Module) insertCert(serial, name string, kind kernel.DeviceCertKind, nod
 // find returns the row for a serial or, failing that, the newest unrevoked
 // row for a name (the newest row when all are revoked).
 func (m *Module) find(serialOrName string) (*core.Record, error) {
+	rows, err := m.byName(serialOrName)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		if r.GetDateTime("revoked_at").IsZero() {
+			return r, nil
+		}
+	}
+	return rows[0], nil
+}
+
+// byName returns the row of a serial, or every row of a name (newest first).
+func (m *Module) byName(serialOrName string) ([]*core.Record, error) {
 	if serialOrName == "" {
 		return nil, kernel.ErrDeviceCertNotFound
 	}
 	recs, err := m.app.FindRecordsByFilter(CertsCollection, "serial = {:s}", "", 1, 0, dbx.Params{"s": strings.ToLower(serialOrName)})
 	if err == nil && len(recs) == 1 {
-		return recs[0], nil
+		return recs, nil
 	}
-	recs, err = m.app.FindRecordsByFilter(CertsCollection, "name = {:s}", "-created", 100, 0, dbx.Params{"s": serialOrName})
+	recs, err = m.app.FindRecordsByFilter(CertsCollection, "name = {:s}", "-created", 500, 0, dbx.Params{"s": serialOrName})
 	if err != nil || len(recs) == 0 {
 		return nil, kernel.ErrDeviceCertNotFound
 	}
-	for _, r := range recs {
-		if r.GetDateTime("revoked_at").IsZero() {
-			return r, nil
-		}
-	}
-	return recs[0], nil
+	return recs, nil
 }
 
+func (m *Module) revokeTargets(serialOrName string) ([]*core.Record, error) {
+	return m.byName(serialOrName)
+}
+
+// denyGrace is how long a failed reload keeps serving the last good deny set.
+// Past it the list fails closed: every client certificate is refused until the
+// table can be read again.
+const denyGrace = 5 * time.Minute
+
 // denyList is the set of revoked serials, re-read from `_device_certs` at most
-// every ttl. On a node that has no rows (PR 7 pulls them from the hub) it is empty.
+// every ttl (lazily, and by a background refresh while the listener runs). On
+// a node the rows come from the hub through a pull-only sync policy.
 type denyList struct {
-	m   *Module
-	ttl time.Duration
+	m     *Module
+	ttl   time.Duration
+	grace time.Duration
 
 	mu   sync.Mutex
 	at   time.Time
@@ -137,23 +165,126 @@ type denyList struct {
 	load func() (map[string]bool, error)
 }
 
-func (d *denyList) has(serial string) bool {
+// get returns the deny set; failed is true when it can not be trusted (never
+// loaded, or the reload kept failing past the grace period).
+func (d *denyList) get() (set map[string]bool, failed bool) {
+	d.mu.Lock()
+	now := d.m.now()
+	if d.set != nil && now.Sub(d.at) < d.ttl {
+		set = d.set
+		d.mu.Unlock()
+		return set, false
+	}
+	d.mu.Unlock()
+	fresh, err := d.load() // the query runs outside the lock
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	now := d.m.now()
-	if d.set == nil || now.Sub(d.at) >= d.ttl {
-		set, err := d.load()
-		if err != nil {
-			d.m.app.Logger().Warn("devicecert: failed to read the revoked serials", "error", err)
-			if d.set == nil {
-				set = map[string]bool{}
-			} else {
-				set = d.set
-			}
-		}
-		d.set, d.at = set, now
+	if err == nil {
+		d.set, d.at = fresh, now
+		return fresh, false
 	}
-	return d.set[strings.ToLower(serial)]
+	d.m.app.Logger().Warn("devicecert: failed to read the revoked serials", "error", err)
+	grace := d.grace
+	if grace <= 0 {
+		grace = denyGrace
+	}
+	if d.set != nil && now.Sub(d.at) < grace {
+		return d.set, false
+	}
+	return nil, true
+}
+
+// has reports whether the serial is revoked. It fails closed.
+func (d *denyList) has(serial string) bool {
+	set, failed := d.get()
+	return failed || set[strings.ToLower(serial)]
+}
+
+// refresh forces a reload and returns the size of the set.
+func (d *denyList) refresh() int {
+	d.mu.Lock()
+	d.at = time.Time{}
+	d.mu.Unlock()
+	set, _ := d.get()
+	return len(set)
+}
+
+func (d *denyList) reset() {
+	d.mu.Lock()
+	d.set = nil
+	d.mu.Unlock()
+}
+
+// size is the number of revoked serials (it loads the list when it is stale).
+func (d *denyList) size() int {
+	set, _ := d.get()
+	return len(set)
+}
+
+// certInfo is what the route-scope middleware needs to know about a serial.
+type certInfo struct {
+	found    bool
+	name     string
+	kind     kernel.DeviceCertKind
+	scope    string
+	revoked  bool
+	notAfter time.Time
+	at       time.Time
+}
+
+const certInfoTTL = 15 * time.Second
+
+// info returns the `_device_certs` row of a serial (cached for 15 s).
+func (m *Module) info(serial string) certInfo {
+	serial = strings.ToLower(serial)
+	m.infoMu.Lock()
+	ci, ok := m.infos[serial]
+	m.infoMu.Unlock()
+	if ok && m.now().Sub(ci.at) < certInfoTTL {
+		return ci
+	}
+	ci = certInfo{at: m.now()}
+	recs, err := m.app.FindRecordsByFilter(CertsCollection, "serial = {:s}", "", 1, 0, dbx.Params{"s": serial})
+	if err == nil && len(recs) == 1 {
+		r := recs[0]
+		ci.found, ci.name, ci.kind = true, r.GetString("name"), kernel.DeviceCertKind(r.GetString("kind"))
+		ci.scope, ci.revoked = r.GetString("route_scope"), !r.GetDateTime("revoked_at").IsZero()
+		ci.notAfter = r.GetDateTime("not_after").Time()
+	}
+	m.infoMu.Lock()
+	if m.infos == nil || len(m.infos) > 1024 {
+		m.infos = map[string]certInfo{}
+	}
+	m.infos[serial] = ci
+	m.infoMu.Unlock()
+	return ci
+}
+
+func (m *Module) resetInfos() {
+	m.infoMu.Lock()
+	m.infos = nil
+	m.infoMu.Unlock()
+}
+
+// PruneAfter is how long an expired certificate row is kept.
+const PruneAfter = 30 * 24 * time.Hour
+
+// prune deletes the rows that expired more than [PruneAfter] ago, so a hub
+// whose LAN addresses change does not grow `_device_certs` without bound. The
+// deletes go through the record API, so sync carries them to the nodes.
+func (m *Module) prune() int {
+	cut := m.now().Add(-PruneAfter).UTC().Format(types.DefaultDateLayout)
+	recs, err := m.app.FindRecordsByFilter(CertsCollection, "not_after != '' && not_after < {:c}", "", 200, 0, dbx.Params{"c": cut})
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, r := range recs {
+		if m.app.Delete(r) == nil {
+			n++
+		}
+	}
+	return n
 }
 
 func (m *Module) loadRevoked() (map[string]bool, error) {

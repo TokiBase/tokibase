@@ -4,6 +4,7 @@ package devicecert
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -70,6 +71,7 @@ func (m *Module) bindServe() {
 				}
 				go m.maintain(ctx)
 			}
+			go m.refreshLoop(ctx)
 			if addr := ListenAddr(); addr != "" {
 				if err := m.startListener(addr, se.Server); err != nil {
 					m.setErr(err)
@@ -88,15 +90,36 @@ func (m *Module) bindServe() {
 	})
 }
 
-// maintain renews the hub leaf when it is due.
-func (m *Module) maintain(ctx context.Context) {
-	t := time.NewTicker(MaintainInterval)
+// RefreshInterval is how often the deny list is re-read in the background.
+var RefreshInterval = 15 * time.Second
+
+// refreshLoop keeps the in-memory deny set current (a node gets the rows from
+// the hub through the pull-only sync policy on `_device_certs`).
+func (m *Module) refreshLoop(ctx context.Context) {
+	t := time.NewTicker(RefreshInterval)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			m.deny.refresh()
+		}
+	}
+}
+
+// maintain renews the hub leaf when it is due.
+func (m *Module) maintain(ctx context.Context) {
+	t := time.NewTicker(MaintainInterval)
+	defer t.Stop()
+	for i := 0; ; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if i%60 == 59 {
+				m.prune()
+			}
 			if err := m.selfIssue(ctx); err != nil {
 				m.setErr(err)
 				m.app.Logger().Warn("devicecert: failed to renew the hub edge certificate", "error", err)
@@ -109,9 +132,11 @@ func (m *Module) maintain(ctx context.Context) {
 
 // tlsConfig is the config of the listener. The certificate is looked up on
 // every handshake, so a renewed leaf is served at once. The client
-// certificate policy follows TOKI_DEVICECERT_MTLS: PR 7 adds the route
-// allowlist that a verified client certificate unlocks; for now it is only
-// verified against the CA pool and checked against the deny list.
+// certificate policy follows TOKI_DEVICECERT_MTLS. A verified client
+// certificate is checked in VerifyConnection, which Go runs on resumed
+// sessions too (VerifyPeerCertificate is skipped on resumption, so a ticket
+// could outlive a revocation); the routes it unlocks come from the route
+// scope middleware (scope.go).
 func (m *Module) tlsConfig() *tls.Config {
 	base := &tls.Config{
 		MinVersion:     tls.VersionTLS12,
@@ -122,6 +147,11 @@ func (m *Module) tlsConfig() *tls.Config {
 	if mode == MTLSOff {
 		return base
 	}
+	// explicit ticket keys, so every per-handshake clone of the config shares
+	// them; resumed sessions are checked by VerifyConnection like new ones
+	var tk [32]byte
+	_, _ = rand.Read(tk[:])
+	base.SetSessionTicketKeys([][32]byte{tk})
 	base.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
 		return m.clientConfig(base, mode), nil
 	}
@@ -137,16 +167,16 @@ func (m *Module) clientConfig(base *tls.Config, mode MTLS) *tls.Config {
 	if mode == MTLSRequire {
 		c.ClientAuth = tls.RequireAndVerifyClientCert
 	}
-	c.VerifyPeerCertificate = m.verifyPeer
+	c.VerifyConnection = m.verifyConn
 	return c
 }
 
-// clientPool is the pool of roots a client certificate may chain to.
+// clientPool is the pool of roots a client certificate may chain to: on the
+// hub the current CA and the rotated-out ones inside their overlap, on a node
+// the roots of the bundle it received.
 func (m *Module) clientPool() *x509.CertPool {
-	if ca, _ := m.CA(false); ca != nil {
-		p := x509.NewCertPool()
-		p.AddCert(ca.Cert)
-		return p
+	if cs, _ := m.loadCAs(false); cs != nil {
+		return PoolOf(cs.roots(m.now()), m.now())
 	}
 	if _, _, pool := m.leaf.current(); pool != nil {
 		return pool
@@ -154,14 +184,24 @@ func (m *Module) clientPool() *x509.CertPool {
 	return x509.NewCertPool()
 }
 
-// ErrRevoked is returned for a client certificate on the deny list.
-var ErrRevoked = errors.New("devicecert: the client certificate was revoked")
+var (
+	// ErrRevoked is returned for a client certificate on the deny list.
+	ErrRevoked = errors.New("devicecert: the client certificate was revoked")
+	// ErrNotClientCert is returned for a certificate that is not a pure client certificate.
+	ErrNotClientCert = errors.New("devicecert: the certificate is not a client certificate (a server leaf can not act as a client)")
+)
 
-// verifyPeer runs after the chain is verified (VerifiedChains is set only when
-// a client certificate was given) and refuses revoked serials.
-func (m *Module) verifyPeer(_ [][]byte, chains [][]*x509.Certificate) error {
-	for _, ch := range chains {
-		if len(ch) > 0 && m.deny.has(SerialHex(ch[0].SerialNumber)) {
+// verifyConn runs on every connection, resumed or not. VerifiedChains is set
+// only when a client certificate was given and chains to the pool.
+func (m *Module) verifyConn(cs tls.ConnectionState) error {
+	for _, ch := range cs.VerifiedChains {
+		if len(ch) == 0 {
+			continue
+		}
+		if hasUsage(ch[0], x509.ExtKeyUsageServerAuth) || !hasUsage(ch[0], x509.ExtKeyUsageClientAuth) {
+			return ErrNotClientCert
+		}
+		if m.deny.has(SerialHex(ch[0].SerialNumber)) {
 			return ErrRevoked
 		}
 	}
@@ -184,6 +224,8 @@ func (m *Module) startListener(addr string, main *http.Server) error {
 		ReadTimeout:       main.ReadTimeout,
 		WriteTimeout:      main.WriteTimeout,
 		ReadHeaderTimeout: main.ReadHeaderTimeout,
+		IdleTimeout:       main.IdleTimeout,
+		MaxHeaderBytes:    main.MaxHeaderBytes,
 		BaseContext:       main.BaseContext,
 		ErrorLog:          main.ErrorLog,
 	}
