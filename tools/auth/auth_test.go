@@ -1,3 +1,5 @@
+//go:build !no_oauth2
+
 package auth_test
 
 import (

@@ -9,10 +9,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NamePlanningcenter] = wrapFactory(NewPlanningcenterProvider)
-}
-
 var _ Provider = (*Planningcenter)(nil)
 
 // NamePlanningcenter is the unique name of the Planningcenter provider.

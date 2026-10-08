@@ -10,10 +10,6 @@ import (
 	"golang.org/x/oauth2/kakao"
 )
 
-func init() {
-	Providers[NameKakao] = wrapFactory(NewKakaoProvider)
-}
-
 var _ Provider = (*Kakao)(nil)
 
 // NameKakao is the unique name of the Kakao provider.

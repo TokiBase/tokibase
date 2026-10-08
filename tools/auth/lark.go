@@ -8,10 +8,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameLark] = wrapFactory(NewLarkProvider)
-}
-
 var _ Provider = (*Lark)(nil)
 
 // NameLark is the unique name of the Lark provider.

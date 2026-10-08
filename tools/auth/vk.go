@@ -13,10 +13,6 @@ import (
 	"golang.org/x/oauth2/vk"
 )
 
-func init() {
-	Providers[NameVK] = wrapFactory(NewVKProvider)
-}
-
 var _ Provider = (*VK)(nil)
 
 // NameVK is the unique name of the VK provider.

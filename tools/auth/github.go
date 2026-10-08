@@ -11,10 +11,6 @@ import (
 	"golang.org/x/oauth2/github"
 )
 
-func init() {
-	Providers[NameGithub] = wrapFactory(NewGithubProvider)
-}
-
 var _ Provider = (*Github)(nil)
 
 // NameGithub is the unique name of the Github provider.

@@ -11,10 +11,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameMonday] = wrapFactory(NewMondayProvider)
-}
-
 var _ Provider = (*Monday)(nil)
 
 // NameMonday is the unique name of the Monday provider.

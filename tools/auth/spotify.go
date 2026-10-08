@@ -9,10 +9,6 @@ import (
 	"golang.org/x/oauth2/spotify"
 )
 
-func init() {
-	Providers[NameSpotify] = wrapFactory(NewSpotifyProvider)
-}
-
 var _ Provider = (*Spotify)(nil)
 
 // NameSpotify is the unique name of the Spotify provider.

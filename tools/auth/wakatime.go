@@ -8,10 +8,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameWakatime] = wrapFactory(NewWakatimeProvider)
-}
-
 var _ Provider = (*Wakatime)(nil)
 
 // NameWakatime is the unique name of the Wakatime provider.

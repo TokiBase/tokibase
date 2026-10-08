@@ -18,8 +18,8 @@ make edge GOOS=linux GOARCH=arm64   # cross-compile
 | solo | none | 42.8 MiB | 40.4 MiB | 46 MiB |
 | team | none (= solo) | 42.8 MiB | 40.4 MiB | 46 MiB |
 | cluster | `replica_s3` | 51.1 MiB | 47.6 MiB | 55 MiB |
-| edge | `no_payments no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd no_roles` | 25.0 MiB | 23.5 MiB | 28 MiB |
-| nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo` (edge already has `no_roles`) | 21.7 MiB | 20.4 MiB | 24 MiB |
+| edge | `no_payments no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd no_roles` | 25.5 MiB | 24.0 MiB | 28 MiB |
+| nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo no_thumbs no_oauth2 no_s3fs` (edge already has `no_roles`) | 21.1 MiB | 19.9 MiB | 22 MiB |
 
 Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.  darwin/arm64 solo measures 41.6 MiB.
 
@@ -60,6 +60,18 @@ Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.  darw
 
 **Tags are for fresh data dirs.** Tags are independent at build time (CI and `profiles_test.go` build every single tag and all tags together), but a binary built with `no_<module>` is NOT safe on a `pb_data` that was used by a build containing that module: the guards of the module (field encryption, field permissions, computed-field write protection, session revocation, lockout, ...) silently disappear while their data stays. Removing a module also removes its CLI commands (`toki passkey`, `toki audit`, ...); `toki backup` keeps `create` but loses `list`/`verify`/`verify-all` under `no_backupcheck`.
 
+## Library tags (not modules)
+
+Three more tags compile out library code in `tools/*`. They are not modules: no marker, no system collection, no boot guard, so data written with them stays valid (only the feature is missing at run time). nano uses all three; solo, team, cluster and edge use none.
+
+| Tag | Removes | Behaviour under the tag |
+| --- | --- | --- |
+| `no_thumbs` | `disintegration/imaging`, `x/image` (thumbnail generation) | `?thumb=` requests fail the thumb step and the original file is served; no image resizing |
+| `no_oauth2` | the 32 OAuth2/OIDC provider implementations in `tools/auth` (`Providers` stays empty) | no OAuth2 login or provider config (settings validation rejects any provider name); `nativeauth` (Google/Apple id_token) is not affected |
+| `no_s3fs` | the S3 file system driver (`fshttp.NewS3`) | S3 storage and S3 backups return an error; local file system only |
+
+`TestLibraryTags` builds and vets the tree with each of them.
+
 ## Stubbed module boot guard
 
 Every module registers a marker at init with `kernel.RegisterModuleMarker(name, collections, envs, stubbed)` (some also list data-dir files, for example `ruleguard.json`). The real implementation registers `stubbed=false`, its `no_<module>` stub registers the same names with `stubbed=true`. After a successful bootstrap, for every stubbed marker the binary checks:
@@ -86,7 +98,7 @@ If anything is found the process refuses to start with an error listing the modu
 | `no_migratecmd` | `plugins/migratecmd` | no `migrate` command, no automigrate; the `--migrationsDir`/`--automigrate` flags are still accepted and ignored |
 | `no_ghupdate` | `plugins/ghupdate` | no `update` command |
 
-Without any of these tags (solo, team, cluster) the binary, its flags and its behavior are unchanged. The three plugins weigh about 7 MiB together; with them removed, edge reaches 25.0 MiB and nano 21.7 MiB (linux/amd64), under the CI budgets of this phase (edge 28 MiB, nano 24 MiB, measured + 2 MiB). nano also drops `totp` and `geo`. The original 28 MiB (edge) and 14 MiB (nano) design goals of the architecture doc are not met by `./examples/base`.
+Without any of these tags (solo, team, cluster) the binary, its flags and its behavior are unchanged. The three plugins weigh about 7 MiB together; with them removed, edge reaches 25.5 MiB and nano 21.1 MiB (linux/amd64), under the CI budgets (edge 28 MiB, nano 22 MiB). nano also drops `totp`, `geo` and the three library tags above (-1.0 MiB together). The original 28 MiB (edge) and 14 MiB (nano) design goals of the architecture doc are not met by `./examples/base`; see [NANO_SIZE.md](NANO_SIZE.md) for where the bytes are and what it would take.
 
 Like the module tags, a binary without `no_migratecmd`/`no_jsvm` removed features: databases migrated by JS migrations (`pb_migrations/*.js`) are not migrated by a build with `no_jsvm`.
 

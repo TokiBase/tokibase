@@ -10,10 +10,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameMailcow] = wrapFactory(NewMailcowProvider)
-}
-
 var _ Provider = (*Mailcow)(nil)
 
 // NameMailcow is the unique name of the mailcow provider.

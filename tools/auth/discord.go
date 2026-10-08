@@ -9,10 +9,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameDiscord] = wrapFactory(NewDiscordProvider)
-}
-
 var _ Provider = (*Discord)(nil)
 
 // NameDiscord is the unique name of the Discord provider.

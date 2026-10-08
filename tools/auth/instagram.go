@@ -8,10 +8,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameInstagram] = wrapFactory(NewInstagramProvider)
-}
-
 var _ Provider = (*Instagram)(nil)
 
 // NameInstagram is the unique name of the Instagram provider.

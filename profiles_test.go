@@ -84,7 +84,8 @@ func goRun(t *testing.T, tags []string, args ...string) {
 // TestProfilesDefined checks that profiles.txt only uses known tags.
 func TestProfilesDefined(t *testing.T) {
 	known := map[string]bool{"replica_s3": true, "no_ui": true, "no_mcp": true,
-		"no_jsvm": true, "no_ghupdate": true, "no_migratecmd": true} // examples/base plugin tags
+		"no_jsvm": true, "no_ghupdate": true, "no_migratecmd": true, // examples/base plugin tags
+		"no_thumbs": true, "no_oauth2": true, "no_s3fs": true} // library tags (tools/*), no module marker
 	for _, tag := range removableTags(t) {
 		known[tag] = true
 	}
@@ -111,7 +112,7 @@ func TestProfileBuilds(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping profile builds in -short mode")
 	}
-	cases := map[string][]string{"all-stubs": append(removableTags(t), "no_ui")}
+	cases := map[string][]string{"all-stubs": append(removableTags(t), "no_ui", "no_thumbs", "no_oauth2", "no_s3fs")}
 	for _, p := range readProfiles(t) {
 		cases[p.name] = p.tags
 	}
@@ -151,6 +152,20 @@ func TestExamplePluginTags(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			goRun(t, tags, "build", "-o", os.DevNull, "./examples/base")
 			goRun(t, tags, "vet", "./examples/base")
+		})
+	}
+}
+
+// TestLibraryTags builds and vets the whole tree with each library-level tag
+// (tools/* code that is not a module and has no marker) alone.
+func TestLibraryTags(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping library tag builds in -short mode")
+	}
+	for _, tag := range []string{"no_thumbs", "no_oauth2", "no_s3fs"} {
+		t.Run(tag, func(t *testing.T) {
+			goRun(t, []string{tag}, "build", "./...")
+			goRun(t, []string{tag}, "vet", "-structtag=false", "./...")
 		})
 	}
 }

@@ -9,10 +9,6 @@ import (
 	"golang.org/x/oauth2/yandex"
 )
 
-func init() {
-	Providers[NameYandex] = wrapFactory(NewYandexProvider)
-}
-
 var _ Provider = (*Yandex)(nil)
 
 // NameYandex is the unique name of the Yandex provider.

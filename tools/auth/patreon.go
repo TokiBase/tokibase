@@ -9,10 +9,6 @@ import (
 	"golang.org/x/oauth2/endpoints"
 )
 
-func init() {
-	Providers[NamePatreon] = wrapFactory(NewPatreonProvider)
-}
-
 var _ Provider = (*Patreon)(nil)
 
 // NamePatreon is the unique name of the Patreon provider.

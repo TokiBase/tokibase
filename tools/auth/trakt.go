@@ -9,10 +9,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameTrakt] = wrapFactory(NewTraktProvider)
-}
-
 var _ Provider = (*Trakt)(nil)
 
 // NameTrakt is the unique name of the Trakt provider.

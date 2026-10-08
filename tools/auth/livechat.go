@@ -8,10 +8,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameLivechat] = wrapFactory(NewLivechatProvider)
-}
-
 var _ Provider = (*Livechat)(nil)
 
 // NameLivechat is the unique name of the Livechat provider.

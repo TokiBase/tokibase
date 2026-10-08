@@ -9,10 +9,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameNotion] = wrapFactory(NewNotionProvider)
-}
-
 var _ Provider = (*Notion)(nil)
 
 // NameNotion is the unique name of the Notion provider.
