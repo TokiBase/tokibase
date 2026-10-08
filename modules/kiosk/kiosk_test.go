@@ -601,6 +601,7 @@ func TestLockRevokesAllIssuedTokens(t *testing.T) {
 			tok, _ := e.pair(t, code)
 			var toks []string
 			for i := 0; i < 70; i++ {
+				e.clk.t = e.clk.t.Add(10 * time.Second) // stay under the per-device session throttle
 				_, s, _ := e.do(t, req{method: "POST", path: "/api/kiosk/session", cookie: tok})
 				toks = append(toks, s["token"].(string))
 			}
