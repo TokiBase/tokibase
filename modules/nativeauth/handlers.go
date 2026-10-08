@@ -32,16 +32,27 @@ func validationError(e *core.RequestEvent, field, msg string) error {
 	})
 }
 
-func (m *Module) audiences(provider, clientId string) []string {
+// audiences are the accepted token audiences of one provider on one collection:
+// the provider clientId, the provider config extra.audiences (comma separated
+// string or list) and the env var from [AudienceEnv]. Nothing is shared between collections.
+func audiences(col *core.Collection, provider string, cfg core.OAuth2ProviderConfig) []string {
 	var out []string
-	if clientId != "" {
-		out = append(out, clientId)
+	if cfg.ClientId != "" {
+		out = append(out, cfg.ClientId)
 	}
-	env := EnvGoogleAudiences
-	if provider == auth.NameApple {
-		env = EnvAppleAudiences
+	switch v := cfg.Extra["audiences"].(type) {
+	case string:
+		out = append(out, splitList(v)...)
+	case []any:
+		for _, x := range v {
+			if s, ok := x.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+	case []string:
+		out = append(out, v...)
 	}
-	return append(out, splitList(os.Getenv(env))...)
+	return append(out, splitList(os.Getenv(AudienceEnv(provider, col.Name)))...)
 }
 
 func (m *Module) login(e *core.RequestEvent) error {
@@ -75,13 +86,18 @@ func (m *Module) login(e *core.RequestEvent) error {
 
 	now := m.now()
 	ip := e.RealIP()
-	if !m.limiter.peek("fail|"+ip, now, maxFailures) {
+	limitKey := "fail|" + rateKey(ip)
+	if !m.limiter.peek(limitKey, now, maxFailures) {
 		e.Response.Header().Set("Retry-After", "60")
 		return e.TooManyRequestsError("Too many attempts, please try again later.", nil)
 	}
 	fail := func(rec *core.Record, reason string, err error) error {
-		m.limiter.allow("fail|"+ip, now, maxFailures+1)
-		failure(col.Name, rec)
+		m.limiter.allow(limitKey, now, maxFailures+1)
+		// a replayed or nonce-mismatching token proves nothing about the account
+		// owner, so it must not push the owner toward lockout
+		if reason != "replay" && reason != "nonce" {
+			failure(col.Name, rec)
+		}
 		rid := ""
 		if rec != nil {
 			rid = rec.Id
@@ -90,7 +106,7 @@ func (m *Module) login(e *core.RequestEvent) error {
 		return e.BadRequestError(msgFailed, err)
 	}
 
-	v, err := m.verifyToken(f.Provider, f.IdToken, m.audiences(f.Provider, cfg.ClientId))
+	v, err := m.verifyToken(f.Provider, f.IdToken, audiences(col, f.Provider, cfg))
 	if err != nil {
 		return fail(nil, "token", err)
 	}
@@ -113,7 +129,7 @@ func (m *Module) login(e *core.RequestEvent) error {
 			return fail(authRecord, "locked", errors.New("identity locked"))
 		}
 	}
-	if err := checkNonce(v, f.Nonce); err != nil {
+	if err := checkNonce(f.Provider, v, f.Nonce); err != nil {
 		return fail(authRecord, "nonce", err)
 	}
 	if !m.replay.markUsed(v.ReplayKey, v.Exp, now) {

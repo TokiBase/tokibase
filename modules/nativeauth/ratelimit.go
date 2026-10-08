@@ -3,6 +3,8 @@
 package nativeauth
 
 import (
+	"net/netip"
+	"sort"
 	"sync"
 	"time"
 )
@@ -29,7 +31,7 @@ func (l *limiter) allow(key string, now time.Time, max int) bool {
 			}
 		}
 		if len(l.hits) >= maxRateKeys {
-			l.hits = map[string][]time.Time{}
+			l.evictOldest(maxRateKeys / 10)
 		}
 	}
 	cut := now.Add(-rateWindow)
@@ -58,4 +60,41 @@ func (l *limiter) peek(key string, now time.Time, max int) bool {
 		}
 	}
 	return n < max
+}
+
+// evictOldest drops the n keys whose last hit is the oldest (never the whole table).
+func (l *limiter) evictOldest(n int) {
+	type kv struct {
+		k string
+		t time.Time
+	}
+	all := make([]kv, 0, len(l.hits))
+	for k, v := range l.hits {
+		var t time.Time
+		if len(v) > 0 {
+			t = v[len(v)-1]
+		}
+		all = append(all, kv{k, t})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].t.Before(all[j].t) })
+	if n > len(all) {
+		n = len(all)
+	}
+	for _, e := range all[:n] {
+		delete(l.hits, e.k)
+	}
+}
+
+// rateKey normalises a client address: IPv6 addresses are keyed by their /64
+// (one subscriber owns a whole /64), IPv4 and unparsable values are kept as is.
+func rateKey(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil || a.Is4() || a.Is4In6() {
+		return ip
+	}
+	p, err := a.Prefix(64)
+	if err != nil {
+		return ip
+	}
+	return p.String()
 }
