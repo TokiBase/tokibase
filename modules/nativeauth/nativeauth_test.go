@@ -162,15 +162,20 @@ func TestGoogleNewUserThenLogin(t *testing.T) {
 	}
 }
 
-func TestMatchByVerifiedEmailOnly(t *testing.T) {
+func TestUnverifiedEmailIsNotUsed(t *testing.T) {
 	e := setup(t)
-	e.do(t, google(e, t, func(c jwt.MapClaims) { c["email_verified"] = false }), 200)
-	// unverified email: new record without that email linked to an existing one
-	recs, _ := e.app.FindRecordsByFilter("clients", "email = 'native@example.com'", "", 5, 0)
-	for _, r := range recs {
-		if r.Verified() {
-			t.Fatalf("unverified email must not produce a verified record")
-		}
+	unverified := func(c jwt.MapClaims) { c["email_verified"] = false }
+	// the clients collection requires an email, and the unverified one is not used
+	e.do(t, google(e, t, unverified), 400)
+	body := google(e, t, func(c jwt.MapClaims) { c["email_verified"] = false; c["jti"] = "j2" })
+	body["createData"] = map[string]any{"email": "typed@example.com", "password": "1234567890", "passwordConfirm": "1234567890"}
+	e.do(t, body, 200)
+	rec, err := e.app.FindAuthRecordByEmail("clients", "typed@example.com")
+	if err != nil || rec.Verified() {
+		t.Fatalf("record must exist and stay unverified: %v", err)
+	}
+	if _, err := e.app.FindAuthRecordByEmail("clients", "native@example.com"); err == nil {
+		t.Fatal("unverified token email must not be stored")
 	}
 }
 
@@ -280,6 +285,7 @@ func TestJWKSRefreshLimit(t *testing.T) {
 		s, _ := tk.SignedString(e.rsa)
 		return map[string]any{"provider": "google", "idToken": s}
 	}
+	e.now = e.now.Add(2 * time.Minute)
 	e.do(t, google(e, t, nil), 200)
 	before := e.hits
 	e.do(t, bad(), 400) // unknown kid triggers one refresh
