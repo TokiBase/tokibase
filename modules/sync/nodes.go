@@ -44,8 +44,14 @@ var nodeNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
 // only, rules null). It is idempotent.
 func EnsureNodesCollection(app core.App) error {
 	if c, _ := app.FindCollectionByNameOrId(NodesCollection); c != nil {
-		if c.Fields.GetByName("sig_ts_floor") == nil { // created before the replay floor existed
-			c.Fields.Add(&core.NumberField{Name: "sig_ts_floor"})
+		changed := false
+		for _, name := range []string{"sig_ts_floor", "max_skew_ms"} { // created by an older build
+			if c.Fields.GetByName(name) == nil {
+				c.Fields.Add(&core.NumberField{Name: name})
+				changed = true
+			}
+		}
+		if changed {
 			return app.Save(c)
 		}
 		return nil
@@ -72,6 +78,9 @@ func EnsureNodesCollection(app core.App) error {
 		// sig_ts_floor is the highest handshake ts accepted so far (unix ms);
 		// older or equal timestamps are refused, so a restart can not replay.
 		&core.NumberField{Name: "sig_ts_floor"},
+		// max_skew_ms is the largest clock skew seen from the node (|offset| at a
+		// handshake or a push), a metric of /api/health
+		&core.NumberField{Name: "max_skew_ms"},
 		&core.DateField{Name: "last_seen"},
 		&core.DateField{Name: "revoked_at"},
 		&core.TextField{Name: "app_version", Max: 64},
@@ -224,6 +233,7 @@ func RevokeNode(app core.App, ref string, cli bool) (*core.Record, error) {
 		return nil, fmt.Errorf("node %q was not revoked (no row changed), try again", ref)
 	}
 	emit(AuditNodeRevoke, NodesCollection, cur.Id, map[string]any{"name": name, "cli": cli})
+	retireReservations(app, cur.Id) // PR8: the ranges of a revoked node are dead (design §7.5)
 	return cur, nil
 }
 

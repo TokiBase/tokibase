@@ -134,6 +134,8 @@ type Client struct {
 	hubPub  ed25519.PublicKey
 
 	loop loopState
+	// rsv is the reservation state (reserve.go).
+	rsv reserveState
 
 	mu       stdsync.Mutex
 	token    string
@@ -390,12 +392,13 @@ func (c *Client) handshakeOnce(ctx context.Context) (*proto.HandshakeResponse, t
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	// strictly increasing: the hub refuses a timestamp at or below the last one it
-	// saw (replay floor), and two handshakes can start within one millisecond
-	nowMs := c.wallNow().UnixMilli()
+	// the hub refuses a ts that is not above the last one it accepted: after a
+	// clock correction the wall clock goes down, the signed ts must not
+	tsMs := c.wallNow().UnixMilli()
 	c.mu.Lock()
-	tsMs := max(nowMs, c.lastTs+1)
-	c.lastTs = tsMs
+	if tsMs <= c.lastTs {
+		tsMs = c.lastTs + 1
+	}
 	c.mu.Unlock()
 	ts := strconv.FormatInt(tsMs, 10)
 	nonce := proto.NewNonce()
@@ -444,6 +447,7 @@ func (c *Client) handshakeOnce(ctx context.Context) (*proto.HandshakeResponse, t
 	c.setOffset(offset)
 	exp, _ := time.Parse(time.RFC3339Nano, out.Expires)
 	c.mu.Lock()
+	c.lastTs = tsMs // the hub accepted it: its floor is now here
 	c.token, c.tokenExp, c.hubID, c.epoch = out.SessionToken, exp, out.HubID, out.HubEpoch
 	c.mu.Unlock()
 	c.recordOK(out.HubID, out.HubEpoch, offset)

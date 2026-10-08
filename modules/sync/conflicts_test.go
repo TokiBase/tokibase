@@ -599,6 +599,7 @@ func TestPullPageHasAByteBudgetAndClientHalvesOnTruncation(t *testing.T) {
 
 func TestFailingPulledChangeStopsThePageAndIsRetried(t *testing.T) {
 	h, a, _ := hubFixture(t)
+	t.Setenv(EnvSchemaLock, "off") // the test edits the schema of the spoke on purpose
 	// the spoke has a local unique index the hub does not have
 	col := a.coll()
 	col.AddIndex("idx_items_title_unique", true, "title", "title != ''")

@@ -91,9 +91,9 @@ func (c *Client) postPush(ctx context.Context, rows []outRow) (*proto.PushRespon
 		if len(r.Hash) > 0 {
 			pc.Hash = hex.EncodeToString(r.Hash)
 		}
-		req.SchemaVersion = max(req.SchemaVersion, r.SV)
 		req.Changes = append(req.Changes, pc)
 	}
+	req.SchemaVersion = c.schemaVersion() // the version this node applied (older stamps travel in each change's sv)
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -127,7 +127,7 @@ func (c *Client) pushAll(ctx context.Context, res *Result) error {
 	if c.o.App == nil {
 		return nil
 	}
-	gaps := 0
+	gaps, resync := 0, 0
 	for {
 		c.loop.mu.Lock()
 		from := c.loop.pushFrom
@@ -157,6 +157,16 @@ func (c *Client) pushAll(ctx context.Context, res *Result) error {
 				}
 				c.loop.mu.Lock()
 				c.loop.pushFrom = int64(pf)
+				c.loop.mu.Unlock()
+				continue
+			case proto.CodeClockDrift, proto.CodeSchemaBehind:
+				// handshake again: the offset is corrected and the pending changes
+				// re-stamped (drift), or the bundles are applied (schema)
+				if resync++; resync > 2 {
+					return err
+				}
+				c.loop.mu.Lock()
+				c.loop.needHS = true
 				c.loop.mu.Unlock()
 				continue
 			case proto.CodeBatchTooLarge:

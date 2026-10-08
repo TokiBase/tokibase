@@ -76,10 +76,11 @@ type Clock struct {
 	MaxDriftMs int64 `json:"max_drift_ms"`
 }
 
-// Schema is the schema section of the handshake (bundles arrive with PR8).
+// Schema is the schema section of the handshake: the hub version and every
+// bundle newer than the version of the node (docs/SYNC_DESIGN.md §3.8).
 type Schema struct {
-	Version int64 `json:"version"`
-	Bundles []any `json:"bundles"`
+	Version int64          `json:"version"`
+	Bundles []SchemaBundle `json:"bundles"`
 }
 
 // Policy is the minimal policy view shipped in the handshake.
@@ -112,7 +113,7 @@ type HandshakeResponse struct {
 	PushFrom     int64          `json:"push_from"`
 	LowWater     int64          `json:"low_water"`
 	Rebootstrap  bool           `json:"rebootstrap"`
-	Reservations []any          `json:"reservations"`
+	Reservations []Reservation  `json:"reservations"`
 	PollMs       int64          `json:"poll_ms"`
 	// Caps lists optional protocol features of the hub. A client uses a feature
 	// only when the hub advertises it (an older hub answers 400 to an unknown op).

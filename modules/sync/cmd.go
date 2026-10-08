@@ -144,7 +144,7 @@ func NewCommand(app core.App) *cobra.Command {
 	status.Flags().BoolVar(&asJSON, "json", false, "output JSON")
 	root.AddCommand(status)
 	root.AddCommand(enrollCommand(app), joinCommand(app), revokeCommand(app), peersCommand(app), verifyCommand(app), conflictsCommand(app), rebootstrapCommand(app))
-	root.AddCommand(policiesCommand(app), purgeCommand(app), compactCommand(app))
+	root.AddCommand(policiesCommand(app), purgeCommand(app), compactCommand(app), reserveCommand(app))
 	return root
 }
 

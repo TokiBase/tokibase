@@ -148,6 +148,9 @@ func (m *Module) pushHandler(e *core.RequestEvent) error {
 	if len(req.Changes) > proto.MaxPushChanges {
 		return syncErr(e, http.StatusRequestEntityTooLarge, proto.CodeBatchTooLarge, "A push carries at most 500 changes.", nil)
 	}
+	if done, err := m.pushPrechecks(e, nodeID, &req); done { // PR8: clock drift, schema version
+		return err
+	}
 	chs := make([]*hubChange, 0, len(req.Changes))
 	for _, c := range req.Changes {
 		hc, err := parseChange(nodeID, c)

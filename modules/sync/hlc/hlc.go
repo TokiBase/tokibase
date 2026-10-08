@@ -205,6 +205,19 @@ func (c *Clock) tick(remote HLC) HLC {
 	}
 }
 
+// ResetTo sets the last issued value to h, even when that lowers it. It is
+// the one way the clock goes down: after a spoke corrected its wall clock and
+// re-stamped the changes it had issued with the wrong one (§3.7). Callers hold
+// the database write lock and pass the highest HLC that is still valid.
+func (c *Clock) ResetTo(h HLC) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.last = h
+	if c.persisted > h {
+		c.persisted = h
+	}
+}
+
 // NeedsFloor reports whether the floor should be persisted now (every N
 // ticks) and the value to persist. The caller writes it in its transaction
 // and calls Persisted once that transaction committed.

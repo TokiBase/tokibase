@@ -256,6 +256,10 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 	if p == nil || (p.Direction != DirBoth && p.Direction != DirPush) {
 		return nil, reject(proto.CodePolicyDirection, "the collection does not accept pushes")
 	}
+	// PR8: map the field names of an older schema version to the current ones
+	if rj := m.mapSchema(tx, nodeID, c, col); rj != nil {
+		return nil, rj
+	}
 	if _, err := m.Clock().ObserveBounded(c.hlc, maxDrift()); err != nil {
 		return nil, reject(proto.CodeFutureHLC, "the change hlc is too far in the future")
 	}
@@ -330,6 +334,10 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 		allowed[f.GetName()] = f
 	}
 	if rj := validateTyped(p.Types, allowed, c.patch, !exists); rj != nil {
+		return nil, rj
+	}
+	// PR8: a value of a reserve: field must be inside a range issued to the node
+	if rj := m.checkReserved(tx, nodeID, p, col, c); rj != nil {
 		return nil, rj
 	}
 	// partition (§7.1): the record must be inside the partition of the node before

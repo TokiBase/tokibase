@@ -53,6 +53,7 @@ func (c *Client) pullAll(ctx context.Context, res *Result) error {
 	}
 	pulled := false
 	refreshed := false
+	schemaRetried := false
 	var through int64
 	for {
 		cur, err := LoadCursor(c.o.App)
@@ -88,6 +89,17 @@ func (c *Client) pullAll(ctx context.Context, res *Result) error {
 				return ErrRebootstrap
 			}
 			return err
+		}
+		if pr.SchemaVersion > c.schemaVersion() && !schemaRetried {
+			// the hub cut a schema version since the handshake: apply the bundles first
+			schemaRetried = true
+			c.loop.mu.Lock()
+			c.loop.needHS = true
+			c.loop.mu.Unlock()
+			if err := c.ensureSession(ctx); err != nil {
+				return err
+			}
+			continue
 		}
 		applied, errs, err := c.applyPage(cur.HubID, pr)
 		var ae *ApplyError

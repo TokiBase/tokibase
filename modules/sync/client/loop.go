@@ -425,6 +425,7 @@ func (c *Client) cycle(ctx context.Context) (res Result) {
 		res.Err = err
 		return
 	}
+	c.reservePass(ctx) // PR8: top up the reserved ranges (never fails the cycle)
 	if err := c.pushAll(ctx, &res); err != nil {
 		res.Err = err
 		return

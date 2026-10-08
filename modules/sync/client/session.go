@@ -68,6 +68,13 @@ func (c *Client) ensureSession(ctx context.Context) error {
 		return ErrRebootstrap
 	}
 	epochChanged := c.handleEpoch(hs)
+	// PR8: clock correction (re-stamp, one more handshake) and schema bundles
+	if hs, err = c.fixClock(ctx, hs); err != nil {
+		return err
+	}
+	if err := c.applyBundles(ctx, hs); err != nil {
+		return err
+	}
 	if err := c.applyPolicies(hs.Policies); err != nil {
 		return err
 	}
@@ -86,6 +93,9 @@ func (c *Client) ensureSession(ctx context.Context) error {
 		// hub's state instead of keeping data that exists nowhere else
 		c.markRebootstrap(0)
 		return ErrRebootstrap
+	}
+	if err := c.reconcileReservations(hs.Reservations); err != nil {
+		return err
 	}
 	c.loop.mu.Lock()
 	c.loop.needHS = false

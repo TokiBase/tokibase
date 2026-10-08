@@ -340,7 +340,7 @@ func TestHandshakePingRevokeIntegration(t *testing.T) {
 	}
 	if hs.HubID != h.m.HubID() || hs.HubEpoch != h.m.Epoch() || hs.SessionToken == "" || !hs.Clock.Ok ||
 		hs.PushFrom != 1 || hs.LowWater != 0 || hs.Rebootstrap || hs.PollMs == 0 || hs.Params["branch"] != "B12" ||
-		hs.Schema.Version != 0 || len(hs.Keys) != 0 || len(hs.Reservations) != 0 || hs.Clock.MaxDriftMs != 300000 {
+		hs.Schema.Version != h.m.schemaVersion() || len(hs.Schema.Bundles) != 1 || len(hs.Keys) != 0 || len(hs.Reservations) != 0 || hs.Clock.MaxDriftMs != 300000 {
 		t.Fatalf("response: %+v", hs)
 	}
 	if len(hs.Policies) != 1 || hs.Policies[0].Collection != "items" || hs.Policies[0].Direction != DirBoth ||

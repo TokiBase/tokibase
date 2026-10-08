@@ -2,7 +2,7 @@
 
 Phase 3 hub/spoke replication (offline-first). The full design is `docs/SYNC_DESIGN.md`; this page describes what exists today. Package `modules/sync`, subpackage `modules/sync/hlc`.
 
-**Status: PR7 of 11 (snapshot bootstrap, hub epoch; policies, partitions, purge, compaction since PR6; conflict strategies since PR5; rule re-evaluation and actor grants since PR4).** A node with `TOKI_SYNC_ROLE=hub|spoke` records every write of the synced collections into a local change log (PR1). Since PR2 a hub can enroll devices and authenticate them (`/api/sync/{enroll,handshake,ping}`). Since PR3 a spoke pushes its changes to the hub, the hub applies them (record level `lww`), and the spoke pulls everything it is missing and applies it; hub and spokes converge. Since PR4 a pushed change is replayed as the user who made it, through the record API, so collection rules, fieldperm and batchguard apply on the hub. Since PR5 the hub resolves concurrent changes by the collection's strategy (`lww`, `hub-wins`, `field-merge`, `hook`) and records them in `_sync_conflicts`. Since PR6 the policies are complete (partitions, view rule on pull), records can be purged for good, and the hub compacts its change log. Since PR7 a node that is new, stale or behind the compaction fetches a snapshot of the hub by itself and a restored or promoted hub is noticed by its spokes.
+**Status: PR8 of 11 (snapshot bootstrap and hub epoch since PR7; reservations, schema bundles and the spoke schema lock, clock drift enforcement; policies, partitions, purge, compaction since PR6; conflict strategies since PR5; rule re-evaluation and actor grants since PR4).** A node with `TOKI_SYNC_ROLE=hub|spoke` records every write of the synced collections into a local change log (PR1). Since PR2 a hub can enroll devices and authenticate them (`/api/sync/{enroll,handshake,ping}`). Since PR3 a spoke pushes its changes to the hub, the hub applies them (record level `lww`), and the spoke pulls everything it is missing and applies it; hub and spokes converge. Since PR4 a pushed change is replayed as the user who made it, through the record API, so collection rules, fieldperm and batchguard apply on the hub. Since PR5 the hub resolves concurrent changes by the collection's strategy (`lww`, `hub-wins`, `field-merge`, `hook`) and records them in `_sync_conflicts`. Since PR6 the policies are complete (partitions, view rule on pull), records can be purged for good, and the hub compacts its change log. Since PR8 the hub versions its schema and ships it to the spokes, the hub hands out number ranges for offline numbering, and a node whose clock is wrong is corrected.
 
 ## What exists now
 
@@ -316,6 +316,58 @@ Node-authenticated (session token) route of the hub, used by `modules/devicecert
 - Answer: `{"serial", "not_after", "cert_pem", "ca_pem"}`. The hub records the serial in `_device_certs` and audits `devicecert.issue`.
 - Spoke side: every 10 s (`client.DevCertPollInterval`) `Module.RenewDevCert` asks `kernel.EdgeLeafOf(app)` whether a renewal is due (less than 1/3 of the life left, or a new LAN address) and, if so, calls `Client.DevCert`, which handshakes first when there is no session. No import of the devicecert module: both sides use `kernel.DeviceCertsOf`.
 
+## Reservations, schema bundles and clock drift (PR8)
+
+Files: `reserve.go`, `bundle.go`, `drift.go`, `cmd_reserve.go` and `client/{reserve,bundle,drift}.go`.
+
+### Reserved numbers (design §2.8, §3.10, §7.5)
+
+Two system collections on the hub (superusers only): `_sync_sequences` (`name` unique, `next`, `block` 1000, `max_open_per_node` 2, `max_block` 10000, `format`) and `_sync_reservations` (`sequence`, `node`, `start`, `end` inclusive, `status` `active|exhausted|retired`, `high_water`, `issued`, `expires`; unique `(sequence, start)`). A spoke keeps its ranges in the plain table `_sync_reserved` (`id`, `sequence`, `start`, `end`, `next`, `status`, `expires`).
+
+| Route (node session token, rate-limit tag `sync:reserve`) | |
+| --- | --- |
+| `POST /api/sync/reserve {sequence, count?, used?}` | issues a range of `count` (default `block`). `used` maps a range id to the highest value the node used, so a node that burned its range can get a new one before its pushes arrived. 429 `sync_reservation_limit` (with `Retry-After`) when `count > max_block` or the node already holds `max_open_per_node` active ranges; 404 `sync_unknown_sequence`. |
+| `GET /api/sync/reserve` | the active ranges of the node |
+| `POST /api/sync/reserve/release {id, used?}` | retires a range; its numbers are never reissued (gaps are accepted) |
+
+The handshake lists the active ranges (`reservations`, with `id`, `remaining_hint`).
+
+**Using them.** `field_types {"no": "reserve:tickets"}` in the policy makes an `OnRecordCreate` hook fill an EMPTY `no` (text or number field) before validation, in the same transaction as the record: a failing save gives the number back. Sync applies (pull, snapshot, hub replay) carry their own values and are not touched. Go API: `sync.Next(app, "tickets")` (embed: `inst.Sync().Next`). On a spoke the value comes from the local ranges (lowest range first); when the remaining count of a sequence drops below 20 % of the range size, or the ranges are empty, the client loop is kicked and fetches a new range in its next cycle (it also tops up every cycle). With no value left the create fails closed with **503 `sync_reservation_exhausted`** (`data.code`, `data.sequence`); a number is never produced twice. On the hub `Next` draws from the sequence itself (so hub-local records and node ranges never overlap). Formatting (`format`) is documentation only: text fields get the decimal number.
+
+**Hub check on push.** A value in a `reserve:` field of a pushed create/update must fall in a range issued to the pushing node: `active` or `exhausted`, or `retired` up to its `high_water`. Otherwise the change is rejected with `reservation_out_of_range` and a resolved `_sync_conflicts` row (kind `reservation_out_of_range`, resolution `reverted`). Accepted values raise `high_water` (in the apply transaction); `high_water >= end` makes the range `exhausted`. Keep a normal unique index on the field as the last line of defence. Revoking a node retires its ranges. `expires` (90 days) is advisory: old ranges stay valid for the pushes of their node.
+
+**CLI (hub).** `toki sync reserve list [--json]`, `toki sync reserve create-seq <name> [--start N] [--block N] [--max-open N] [--max-block N] [--format F]`, `toki sync reserve release <range id>`. Audit action `sync.reserve` (stages `sequence_created`, `issued`, `refused`, `released`, `retired`).
+
+Not done: the per-sequence global cap and the 80 % alert of §7.5.
+
+### Schema versions and bundles (design §3.8)
+
+The hub keeps `_sync_state.schema_version` and one bundle per version in `_sync_schema(version, hash, bundle, created)`. A bundle is a FULL snapshot: the export of every collection with an enabled policy (ids included; timestamps, token secrets and OAuth2 client secrets removed) plus the rows of `_sync_policies`, `_field_rules`, `_batch_rules`, `_computed_fields` and `_crypto_fields` for those collections. A new version is cut when the content hash differs from the latest bundle, from `OnCollection{Create,Update,Delete}` success, the config collections' record hooks, Init and every handshake. An unsynced collection or a save that changes nothing cuts nothing. After a cut the `_sync_meta.hash` of the collections whose fields or hashed values changed are recomputed.
+
+- **Handshake.** `schema {version, bundles}` lists every bundle newer than the node's version, in order, at most `TOKI_SYNC_MAX_BUNDLES` (50, also the number of kept bundles). A node further behind, or older than the oldest kept bundle, gets `rebootstrap: true` (the snapshot arrives with PR7; until then the loop stops with `rebootstrap_required`). A node at version 0 (fresh) gets the latest bundle only.
+- **Spoke.** `client/bundle.go` checks the hash (sha256 of the canonical JSON, §7.10), then applies each bundle in one transaction: local fields missing from the bundle are removed, `app.ImportCollections(collections, false)` creates or updates the collections with the hub's ids, the config rows are replaced (policies always, the others when the module is present), and the cursor and `_sync_state.schema_version` advance in the same transaction. Applying a bundle again is a no-op. Computed definitions that changed are queued as `computed.backfill` jobs after the commit. The hash of every record of a changed collection is recomputed after the commit. New local changes are stamped with the version the node applied.
+- **Push.** `schema_version` of a push is the version the node applied. A push with another version than the hub's gets 409 `sync_schema_behind`; the client handshakes (applies the bundles) and pushes again. Changes captured under an older version carry that version in `sv`.
+- **`sv` mapping.** For a change with `sv` below the hub version the hub maps the patch keys through the field ids of bundle `sv`: renamed fields get their new name, removed fields are dropped from the patch and a resolved `schema_dropped_field` conflict (resolution `auto_merge`) lists the values. A change whose `sv` is older than the oldest kept bundle is rejected as `orphaned` (resolved conflict kind `orphaned`, the same string PR7 uses for pending changes it cannot rebase).
+- **Pull.** When a pull page reports a schema version above the node's, the client handshakes first.
+- **Spoke schema lock.** On an ENROLLED spoke, creating, updating or deleting a non-system collection (API, CLI, Go, migration) fails with `ErrSchemaLocked`, except inside a bundle apply. Before enrollment nothing is locked, `_*` collections are never locked. `TOKI_SYNC_SCHEMA_LOCK=off` lifts the lock (escape hatch for tests and repairs).
+- A collection removed on the hub (or no longer under a policy) is not deleted on the spokes; it just stops being synced.
+
+### Clock drift (design §3.7, §7.4)
+
+- **Enforcement.** Push is refused with 409 `sync_clock_drift` when the last handshake of the node was outside `TOKI_SYNC_MAX_DRIFT` (default 5 m) or the `client_time` of the push is. A handshake with a corrected clock lifts it. The handshake still answers with `clock {ok, offset_ms, max_drift_ms}`.
+- **Spoke.** Every handshake measures the offset and sets it on the HLC clock. After each handshake the client re-stamps the pending (`local`/`pushed`, not yet final) changes whose HLC is more than the tolerance ahead of the corrected clock: in origin order each gets `Clock.Now()`; `_sync_meta.hlc` and the `base_hlc` of later changes that referred to the old stamps follow; the clock (`Clock.ResetTo`) and the persisted `hlc_floor` are lowered. When the hub said `clock.ok=false` the client handshakes once more. Changes stamped in the past are kept. A device whose clock is days off is corrected by the signed 401 path of PR2 first and re-stamped right after. The handshake `ts` is monotonic per client (a corrected clock goes down, the hub's replay floor must not refuse it). Not corrected: the autodate values of local records stay as the device wrote them.
+- **`future_hlc`.** Per pushed change: an HLC more than 5 minutes ahead of the hub clock is rejected (`ObserveBounded`; the hub clock does not move).
+- **Metric.** `GET /api/health` (superusers) `data.sync` gains `schema_version`, and on the hub `max_skew_ms` and `node_skew [{node, name, clock_offset_ms, max_skew_ms}]` (the largest `|offset|` seen at a handshake or push, per node; `_sync_nodes.max_skew_ms`).
+
+### Env (PR8)
+
+| Variable | Meaning |
+| --- | --- |
+| `TOKI_SYNC_MAX_BUNDLES` | hub: bundles kept and the longest schema lag before `rebootstrap` (default `50`) |
+| `TOKI_SYNC_SCHEMA_LOCK` | spoke: `off` lifts the schema lock |
+| `TOKI_SYNC_MAX_DRIFT` | hub: now also enforced on push |
+
+
 ## Env
 
 
@@ -372,6 +424,8 @@ All in `data.db`, created with `IF NOT EXISTS` at bootstrap when the role is not
 | `_sync_tombstones` | one row per deleted id (`kind = 'delete'`); `kind = 'legal'` rows can never be updated or deleted (trigger `RAISE(ABORT)`); creating a record with a tombstoned id fails with `validation_sync_tombstoned` |
 | `_sync_state` | `node_id`, `hlc_floor`, `schema_version` |
 | `_sync_conflicts` (system collection, superusers only; PR5) | design §2.7: conflict rows of the hub, and on a spoke a local informational copy |
+| `_sync_schema` (hub, PR8) | one full bundle per schema version |
+| `_sync_sequences`, `_sync_reservations` (system collections, hub, PR8); `_sync_reserved` (spoke, PR8) | reserved number ranges |
 | `_sync_policies` (system collection, superusers only) | the full model of PR6 (see "Policies, partitions, purge and compaction"). The cache has a 5 s TTL and is invalidated when a policy row changes. |
 
 `node_id` is derived from the node key since PR2 (see Identity). Rows written under the PR1 placeholder id (`_changes.node`, `_sync_meta.node`, `_sync_tombstones.node`) are migrated to the derived id in one transaction at the first boot with PR2.
@@ -394,6 +448,9 @@ toki sync policies list|set|rm|lint                                       # hub:
 toki sync purge <collection> <id> --legal --reason "..."                  # hub: erase a record for good (PR6)
 toki sync compact [--vacuum] [--json]                                     # compaction now (PR6)
 toki sync rebootstrap [<node>] [--now]                                    # hub: flag a node; spoke: snapshot bootstrap (PR7)
+toki sync reserve list [--json]                                           # hub: sequences and issued ranges (PR8)
+toki sync reserve create-seq <name> [--start N] [--block N] [--max-open N] [--max-block N] [--format F]
+toki sync reserve release <range id>                                      # hub: retire a range
 ```
 
 `enroll`, `revoke` and `peers` need `TOKI_SYNC_ROLE=hub`, `join` needs `TOKI_SYNC_ROLE=spoke`. `join` requires an https hub url unless `TOKI_SYNC_INSECURE=1`.
@@ -406,7 +463,8 @@ toki sync rebootstrap [<node>] [--now]                                    # hub:
 
 - Raw SQL writes (`app.DB().NewQuery("UPDATE ...")`) are not captured.
 - Files are not synced; file fields are not in patches or hashes.
-- Schema bundles, reservations and clock-drift enforcement (PR8), keys (PR9) are not implemented; the handshake returns those fields empty. A snapshot creates the collections a spoke lacks (existing ones are left alone, schema changes are PR8). `Client.RunOnce` still returns `ErrRebootstrap` (the loop bootstraps; call `Client.Bootstrap` yourself otherwise or set `Options.NoAutoBootstrap`).
+- Keys (PR9) are not implemented; the handshake returns `keys` empty. A snapshot creates the collections a spoke lacks (existing ones are left alone, schema changes are PR8). `Client.RunOnce` still returns `ErrRebootstrap` (the loop bootstraps; call `Client.Bootstrap` yourself otherwise or set `Options.NoAutoBootstrap`).
+- Schema (PR8): bundles carry the collections as the hub exports them; a relation to a collection that has no policy fails the import on the spoke. The hub rules travel with the schema, so a spoke enforces the same rules locally (rules that need `@request.context = "sync"` cannot match a local request). A rename of a field that a policy names (`field_types`, `exclude`, `partition`) must be followed by a policy update. Pulled changes use the hub's current field names; a spoke that has not applied the latest bundle first handshakes (no mapping of old pull rows).
 - The hub key cannot be rotated yet (`toki sync rotate-hub-key`, design §7.9); a lost hub key means a new hub id and re-enrollment of every node. A node offline past its certificate expiry (365 d, renewed by the handshake within the last 30 d) must enroll again.
 - Several hub processes behind one URL do not share the in-memory nonce cache; the persisted `sig_ts_floor` still blocks replays of an older request.
 - A derived-only update (computed rollup) or a save without changes bumps the `updated` autodate locally without a change row, so `updated` and the stored hash can differ between nodes; `toki sync verify` reports it (see Push, pull and the client loop above).

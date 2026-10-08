@@ -56,6 +56,20 @@ func (h *hubEnv) setRules(t *testing.T, create, update, del, view *string) {
 
 func sp(s string) *string { return &s }
 
+// openRules gives the items collection of the spoke open rules again. The
+// schema bundles carry the rules of the hub (PR8), and these tests set rules
+// on the hub that only match a sync replay.
+func (s *itemsSpoke) openRules(t *testing.T) {
+	t.Helper()
+	t.Setenv(EnvSchemaLock, "off")
+	c := s.coll()
+	open := ""
+	c.ListRule, c.ViewRule, c.CreateRule, c.UpdateRule, c.DeleteRule = &open, &open, &open, &open, &open
+	if err := s.app.Save(c); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // grant gives the spoke a grant for the hub user and returns its aid.
 func grant(t *testing.T, s *itemsSpoke, user *core.Record) string {
 	t.Helper()
@@ -178,6 +192,7 @@ func TestActorGrantReplayAndRequestInfo(t *testing.T) {
 		t.Fatalf("captured actor: %+v (want %s)", rows, aid)
 	}
 	a.sync(t)
+	a.openRules(t) // the bundle of that sync replaced the local rules with the hub's
 	if hubItem(t, h, id).GetString("title") != "by user" {
 		t.Fatal("the create was not applied on the hub")
 	}
