@@ -65,7 +65,7 @@ byte offsets and the tokenizer was deliberately not rewritten, so offsets are no
 | Strings | `'a'`, `"a"` with escapes | `Literal{String}` |
 | Numbers | `1`, `-2.5`, `1e3` | `Literal{Number}` |
 | null/true/false | identifiers, case-insensitive | `Ident{Kind: KindKeyword}` |
-| Functions | `geoDistance(lonA, latA, lonB, latB)`, `strftime(fmt, [time, mods...])`, `@role(name[, scope, "collection"])`, `@member(scope, "collection")` (SQLite only, from `modules/roles`, compare with `= true`) | `Call` |
+| Functions | `geoDistance(lonA, latA, lonB, latB)`, `strftime(fmt, [time, mods...])`, `@role(name[, scope, "collection"])`, `@member(scope, "collection")` (SQLite only, from `modules/roles`, compare with `= true`), `entitled(key)` (module `payments`, SQLite only, compare with `= true`) | `Call` |
 | Comments | `// ...`, `/* ... */` | dropped by the scanner |
 
 Keywords stay identifiers (not literal nodes) because the resolver gets the first chance to
@@ -74,6 +74,10 @@ to `NULL`, `1`, `0`. The `Kind`/`Path`/`Modifier` classification is informationa
 receive the full identifier string.
 
 Placeholders (`{:name}`) are still substituted textually before parsing, exactly as before.
+
+## `entitled(key)` (payments)
+
+Registered by `modules/payments` in `search.TokenFunctions` (`entitled` and `@entitled`), so both the legacy compiler and the AST path produce the same SQL; PostgreSQL gets the usual "custom function is sqlite only" error. `key` must be a string literal. It resolves `@request.auth.id` and `@request.auth.collectionName` through the normal resolver and emits a scalar `CASE WHEN EXISTS (SELECT 1 FROM _entitlements ...) THEN 1 ELSE 0 END` (status `active|trial|grace`, `until` empty or in the future, subject and collection equal to the request auth), so use it as a comparison: `entitled("pro") = true`. Guests never match. See `docs/modules/payments.md`.
 
 ## Request auth kind
 
