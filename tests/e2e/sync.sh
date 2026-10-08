@@ -158,9 +158,12 @@ RID="$(create "$TH" "$URL_HUB" "shared" 10)"
 wait_converged "shared record replicated"
 patch() { api "$1" PATCH "$2" "/api/collections/e2eitems/records/$RID" "$3" >/dev/null; }
 patch "$TH" "$URL_HUB" '{"title":"edited on hub"}' &
+P1=$!
 patch "$T1" "$URL_S1" '{"title":"edited on s1","qty+":3}' &
+P2=$!
 patch "$T2" "$URL_S2" '{"title":"edited on s2","qty+":4}' &
-wait
+P3=$!
+wait "$P1" "$P2" "$P3"
 wait_converged "round 2 (concurrent edits)"
 QTY="$(api "$TH" GET "$URL_HUB" "/api/collections/e2eitems/records/$RID" | jget 'd["qty"]')"
 [ "$QTY" = 17 ] || fail "counters never conflict: expected qty 17, got $QTY"
