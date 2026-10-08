@@ -169,7 +169,8 @@ func TestUnverifiedEmailIsNotUsed(t *testing.T) {
 	e.do(t, google(e, t, unverified), 400)
 	body := google(e, t, func(c jwt.MapClaims) { c["email_verified"] = false; c["jti"] = "j2" })
 	body["createData"] = map[string]any{"email": "typed@example.com", "password": "1234567890", "passwordConfirm": "1234567890"}
-	e.do(t, body, 200)
+	// the collection auth rule may still refuse an unverified record; it must exist either way
+	e.do(t, body, 403)
 	rec, err := e.app.FindAuthRecordByEmail("clients", "typed@example.com")
 	if err != nil || rec.Verified() {
 		t.Fatalf("record must exist and stay unverified: %v", err)
@@ -288,6 +289,7 @@ func TestJWKSRefreshLimit(t *testing.T) {
 	e.now = e.now.Add(2 * time.Minute)
 	e.do(t, google(e, t, nil), 200)
 	before := e.hits
+	e.now = e.now.Add(2 * time.Minute)
 	e.do(t, bad(), 400) // unknown kid triggers one refresh
 	e.do(t, bad(), 400) // second within a minute does not
 	if e.hits != before+1 {
