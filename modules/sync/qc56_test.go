@@ -158,6 +158,8 @@ func TestHubPushCascadeStillCaptured(t *testing.T) {
 	childCollections(t, a.app, mustCol(t, a.app, "tickets"))
 	b := newTicketSpoke(t, h, "gate-b", "A")
 	childCollections(t, b.app, mustCol(t, b.app, "tickets"))
+	a.sync(t) // fetch the policies
+	b.sync(t)
 	r := a.create(t, "from a", "A")
 	a.sync(t)
 	n := saveChild(t, h.app, "notes", r.Id)
