@@ -96,6 +96,7 @@ enroll_spoke() { # name dir port url
   wait_health "$4" 30 || fail "$1 did not start"
   local t
   t="$(token "$4")"
+  api "$t" GET "$4" "/api/collections/e2eitems" >/dev/null 2>&1 && log "DEBUG $1 already has e2eitems: $(api "$t" GET "$4" /api/collections/e2eitems)"
   api "$t" POST "$4" /api/collections "$COLL" >/dev/null
 }
 enroll_spoke s1 "$S1" "$PORT_S1" "$URL_S1"
