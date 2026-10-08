@@ -14,6 +14,7 @@ import (
 	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/tokibase/tokibase/apis"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel/rule"
 	"github.com/tokibase/tokibase/tools/hook"
 )
 
@@ -52,30 +53,39 @@ func stripMod(seg string) string {
 // relations, back-relations and @collection.x) and returns the first encrypted
 // "collection.field" it touches.
 func (m *Module) hitsEncrypted(col *core.Collection, tok string) string {
+	hit, _, _ := m.encryptedHit(col, tok)
+	return hit
+}
+
+// encryptedHit is hitsEncrypted that also reports whether the hit field is
+// a blind-index one and whether it is the plain final segment of the path
+// (no modifier, nothing after it).
+func (m *Module) encryptedHit(col *core.Collection, tok string) (hit string, blind, final bool) {
 	segs := strings.Split(tok, ".")
 	i := 0
 	cur := col
 	if strings.HasPrefix(segs[0], "@") {
 		if stripMod(segs[0]) != "@collection" || len(segs) < 3 {
-			return ""
+			return "", false, false
 		}
 		c, err := m.app.FindCachedCollectionByNameOrId(stripMod(segs[1]))
 		if err != nil || c == nil {
-			return ""
+			return "", false, false
 		}
 		cur, i = c, 2
 	}
 	for ; i < len(segs); i++ {
 		name := stripMod(segs[i])
 		if cfg, _ := m.fieldsFor(cur.Id); cfg != nil {
-			if _, ok := cfg[name]; ok {
-				return cur.Name + "." + name
+			if mode, ok := cfg[name]; ok {
+				return cur.Name + "." + name, mode == ModeBlindIndex,
+					i == len(segs)-1 && name == segs[i]
 			}
 		}
 		if f, ok := cur.Fields.GetByName(name).(*core.RelationField); ok && f != nil {
 			c, err := m.app.FindCachedCollectionByNameOrId(f.CollectionId)
 			if err != nil || c == nil {
-				return ""
+				return "", false, false
 			}
 			cur = c
 			continue
@@ -83,12 +93,94 @@ func (m *Module) hitsEncrypted(col *core.Collection, tok string) string {
 		if j := strings.Index(name, "_via_"); j > 0 {
 			c, err := m.app.FindCachedCollectionByNameOrId(name[:j])
 			if err != nil || c == nil {
-				return ""
+				return "", false, false
 			}
 			cur = c
 			continue
 		}
+		return "", false, false
+	}
+	return "", false, false
+}
+
+// filterViolation returns the first encrypted "collection.field" a filter
+// uses in a way the equality rewrite does not support, or "". The supported
+// shape is `<blind-index field> (= | != | ?= | ?!=) "<non-empty string>"`
+// (either side). If the filter does not parse, any encrypted field is a
+// violation (the request would fail later anyway).
+func (m *Module) filterViolation(col *core.Collection, expr string) string {
+	ast, err := rule.Parse(expr)
+	if err != nil {
+		for _, tok := range tokens(expr) {
+			if hit := m.hitsEncrypted(col, tok); hit != "" {
+				return hit
+			}
+		}
 		return ""
+	}
+	return m.groupViolation(col, ast.Root)
+}
+
+func (m *Module) groupViolation(col *core.Collection, g *rule.Group) string {
+	if g == nil {
+		return ""
+	}
+	for _, it := range g.Items {
+		switch n := it.Node.(type) {
+		case *rule.Group:
+			if v := m.groupViolation(col, n); v != "" {
+				return v
+			}
+		case *rule.Comparison:
+			if v := m.comparisonViolation(col, n); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+func (m *Module) comparisonViolation(col *core.Collection, c *rule.Comparison) string {
+	eq := c.Op == rule.OpEq || c.Op == rule.OpNeq || c.Op == rule.OpAnyEq || c.Op == rule.OpAnyNeq
+	side := func(o, other rule.Operand) string {
+		id, ok := o.(*rule.Ident)
+		if !ok {
+			if call, isCall := o.(*rule.Call); isCall {
+				for _, a := range call.Args {
+					if v := m.operandViolation(col, a); v != "" {
+						return v
+					}
+				}
+			}
+			return ""
+		}
+		hit, blind, final := m.encryptedHit(col, id.Name)
+		if hit == "" {
+			return ""
+		}
+		if lit, ok := other.(*rule.Literal); eq && blind && final && ok &&
+			lit.Kind == rule.LiteralString && lit.Value != "" {
+			return ""
+		}
+		return hit
+	}
+	if v := side(c.Left, c.Right); v != "" {
+		return v
+	}
+	return side(c.Right, c.Left)
+}
+
+// operandViolation: inside a function call any encrypted field is rejected.
+func (m *Module) operandViolation(col *core.Collection, o rule.Operand) string {
+	switch x := o.(type) {
+	case *rule.Ident:
+		return m.hitsEncrypted(col, x.Name)
+	case *rule.Call:
+		for _, a := range x.Args {
+			if v := m.operandViolation(col, a); v != "" {
+				return v
+			}
+		}
 	}
 	return ""
 }
@@ -110,8 +202,11 @@ func (m *Module) guardList(e *core.RequestEvent, col *core.Collection) error {
 		return nil
 	}
 	if f := q.Get("filter"); f != "" {
-		if err := check("filter", []string{f}); err != nil {
-			return err
+		if hit := m.filterViolation(col, f); hit != "" {
+			return e.BadRequestError("Failed to load the records.", validation.Errors{
+				"filter": validation.NewError(ErrCode,
+					fmt.Sprintf("Encrypted field %q cannot be used in filter.", hit)),
+			})
 		}
 	}
 	if s := q.Get("sort"); s != "" {
@@ -254,6 +349,12 @@ func FindByBlindIndex(app core.App, collection, field, value string) ([]*core.Re
 	if cfg[field] != ModeBlindIndex {
 		return nil, fmt.Errorf("%s.%s is not a blind-index field", col.Name, field)
 	}
+	return m.findByBlindIndex(col, field, value, 1000)
+}
+
+// findByBlindIndex is FindByBlindIndex for an already resolved blind-index
+// field: it reads at most limit index rows and verifies every hit.
+func (m *Module) findByBlindIndex(col *core.Collection, field, value string, limit int) ([]*core.Record, error) {
 	hs, err := m.blindHMACs(col, field, value)
 	if err != nil {
 		return nil, err
@@ -262,16 +363,16 @@ func FindByBlindIndex(app core.App, collection, field, value string) ([]*core.Re
 		return nil, nil
 	}
 	ids := []string{}
-	err = app.DB().Select("record").From(IndexTable).
+	err = m.app.DB().Select("record").From(IndexTable).
 		Where(dbx.HashExp{"collection": col.Id, "field": field, "hmac": hs}).
-		Limit(1000).Column(&ids)
+		Limit(int64(limit)).Column(&ids)
 	if err != nil {
 		return nil, err
 	}
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	recs, err := app.FindRecordsByIds(col.Id, ids)
+	recs, err := m.app.FindRecordsByIds(col.Id, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -285,6 +386,57 @@ func FindByBlindIndex(app core.App, collection, field, value string) ([]*core.Re
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// maxFilterMatches bounds how many records one equality comparison of a
+// filter or rule may match (the ids are inlined as bound parameters).
+const maxFilterMatches = 1000
+
+// indexProvider plugs the blind index into the kernel field resolver
+// (kernel.BlindIndexProvider): `field = "v"` in a filter or rule is rewritten
+// to a comparison against the ids found through the index.
+type indexProvider struct{ m *Module }
+
+func (p indexProvider) IsBlindIndex(collectionId, field string) bool {
+	cfg, _ := p.m.fieldsFor(collectionId)
+	return cfg[field] == ModeBlindIndex
+}
+
+func (p indexProvider) BlindIndexIDs(col *core.Collection, field, value string, info *core.RequestInfo, enforce bool) ([]string, error) {
+	m := p.m
+	if !m.Active() {
+		return nil, ErrNoMasterKey
+	}
+	recs, err := m.findByBlindIndex(col, field, value, maxFilterMatches+1)
+	if err != nil {
+		return nil, err
+	}
+	if len(recs) > maxFilterMatches {
+		return nil, fmt.Errorf("the comparison on %s.%s matches more than %d records", col.Name, field, maxFilterMatches)
+	}
+	ids := make([]string, 0, len(recs))
+	for _, r := range recs {
+		if enforce && !m.fieldVisible(r, field, info) {
+			continue
+		}
+		ids = append(ids, r.Id)
+	}
+	return ids, nil
+}
+
+// fieldVisible applies the visibility rule of the lookup endpoint: the field
+// must survive the enrich hooks (fieldperm read rules, hooks hiding the
+// field) and not be a hidden field. Errors fail closed.
+func (m *Module) fieldVisible(r *core.Record, field string, info *core.RequestInfo) bool {
+	ev := new(core.RecordEnrichEvent)
+	ev.App = m.app
+	ev.Record = r
+	ev.RequestInfo = info
+	if err := m.app.OnRecordEnrich().Trigger(ev); err != nil {
+		return false
+	}
+	_, ok := r.PublicExport()[field]
+	return ok
 }
 
 var _ = errors.New

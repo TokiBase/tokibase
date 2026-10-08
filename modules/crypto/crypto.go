@@ -164,6 +164,7 @@ func Register(app core.App) *Module {
 	m.master, m.masterErr = LoadMasterKey()
 	m.load = m.loadConfig
 	app.Store().Set(storeKey, m)
+	kernel.SetBlindIndexProvider(app, indexProvider{m})
 
 	ensure := func() {
 		if err := EnsureSchema(app); err != nil {

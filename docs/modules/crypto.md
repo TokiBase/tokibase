@@ -1,6 +1,6 @@
 # Module `crypto`
 
-Per-field encryption at rest with envelope keys. Package `modules/crypto`. The collection JSON schema is not changed, so the Admin UI and the SDKs keep working. Scope of PR 1: field modes `random` and `blind-index` for text-like fields, key management, rotation. Crypto-shredding by tenant/user comes later.
+Per-field encryption at rest with envelope keys. Package `modules/crypto`. The collection JSON schema is not changed, so the Admin UI and the SDKs keep working. Scope (PR 1 + PR 2): field modes `random` and `blind-index` for text-like fields, key management, rotation. Crypto-shredding by tenant/user comes later.
 
 - Always registered by `tokibase.go`, but inactive without a master key. With no rows in `_crypto_fields` it does nothing.
 - Only `text`, `editor`, `json`, `email` and `url` fields can be encrypted. Refused: system fields (`id`, auth `email`/`password`/`tokenKey`, ...), view collections and the system collections, auth identity fields (`passwordAuth.identityFields`, `username`) and OAuth2 mapped fields (login would compare against ciphertext), fields covered by any index (a unique index would apply to random ciphertext, any other index is useless) and fields selected by a view query. `blind-index` is not available on `json` fields.
@@ -40,7 +40,7 @@ Stored value: `tkc1:<keyver>:<base64 nonce||ciphertext||tag>`; AAD = collection 
 | Mode | Stored | Filter/sort | Lookup |
 | --- | --- | --- | --- |
 | `random` | fresh nonce per write, same value gives different ciphertexts | rejected | none |
-| `blind-index` | like `random`, plus an HMAC row in `_crypto_index` | rejected in PR 1 | exact match: `crypto.FindByBlindIndex` and `POST /api/crypto/lookup/{collection}/{field}` with body `{"value":"..."}` |
+| `blind-index` | like `random`, plus an HMAC row in `_crypto_index` | equality only (`=`, `!=`, `?=`, `?!=` against a non-empty string literal), rewritten to an index lookup (PR 2); sort rejected | exact match: `crypto.FindByBlindIndex` and `POST /api/crypto/lookup/{collection}/{field}` with body `{"value":"..."}` |
 
 Empty values (`""`, `null`) are stored empty, not encrypted.
 
@@ -71,13 +71,30 @@ The module registers every configured field in the kernel registry `kernel.Regis
 
 ## Filters, sort, lookup
 
-Ciphertext is random, so `filter=` and `sort=` on an encrypted field are **rejected in PR 1** with HTTP 400:
+Ciphertext is random, so most expressions on an encrypted field are **rejected** with HTTP 400:
 
 ```json
 {"status":400,"message":"Failed to load the records.","data":{"filter":{"code":"validation_encrypted_field","message":"Encrypted field \"patients.diagnosis\" cannot be used in filter."}}}
 ```
 
-(`sort` for sorts.) The guard is a router middleware on `GET /api/collections/{c}/records` that scans identifiers of the query (string literals are ignored; modifiers like `:lower`, relation paths `author.secret`, back-relations `posts_via_author.secret` and `@collection.x.secret` are followed). It applies to everybody including superusers.
+(`sort` for sorts.) The guard is a router middleware on `GET /api/collections/{c}/records` that parses the filter and scans identifiers of the query (string literals are ignored; modifiers like `:lower`, relation paths `author.secret`, back-relations `posts_via_author.secret` and `@collection.x.secret` are followed). It applies to everybody including superusers.
+
+### Equality on `blind-index` fields (PR 2)
+
+Exactly this shape is let through and works:
+
+```
+ssn = "123-45"          ssn != "123-45"          ssn ?= "123-45"          ssn ?!= "123-45"
+"123-45" = ssn          author.ssn = "123-45"    posts_via_author.ssn ?= "x"   @collection.patients.ssn = "x"
+```
+
+- The field is compared (either side) with a **non-empty string literal**. Works inside `&&`, `||` and parentheses, and in collection rules with a string bound from `@request.query.*` / `@request.body.*` / `@request.auth.*` too.
+- Everything else on an encrypted field stays rejected: `~ !~ < <= > >=` (and the `?` variants), modifiers (`:lower`, `:length`, ...), `random`-mode fields, numbers, `null`, the empty string, a comparison between two fields, function arguments (`strftime(ssn)`), `sort`.
+- How it works: the kernel field resolver asks a `kernel.BlindIndexProvider` (registered by this module in the app store; the kernel knows nothing about encryption, modules do not import each other) whether the field is blind-indexed. If so, its identifier carries a `search.ResolverResult.BeforeBuild` hook; when the expression builder sees `=`, `!=`, `?=` or `?!=` against a bound non-empty string it calls the module with the plaintext, the module computes the HMAC under **every usable key version** (so rows indexed under an older version still match during a rotation), reads `_crypto_index`, verifies every hit by decrypting (a stale index row can only cause a missed match) and the resolver emits `CASE WHEN <alias>.id IN (<matching ids>) THEN <value> ELSE '' END` as the compared identifier. Because only the identifier changes, the legacy and the AST (`TOKI_RULE_AST=1`) paths, relation paths (multi-match `=` needs all related records to match, `?=` any), NULL handling and bound parameters behave exactly as for a plain column. Expressions that do not touch a blind-index field produce byte-identical SQL.
+- At most 1000 records may match one comparison (the ids are inlined as bound parameters); more is an error (HTTP 400 in a filter). The comparison needs the index to be complete: while `toki crypto enable` is still sweeping (state `enabling`) rows not yet indexed are not found.
+- **No equality oracle.** A client filter of a non-superuser applies the visibility rule of the lookup endpoint: for each matching record the field must survive the `OnRecordEnrich` hooks (`fieldperm` read rules, hooks that hide it). A record whose field the caller cannot read behaves as if it never matched: `ssn = "v"` does not return it and `ssn != "v"` does not exclude it (excluding it would reveal the value just as well). A hidden field is not filterable by non-superusers at all (the usual error, independent of the data). Superusers (and rules, which are written by the admin and resolved with hidden fields allowed) are not gated; note that this means `fieldperm` with `EnforceSuperuser` is not applied to a superuser's filter, unlike the lookup endpoint. The comparison costs one index query and, for non-superusers, one enrich pass over the matching records.
+- **Collection rules** (`listRule`, `viewRule`, ...) use the same resolver, so `ssn = "123-45"` or `ssn = @request.query.s` in a rule works the same way, ungated. Other operators in a rule on an encrypted field are not rewritten and compare against ciphertext as before (`toki crypto status` lints such rules).
+- Matching is exact and case sensitive, like the lookup endpoint.
 
 For exact match use the lookup endpoint (any `blind-index` field). Send the value in a **POST** JSON body (`{"value":"..."}`; strings, or numbers): request URLs are stored in the request log, request bodies are not. `GET ...?value=` still works for compatibility, but then the looked-up plaintext (SSN, phone, email) lands in the logs table; do not use it for sensitive values. The endpoint has no rate limit of its own: configure one for the path prefix `/api/crypto/` in the settings rate limits, a low-entropy value against a public `listRule` can be enumerated. It returns `{"items":[...],"totalItems":n}`, at most 100 records, each already passing the collection's `listRule` for the caller (superusers see all; a `null` rule is superusers only), enriched like a normal list (decrypted, `fieldperm` read rules and hidden fields applied). A caller who cannot read the looked-up field (hidden field, `fieldperm` denies) gets no records for it: the endpoint is not an equality oracle on fields the caller cannot see. Go: `crypto.FindByBlindIndex(app, collection, field, value)` returns the matching records as stored, without any rule check. Matching is exact and case sensitive; normalise (trim, lowercase) in your own write path if you need otherwise.
 
@@ -130,10 +147,10 @@ At boot the module logs a warning for every collection whose API rule (list/view
 
 Ciphertext is what is stored, so `toki backup` archives, WAL replicas and Litestream carry ciphertext only; `toki backup verify` still checks integrity (it never needs plaintext). The master key is not in `pb_data` and so not in backups: store it in your secret manager and back it up separately. Restoring a backup on a node needs the same master key. `_crypto_keys` holds the wrapped DEKs and travels with the data on purpose.
 
-## Limits (PR 1)
+## Limits
 
-- No filter/sort on encrypted fields (rejected), no range or prefix search, no uniqueness on encrypted fields.
-- The filter guard scans the request, it does not rewrite the filter. It covers record list requests; collection rules and view queries that reference an encrypted field are only linted. Fields reached through a relation are checked only when the path resolves from the listed collection.
+- Filters on encrypted fields: only equality on `blind-index` fields (see above); no sort, range, prefix or substring search, no uniqueness on encrypted fields.
+- The filter guard parses the request filter and only lets the equality shape through; the rewrite itself happens in the field resolver, so it also applies to rules and Go `FindRecordsByFilter`. The guard covers record list requests; collection rules and view queries that reference an encrypted field are only linted. Fields reached through a relation are checked only when the path resolves from the listed collection.
 - Direct SQL, `$app.db()`, exports, the logs of your own hooks and the in-memory process see ciphertext or plaintext according to where they read. Audit, webhooks and MCP replace encrypted fields by `[encrypted]`; your own Go/JS hooks that copy `record` elsewhere must do the same (`kernel.IsSensitive(collectionId, field)`).
 - Files are not encrypted. Empty values and value lengths are visible.
 - No master-key rotation, no per-tenant/per-user keys (crypto-shredding), no `random` text pattern/unique support.

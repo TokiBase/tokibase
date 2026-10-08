@@ -931,6 +931,11 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 		result.Type = valueTypeOfField(field)
 	}
 
+	// equality on a blind-index field (modules/crypto)
+	if modifier == "" && ref.Kind == rule.RefColumn {
+		r.attachBlindIndex(collection, field.GetName(), result)
+	}
+
 	// allow querying only auth records with emails marked as public
 	if field.GetName() == FieldNameEmail && !r.resolver.allowHiddenFields && collection.IsAuth() {
 		result.AfterBuild = func(expr dbx.Expression) dbx.Expression {
