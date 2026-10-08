@@ -336,6 +336,14 @@ func (m *Module) prepare(tx kernel.App, nodeID string, c *hubChange, gs *groupSt
 	if rj := validateTyped(p.Types, allowed, c.patch, !exists); rj != nil {
 		return nil, rj
 	}
+	// PR9: a node of a `crypto: strip` collection must not write the encrypted fields
+	if p.Crypto == CryptoStrip {
+		for name := range c.patch {
+			if stripped(col, p, name) {
+				return nil, reject(proto.CodePolicyCrypto, "the field "+name+" is encrypted and withheld from nodes (crypto: strip)")
+			}
+		}
+	}
 	// PR8: a value of a reserve: field must be inside a range issued to the node
 	if rj := m.checkReserved(tx, nodeID, p, col, c); rj != nil {
 		return nil, rj

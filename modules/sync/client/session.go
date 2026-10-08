@@ -53,6 +53,10 @@ func (c *Client) ensureSession(ctx context.Context) error {
 	c.caps = hs.Caps
 	c.mu.Unlock()
 	if hs.Rebootstrap && !c.isBootstrapping() {
+		// PR9: the data keys come first, the snapshot that follows carries ciphertext
+		if err := c.importKeys(hs); err != nil {
+			return err
+		}
 		// PR8: a node that is too far behind on schema gets the latest bundle with the
 		// answer; it is applied before the snapshot bootstrap (which then finds the collections)
 		if err := c.applyBundles(ctx, hs); err != nil {
@@ -75,6 +79,10 @@ func (c *Client) ensureSession(ctx context.Context) error {
 	epochChanged := c.handleEpoch(hs)
 	// PR8: clock correction (re-stamp, one more handshake) and schema bundles
 	if hs, err = c.fixClock(ctx, hs); err != nil {
+		return err
+	}
+	// PR9: the data keys of the encrypted collections (before the bundle that marks the fields encrypted)
+	if err := c.importKeys(hs); err != nil {
 		return err
 	}
 	if err := c.applyBundles(ctx, hs); err != nil {
@@ -217,11 +225,14 @@ func (c *Client) applyPolicies(ps []proto.Policy) error {
 		if raw, _ := json.Marshal(r.Get("exclude")); len(raw) > 0 {
 			_ = json.Unmarshal(raw, &ex)
 		}
-		if r.GetString("direction") == p.Direction && r.GetBool("enabled") &&
+		if r.GetString("direction") == p.Direction && r.GetBool("enabled") && (p.Crypto == "" || r.GetString("crypto") == p.Crypto) &&
 			reflect.DeepEqual(emptyIfNil(ft), emptyIfNil(p.FieldTypes)) && reflect.DeepEqual(nilIfEmpty(ex), nilIfEmpty(p.Exclude)) {
 			continue
 		}
 		r.Set("direction", p.Direction)
+		if p.Crypto != "" {
+			r.Set("crypto", p.Crypto)
+		}
 		r.Set("field_types", p.FieldTypes)
 		r.Set("exclude", p.Exclude)
 		r.Set("enabled", true)
@@ -257,6 +268,9 @@ func newPolicyRecord(app core.App, pc *core.Collection, p proto.Policy) *core.Re
 	r := core.NewRecord(pc)
 	r.Set("collection", p.Collection)
 	r.Set("direction", p.Direction)
+	if p.Crypto != "" {
+		r.Set("crypto", p.Crypto)
+	}
 	r.Set("field_types", p.FieldTypes)
 	r.Set("exclude", p.Exclude)
 	r.Set("enabled", true)

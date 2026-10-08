@@ -94,6 +94,16 @@ type Policy struct {
 	Crypto     string            `json:"crypto"`
 }
 
+// Key is one collection data key version, wrapped to the X25519 key of the node
+// (docs/SYNC_DESIGN.md §7.6): base64(ephPub(32) || nonce || AES-GCM ciphertext).
+// A retired version has no wrapped key and tells the node to drop its copy.
+type Key struct {
+	Collection string `json:"collection"`
+	Version    int    `json:"version"`
+	Wrapped    string `json:"wrapped,omitempty"`
+	Retired    bool   `json:"retired,omitempty"`
+}
+
 // HandshakeResponse is the 200 body of POST /api/sync/handshake.
 type HandshakeResponse struct {
 	SessionToken string `json:"session_token"`
@@ -109,7 +119,7 @@ type HandshakeResponse struct {
 	Schema       Schema         `json:"schema"`
 	Policies     []Policy       `json:"policies"`
 	Params       map[string]any `json:"params"`
-	Keys         []any          `json:"keys"`
+	Keys         []Key          `json:"keys"`
 	PushFrom     int64          `json:"push_from"`
 	LowWater     int64          `json:"low_water"`
 	Rebootstrap  bool           `json:"rebootstrap"`

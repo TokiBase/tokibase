@@ -1,6 +1,9 @@
 package kernel
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // SyncApplyMode tells why a record write is happening on behalf of
 // modules/sync instead of a normal client or hook.
@@ -33,6 +36,37 @@ type SyncOrigin struct {
 	// key is "<collectionId>/<recordId>/<field>" (a replayed tx group can touch
 	// several records); the value is the datetime string of the origin.
 	Fields map[string]any
+
+	// scratch lets the hooks of one apply pass values to each other (see
+	// [SyncOrigin.Remember]).
+	scratchMu sync.Mutex
+	scratch   map[any]any
+}
+
+// Remember stores a value for the duration of this apply. modules/crypto uses
+// it to carry the original ciphertext from the validate hook to the write hook.
+func (o *SyncOrigin) Remember(key, val any) {
+	o.scratchMu.Lock()
+	if o.scratch == nil {
+		o.scratch = map[any]any{}
+	}
+	o.scratch[key] = val
+	o.scratchMu.Unlock()
+}
+
+// Recall returns a value stored by [SyncOrigin.Remember].
+func (o *SyncOrigin) Recall(key any) (any, bool) {
+	o.scratchMu.Lock()
+	defer o.scratchMu.Unlock()
+	v, ok := o.scratch[key]
+	return v, ok
+}
+
+// Forget removes a value stored by [SyncOrigin.Remember].
+func (o *SyncOrigin) Forget(key any) {
+	o.scratchMu.Lock()
+	delete(o.scratch, key)
+	o.scratchMu.Unlock()
 }
 
 type syncOriginKey struct{}

@@ -200,6 +200,7 @@ func Register(app core.App) *Module {
 	}
 
 	m.bindHooks()
+	m.bindSync()
 	m.registerJobs()
 	return m
 }
@@ -283,8 +284,16 @@ func (m *Module) loadConfig() (map[string]map[string]string, error) {
 	}
 	out := map[string]map[string]string{}
 	states := map[string]map[string]string{}
+	all := map[string]map[string]string{} // out plus the stripped fields: the kernel registry lists both
 	for _, r := range recs {
 		id := m.resolveId(r.GetString("collection"))
+		if all[id] == nil {
+			all[id] = map[string]string{}
+		}
+		all[id][r.GetString("field")] = r.GetString("mode")
+		if r.GetString("state") == StateStripped {
+			continue // not received on this node (sync policy crypto: strip): a plain local column
+		}
 		if out[id] == nil {
 			out[id] = map[string]string{}
 			states[id] = map[string]string{}
@@ -295,7 +304,7 @@ func (m *Module) loadConfig() (map[string]map[string]string, error) {
 	m.stMu.Lock()
 	m.states = states
 	m.stMu.Unlock()
-	m.syncSensitive(out)
+	m.syncSensitive(all)
 	return out, nil
 }
 

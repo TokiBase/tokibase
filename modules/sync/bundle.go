@@ -45,8 +45,15 @@ const (
 )
 
 // configCollections are the rows shipped with a bundle (design §3.8).
-// `_crypto_fields` is left out until the key sync (PR9): a field marked encrypted on a spoke without its key would break writes.
-var configCollections = []string{PoliciesCollection, "_field_rules", "_batch_rules", "_computed_fields"}
+// `_crypto_fields` travels since PR9, when the keys do (handshake `keys`); a collection whose
+// policy says `crypto: strip` ships its rows with state "stripped" (see buildBody).
+var configCollections = []string{PoliciesCollection, "_field_rules", "_batch_rules", "_computed_fields", cryptoFieldsCollection}
+
+// cryptoFieldsCollection is the config collection of modules/crypto (not imported: a seam by name).
+const cryptoFieldsCollection = "_crypto_fields"
+
+// cryptoStateStripped is the `state` of a `_crypto_fields` row on a node that does not receive the field.
+const cryptoStateStripped = "stripped"
 
 // KindSchemaDroppedField is the conflict kind of a field removed from a patch.
 const (
@@ -181,6 +188,29 @@ func (m *Module) syncedCollections() ([]*core.Collection, map[string]struct{}, e
 	return cols, ids, nil
 }
 
+func (m *Module) resolveColID(ref string) string {
+	if c, err := m.app.FindCachedCollectionByNameOrId(ref); err == nil && c != nil {
+		return c.Id
+	}
+	return ref
+}
+
+// stripCollections returns the ids of the collections with an enabled policy that
+// says `crypto: strip`.
+func (m *Module) stripCollections() map[string]struct{} {
+	out := map[string]struct{}{}
+	recs, err := m.app.FindAllRecords(PoliciesCollection)
+	if err != nil {
+		return out
+	}
+	for _, r := range recs {
+		if r.GetBool("enabled") && r.GetString("crypto") == CryptoStrip {
+			out[m.resolveColID(r.GetString("collection"))] = struct{}{}
+		}
+	}
+	return out
+}
+
 // buildBody renders the current state of the synced schema and config rows.
 func (m *Module) buildBody() (*proto.BundleBody, error) {
 	cols, refs, err := m.syncedCollections()
@@ -195,6 +225,7 @@ func (m *Module) buildBody() (*proto.BundleBody, error) {
 		}
 		body.Collections = append(body.Collections, ex)
 	}
+	stripIDs := m.stripCollections()
 	for _, name := range configCollections {
 		if !m.app.HasTable(name) {
 			continue
@@ -219,6 +250,18 @@ func (m *Module) buildBody() (*proto.BundleBody, error) {
 					continue
 				}
 				row[k] = v
+			}
+			if name == PoliciesCollection {
+				// a node learns what `crypto: strip` withholds through `exclude`: it needs no crypto module to hash the same field set
+				row["exclude"] = m.effectiveExclude(r)
+			}
+			if name == cryptoFieldsCollection {
+				// the state of a row is a hub-local matter (an enable in progress must not run on a
+				// spoke); the bundle only says whether the node receives the field
+				row["state"] = ""
+				if _, ok := stripIDs[m.resolveColID(r.GetString("collection"))]; ok {
+					row["state"] = cryptoStateStripped
+				}
 			}
 			rows = append(rows, row)
 		}
@@ -703,6 +746,12 @@ func (b backend) AfterBundles(ctx context.Context) error {
 	ids := m.p8.rehash
 	m.p8.rehash = nil
 	m.p8.rehashMu.Unlock()
+	if len(ids) > 0 {
+		// the encrypted-field set (kernel.IsSensitive) decides what a `crypto: strip` hash covers
+		if rf, ok := kernel.SyncKeyProviderOf(m.app).(kernel.SyncKeyRefresher); ok {
+			rf.RefreshSyncConfig()
+		}
+	}
 	seen := map[string]bool{}
 	var uniq []string
 	for _, id := range ids {

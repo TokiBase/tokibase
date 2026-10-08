@@ -14,6 +14,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"crypto/hkdf"
 	"crypto/hmac"
@@ -163,3 +164,9 @@ func randomBytes(n int) ([]byte, error) {
 	_, err := io.ReadFull(rand.Reader, b)
 	return b, err
 }
+
+func b64Decode(s string) ([]byte, error) { return base64.StdEncoding.DecodeString(s) }
+
+func b64Encode(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+
+func timeNow() time.Time { return time.Now().UTC() }

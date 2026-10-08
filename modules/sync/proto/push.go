@@ -59,6 +59,7 @@ const (
 	CodeLegalTombstone   = "legal_tombstone"
 	CodePolicyDirection  = "policy_direction"
 	CodePolicyPartition  = "policy_partition"
+	CodePolicyCrypto     = "policy_crypto"
 	CodeFutureHLC        = "future_hlc"
 	CodeSuperseded       = "superseded"
 	CodeOrphaned         = "orphaned"
