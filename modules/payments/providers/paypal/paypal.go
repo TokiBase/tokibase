@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tokibase/tokibase/internal/netguard"
@@ -80,9 +81,10 @@ type Provider struct {
 	client                            *http.Client
 	now                               func() time.Time
 
-	mu     sync.Mutex
-	token  string
-	expire time.Time
+	mu      sync.Mutex
+	token   string
+	tokSnap atomic.Pointer[string] // copy of token readable without mu (scrub)
+	expire  time.Time
 }
 
 // New builds a provider by hand (tests, embedding).
@@ -96,7 +98,11 @@ func (p *Provider) SetURLs(ret, cancel string) { p.returnURL, p.cancelURL = ret,
 func (p *Provider) Name() string { return "paypal" }
 
 func (p *Provider) scrub(s string) string {
-	for _, sec := range []string{p.secret, p.token} {
+	cur := ""
+	if t := p.tokSnap.Load(); t != nil {
+		cur = *t
+	}
+	for _, sec := range []string{p.secret, cur} {
 		if sec != "" {
 			s = strings.ReplaceAll(s, sec, "***")
 		}
@@ -108,6 +114,8 @@ func (p *Provider) accessToken(ctx context.Context) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.token != "" && p.now().Before(p.expire) {
+		tok := p.token
+		p.tokSnap.Store(&tok)
 		return p.token, nil
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.base+"/v1/oauth2/token", strings.NewReader("grant_type=client_credentials"))
@@ -133,6 +141,8 @@ func (p *Provider) accessToken(ctx context.Context) (string, error) {
 		return "", errors.New("paypal: bad token response")
 	}
 	p.token = t.AccessToken
+	tok := t.AccessToken
+	p.tokSnap.Store(&tok)
 	p.expire = p.now().Add(time.Duration(t.ExpiresIn-60) * time.Second)
 	return p.token, nil
 }
@@ -287,7 +297,9 @@ func (p *Provider) VerifyWebhook(ctx context.Context, h map[string]string, body 
 		Status string `json:"verification_status"`
 	}
 	if err := p.do(ctx, http.MethodPost, "/v1/notifications/verify-webhook-signature", "", req, &out); err != nil {
-		return nil, err // verification could not run: not a verdict, the caller must see a server error
+		// verification could not run: not a verdict. ErrVerifyUnavailable makes
+		// the endpoint answer 503 (the provider retries) and stores nothing.
+		return nil, fmt.Errorf("%w: %v", payments.ErrVerifyUnavailable, err)
 	}
 	if out.Status != "SUCCESS" {
 		return nil, payments.ErrInvalidSignature

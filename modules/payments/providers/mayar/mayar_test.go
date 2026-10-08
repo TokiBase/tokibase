@@ -165,3 +165,114 @@ func TestFactoryFromEnv(t *testing.T) {
 		t.Fatalf("live base: %v", err)
 	}
 }
+
+func hookBody(status, amount string) []byte {
+	parts := []string{`"id":"1f0a-pay"`, `"transactionId":"9c3d-trx"`, `"updatedAt":"2026-10-08T10:00:00Z"`}
+	if status != "-" {
+		parts = append(parts, `"status":`+status)
+	}
+	if amount != "-" {
+		parts = append(parts, `"amount":`+amount)
+	}
+	return []byte(`{"event":"payment.received","data":{` + strings.Join(parts, ",") + `}}`)
+}
+
+var hookHdr = map[string]string{"x-callback-token": "hook-secret"}
+
+// Pm3: only known paid words pay; everything unrecognized changes nothing.
+func TestUnknownStatusNeverPays(t *testing.T) {
+	p, seen := server(t, detailPaid) // the API would say "paid": the webhook must not even get that far
+	for _, st := range []string{`"PROCESSING"`, `"waiting"`, "-", "null", `""`, `"refunded"`, `"reversed"`, `"closed"`, "true", `"settled-ish"`} {
+		evs, err := p.VerifyWebhook(context.Background(), hookHdr, hookBody(st, "50000"))
+		if err != nil || evs[0].Type != payments.EventUnknown {
+			t.Errorf("status %s: want unknown, got %v %v", st, evs, err)
+		}
+	}
+	if len(*seen) != 0 {
+		t.Fatal("an unknown status must not trigger API calls")
+	}
+	for _, st := range []string{`"unpaid"`, `"pending"`} {
+		evs, _ := p.VerifyWebhook(context.Background(), hookHdr, hookBody(st, "50000"))
+		if evs[0].Type != payments.EventIgnored {
+			t.Errorf("status %s must be ignored", st)
+		}
+	}
+	for _, st := range []string{`"paid"`, `"SUCCESS"`, `"Settled"`, `"completed"`} {
+		evs, _ := p.VerifyWebhook(context.Background(), hookHdr, hookBody(st, "50000"))
+		if evs[0].Type != payments.EventPaid {
+			t.Errorf("status %s must pay", st)
+		}
+	}
+}
+
+// Pm4: a paid webhook without a usable amount is only believed after the API says so.
+func TestMissingAmountNeedsTheAPI(t *testing.T) {
+	ctx := context.Background()
+	p, _ := server(t, detailPaid)
+	for _, amt := range []string{"-", "0", "15000.50", `"abc"`} {
+		evs, err := p.VerifyWebhook(ctx, hookHdr, hookBody(`"paid"`, amt))
+		if err != nil || evs[0].Type != payments.EventPaid || evs[0].Amount != 50000 {
+			t.Errorf("amount %s: the API amount must be used: %+v %v", amt, evs, err)
+		}
+	}
+	unpaid, _ := server(t, detailUnpaid)
+	if evs, _ := unpaid.VerifyWebhook(ctx, hookHdr, hookBody(`"paid"`, "-")); evs[0].Type != payments.EventIgnored {
+		t.Fatal("API says unpaid: not paid")
+	}
+	noAmt, _ := server(t, `{"data":{"id":"1f0a-pay","status":"paid"}}`)
+	if evs, _ := noAmt.VerifyWebhook(ctx, hookHdr, hookBody(`"paid"`, "-")); evs[0].Type != payments.EventUnknown {
+		t.Fatal("no amount anywhere: cannot be verified, not paid")
+	}
+	down := New("http://127.0.0.1:1", "k", "hook-secret", &http.Client{})
+	if _, err := down.VerifyWebhook(ctx, hookHdr, hookBody(`"paid"`, "-")); !errors.Is(err, payments.ErrVerifyUnavailable) {
+		t.Fatalf("API outage is not a verdict: %v", err)
+	}
+	conf, _ := server(t, detailPaid)
+	conf.SetConfirm(true)
+	if evs, _ := conf.VerifyWebhook(ctx, hookHdr, hookBody(`"paid"`, "1")); evs[0].Amount != 50000 {
+		t.Fatalf("confirm mode: the API amount wins over the webhook body, got %d", evs[0].Amount)
+	}
+}
+
+// Pm5: a closed link is not a payment.
+func TestClosedIsNotPaid(t *testing.T) {
+	closed := `{"data":{"id":"1f0a-pay","status":"closed","amount":50000}}`
+	p, _ := server(t, closed)
+	st, err := p.FetchStatus(context.Background(), "1f0a-pay", nil)
+	if err != nil || st.State != payments.StatusPending {
+		t.Fatalf("closed must stay pending: %+v %v", st, err)
+	}
+	p.SetConfirm(true)
+	if evs, _ := p.VerifyWebhook(context.Background(), hookHdr, hookBody(`"paid"`, "50000")); evs[0].Type != payments.EventIgnored {
+		t.Fatal("a paid webhook for a closed link must not pay")
+	}
+	for _, s := range []string{"mystery", "", "refunded"} {
+		q, _ := server(t, `{"data":{"id":"x","status":"`+s+`","amount":5}}`)
+		if st, _ := q.FetchStatus(context.Background(), "x", nil); st.State != payments.StatusPending {
+			t.Errorf("unknown API status %q must stay pending", s)
+		}
+	}
+}
+
+func TestLiveModeConfirmsByDefault(t *testing.T) {
+	f := map[string]string{"TOKI_PAYMENTS_MAYAR_API_KEY": "k"}
+	get := func(k string) string { return f[k] }
+	build := func() *Provider {
+		p, err := payments.NewFromFactory("mayar", get)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.(*Provider)
+	}
+	if build().confirm {
+		t.Fatal("sandbox: confirm is opt-in")
+	}
+	f["TOKI_PAYMENTS_MAYAR_MODE"] = "live"
+	if !build().confirm {
+		t.Fatal("live: confirm by default")
+	}
+	f["TOKI_PAYMENTS_MAYAR_CONFIRM"] = "0"
+	if build().confirm {
+		t.Fatal("explicit 0 turns it off")
+	}
+}

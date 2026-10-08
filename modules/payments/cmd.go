@@ -34,7 +34,7 @@ func NewCommand(app core.App) *cobra.Command {
 	intents := &cobra.Command{Use: "intents", Short: "Inspect payment intents"}
 	var status string
 	var limit int
-	var asJSON bool
+	var asJSON, attention bool
 	list := &cobra.Command{
 		Use: "list", Short: "List intents, newest first", SilenceUsage: true,
 		RunE: func(c *cobra.Command, _ []string) error {
@@ -42,7 +42,13 @@ func NewCommand(app core.App) *cobra.Command {
 			if status != "" {
 				filter, params = "status={:s}", dbx.Params{"s": status}
 			}
-			rs, err := app.FindRecordsByFilter(IntentsCollection, filter, "-created", limit, 0, params)
+			var rs []*core.Record
+			var err error
+			if attention {
+				rs, err = attentionIntents(app, limit)
+			} else {
+				rs, err = app.FindRecordsByFilter(IntentsCollection, filter, "-created", limit, 0, params)
+			}
 			if err != nil {
 				return err
 			}
@@ -63,6 +69,47 @@ func NewCommand(app core.App) *cobra.Command {
 	list.Flags().StringVar(&status, "status", "", "filter by status")
 	list.Flags().IntVar(&limit, "limit", 50, "max rows")
 	list.Flags().BoolVar(&asJSON, "json", false, "output JSON")
+	list.Flags().BoolVar(&attention, "attention", false, "only intents that need a human: paid_late (money for a failed/expired intent), intents of rejected or dead-lettered webhook events")
+	resolve := &cobra.Command{
+		Use: "resolve <id>", Short: "Accept a paid_late payment: the intent becomes paid and its entitlement is granted (to refund instead use `payments refund`)", Args: cobra.ExactArgs(1), SilenceUsage: true,
+		RunE: func(c *cobra.Command, a []string) error {
+			m, err := mod()
+			if err != nil {
+				return err
+			}
+			r, err := m.GetIntent(a[0])
+			if err != nil {
+				return err
+			}
+			if r.GetString("status") != StatusPaidLate {
+				return fmt.Errorf("intent is %s, only paid_late intents can be resolved", r.GetString("status"))
+			}
+			if _, err := m.Transition(a[0], StatusPaid, TransitionInfo{Source: "cli"}); err != nil {
+				return err
+			}
+			fmt.Fprintln(c.OutOrStdout(), "paid")
+			return nil
+		},
+	}
+	var refAmount int64
+	var refReason, refKey string
+	refund := &cobra.Command{
+		Use: "refund <intent-id>", Short: "Refund (part of) a paid or paid_late intent through its provider", Args: cobra.ExactArgs(1), SilenceUsage: true,
+		RunE: func(c *cobra.Command, a []string) error {
+			m, err := mod()
+			if err != nil {
+				return err
+			}
+			rf, err := m.Refund(context.Background(), a[0], refAmount, refReason, refKey)
+			if rf != nil {
+				fmt.Fprintf(c.OutOrStdout(), "%s\t%s\t%d\n", rf.Id, rf.GetString("status"), rf.GetInt("amount"))
+			}
+			return err
+		},
+	}
+	refund.Flags().Int64Var(&refAmount, "amount", 0, "minor unit amount (0 = everything left)")
+	refund.Flags().StringVar(&refReason, "reason", "", "reason")
+	refund.Flags().StringVar(&refKey, "idempotency-key", "", "idempotency key")
 	show := &cobra.Command{
 		Use: "show <id>", Short: "Show one intent with its events and refunds (no credentials are ever stored)", Args: cobra.ExactArgs(1), SilenceUsage: true,
 		RunE: func(c *cobra.Command, a []string) error {
@@ -76,7 +123,7 @@ func NewCommand(app core.App) *cobra.Command {
 			return printJSON(c.OutOrStdout(), out)
 		},
 	}
-	intents.AddCommand(list, show)
+	intents.AddCommand(list, show, resolve)
 
 	reconcile := &cobra.Command{
 		Use: "reconcile", Short: "Check pending intents with their providers and sweep lapsed entitlements", SilenceUsage: true,
@@ -169,6 +216,28 @@ func NewCommand(app core.App) *cobra.Command {
 
 	// webhook replay
 	wh := &cobra.Command{Use: "webhook", Short: "Webhook events"}
+	var evStatus string
+	var evLimit int
+	whList := &cobra.Command{
+		Use: "list", Short: "List stored webhook events (use --status rejected|dead|failed|pending_order to find the ones that need a decision)", SilenceUsage: true,
+		RunE: func(c *cobra.Command, _ []string) error {
+			filter, params := "id != ''", dbx.Params{}
+			if evStatus != "" {
+				filter, params = "status={:s}", dbx.Params{"s": evStatus}
+			}
+			rs, err := app.FindRecordsByFilter(EventsCollection, filter, "-created", evLimit, 0, params)
+			if err != nil {
+				return err
+			}
+			for _, r := range rs {
+				fmt.Fprintf(c.OutOrStdout(), "%s\t%s\t%s\t%s\tintent=%s\t%s\n", r.Id, r.GetString("status"), r.GetString("provider"), r.GetString("type"), r.GetString("intent"), r.GetString("error"))
+			}
+			return nil
+		},
+	}
+	whList.Flags().StringVar(&evStatus, "status", "", "filter by event status")
+	whList.Flags().IntVar(&evLimit, "limit", 50, "max rows")
+	wh.AddCommand(whList)
 	wh.AddCommand(&cobra.Command{
 		Use: "replay <eventId>", Short: "Process a stored verified event again (idempotent)", Args: cobra.ExactArgs(1), SilenceUsage: true,
 		RunE: func(c *cobra.Command, a []string) error {
@@ -184,6 +253,34 @@ func NewCommand(app core.App) *cobra.Command {
 		},
 	})
 
-	root.AddCommand(intents, reconcile, ents, wh)
+	root.AddCommand(intents, reconcile, refund, ents, wh)
 	return root
+}
+
+// attentionIntents lists the intents a human has to look at: paid_late ones
+// and the intents of webhook events that were rejected or dead-lettered.
+func attentionIntents(app core.App, limit int) ([]*core.Record, error) {
+	out, err := app.FindRecordsByFilter(IntentsCollection, "status='paid_late'", "-updated", limit, 0)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, r := range out {
+		seen[r.Id] = true
+	}
+	evs, err := app.FindRecordsByFilter(EventsCollection, "(status='rejected' || status='dead') && intent!=''", "-created", 200, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range evs {
+		id := e.GetString("intent")
+		if seen[id] || len(out) >= limit {
+			continue
+		}
+		if r, err := app.FindRecordById(IntentsCollection, id); err == nil {
+			seen[id] = true
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }

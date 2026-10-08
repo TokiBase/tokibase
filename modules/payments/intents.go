@@ -21,7 +21,12 @@ var (
 	ErrIdempotencyConflict = errors.New("payments: idempotency key was used with different parameters")
 	ErrInvalid             = errors.New("payments: invalid request")
 	ErrNotFound            = errors.New("payments: not found")
+	ErrTooManyIntents      = errors.New("payments: too many open intents, try again later")
 )
+
+// MaxAmount is the largest accepted amount in the minor unit (1e12: far above
+// any real price and exactly representable in the float64 column).
+const MaxAmount = 1_000_000_000_000
 
 var currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
 
@@ -79,18 +84,20 @@ func (m *Module) CreateIntent(ctx context.Context, p CreateParams) (rec *core.Re
 		if perr != nil {
 			return nil, false, fmt.Errorf("%w: unknown product", ErrInvalid)
 		}
-		if pa := int64(prod.GetInt("amount")); pa > 0 {
-			if p.Amount != 0 && p.Amount != pa {
-				return nil, false, fmt.Errorf("%w: amount does not match the product price", ErrInvalid)
-			}
-			p.Amount = pa
-			if c := prod.GetString("currency"); c != "" {
-				if p.Currency != "" && p.Currency != strings.ToUpper(c) {
-					return nil, false, fmt.Errorf("%w: currency does not match the product", ErrInvalid)
-				}
-				p.Currency = strings.ToUpper(c)
-			}
+		// The price and currency of a product are always the product's. A
+		// product without a fixed price cannot be bought (fail closed): the
+		// client must never pick what it pays for a product that grants access.
+		pa, pc := int64(prod.GetInt("amount")), strings.ToUpper(strings.TrimSpace(prod.GetString("currency")))
+		if pa <= 0 || !currencyRe.MatchString(pc) {
+			return nil, false, fmt.Errorf("%w: product has no fixed price and currency", ErrInvalid)
 		}
+		if p.Amount != 0 && p.Amount != pa {
+			return nil, false, fmt.Errorf("%w: amount does not match the product price", ErrInvalid)
+		}
+		if p.Currency != "" && p.Currency != pc {
+			return nil, false, fmt.Errorf("%w: currency does not match the product", ErrInvalid)
+		}
+		p.Amount, p.Currency = pa, pc
 		if grant == nil && prod.GetString("entitlement_key") != "" {
 			grant = &Grant{
 				Key: prod.GetString("entitlement_key"), Days: prod.GetInt("duration_days"),
@@ -102,6 +109,9 @@ func (m *Module) CreateIntent(ctx context.Context, p CreateParams) (rec *core.Re
 	}
 	if p.Amount <= 0 {
 		return nil, false, fmt.Errorf("%w: amount must be a positive integer in the minor unit", ErrInvalid)
+	}
+	if p.Amount > MaxAmount {
+		return nil, false, fmt.Errorf("%w: amount is too large", ErrInvalid)
 	}
 	if !currencyRe.MatchString(p.Currency) {
 		return nil, false, fmt.Errorf("%w: currency must be a 3 letter ISO code", ErrInvalid)
@@ -117,6 +127,12 @@ func (m *Module) CreateIntent(ctx context.Context, p CreateParams) (rec *core.Re
 			dbx.Params{"c": cid, "cc": ccol, "k": p.IdempotencyKey})
 		if ex != nil {
 			return m.replayOf(ex, p)
+		}
+	}
+
+	if p.Customer != nil {
+		if err := m.checkIntentBrakes(cid, ccol); err != nil {
+			return nil, false, err
 		}
 	}
 
@@ -178,6 +194,26 @@ func (m *Module) CreateIntent(ctx context.Context, p CreateParams) (rec *core.Re
 	return out, false, nil
 }
 
+// checkIntentBrakes is the default flood protection per customer, active even
+// when no `payments:intent` rate limit rule is configured: at most
+// IntentPerMinute new intents per minute and MaxOpenIntents created/pending ones.
+func (m *Module) checkIntentBrakes(cid, ccol string) error {
+	who := dbx.HashExp{"customer": cid, "customer_collection": ccol}
+	if m.IntentPerMinute > 0 {
+		n, err := m.app.CountRecords(IntentsCollection, who, dbx.NewExp("[[created]] > {:t}", dbx.Params{"t": m.dt(m.now().Add(-time.Minute)).String()}))
+		if err == nil && n >= int64(m.IntentPerMinute) {
+			return ErrTooManyIntents
+		}
+	}
+	if m.MaxOpenIntents > 0 {
+		n, err := m.app.CountRecords(IntentsCollection, who, dbx.NewExp("[[status]] IN ('created','pending')"))
+		if err == nil && n >= int64(m.MaxOpenIntents) {
+			return ErrTooManyIntents
+		}
+	}
+	return nil
+}
+
 func (m *Module) replayOf(ex *core.Record, p CreateParams) (*core.Record, bool, error) {
 	if ex.GetString("provider") != p.Provider || int64(ex.GetInt("amount")) != p.Amount ||
 		ex.GetString("currency") != p.Currency || ex.GetString("order_ref") != p.OrderRef ||
@@ -214,6 +250,10 @@ func (m *Module) findIntentByRefs(provider string, refs []string) *core.Record {
 		if ref == "" || strings.Contains(ref, ",") {
 			continue
 		}
+		// exact match first: it can use idx_payint_ref
+		if r, err := m.app.FindFirstRecordByFilter(IntentsCollection, "provider={:p} && provider_ref={:r}", dbx.Params{"p": provider, "r": ref}); err == nil && r != nil {
+			return r
+		}
 		rs, err := m.app.FindRecordsByFilter(IntentsCollection,
 			"provider={:p} && provider_ref ~ {:r}", "-created", 20, 0, dbx.Params{"p": provider, "r": ref})
 		if err != nil {
@@ -236,6 +276,9 @@ type TransitionInfo struct {
 	Error  string         // stored in last_error
 	Data   map[string]any // merged into provider_data
 	Detail map[string]any // extra audit details
+	// Reopen allows failed|expired -> paid for a verified, matching late
+	// payment (set by the framework, see applyPaid; not for callers).
+	Reopen bool
 }
 
 // Transition moves an intent to status `to`. The same status is an idempotent
@@ -253,10 +296,14 @@ func (m *Module) Transition(id, to string, info TransitionInfo) (changed bool, e
 			return nil
 		}
 		if err := CheckTransition(cur, to); err != nil {
-			return err
+			if !(info.Reopen && to == StatusPaid && (cur == StatusFailed || cur == StatusExpired)) {
+				return err
+			}
 		}
 		r.Set("status", to)
 		switch to {
+		case StatusPaidLate:
+			r.Set("paid_at", now)
 		case StatusPaid:
 			r.Set("paid_at", now)
 			return m.grantForIntent(tx, r, now)
@@ -326,10 +373,22 @@ func (m *Module) update(id, source string, fn func(tx kernel.App, r *core.Record
 	if to != from {
 		d := map[string]any{"from": from, "to": to, "source": source}
 		audit(ActionStatus, IntentsCollection, id, d)
-		if to == StatusPaid {
-			ev := &PaidEvent{App: m.app, Intent: out}
+		late := from == StatusFailed || from == StatusExpired || from == StatusPaidLate
+		if late && (to == StatusPaid || to == StatusPaidLate) {
+			// money for an intent that had given up: loud on purpose
+			m.app.Logger().Error("payments: late payment", "intent", id, "from", from, "to", to, "source", source)
+			audit(ActionLate, IntentsCollection, id, map[string]any{"level": "error", "from": from, "to": to, "source": source})
+		}
+		switch to {
+		case StatusPaid:
+			ev := &PaidEvent{App: m.app, Intent: out, Late: late}
 			if herr := OnPaid(m.app).Trigger(ev); herr != nil {
 				m.app.Logger().Error("payments: OnPaid handler failed", "intent", id, "error", herr)
+			}
+		case StatusPaidLate:
+			ev := &PaidEvent{App: m.app, Intent: out, Late: true}
+			if herr := OnLatePayment(m.app).Trigger(ev); herr != nil {
+				m.app.Logger().Error("payments: OnLatePayment handler failed", "intent", id, "error", herr)
 			}
 		}
 	}
@@ -338,8 +397,8 @@ func (m *Module) update(id, source string, fn func(tx kernel.App, r *core.Record
 
 // ---- refunds ---------------------------------------------------------------
 
-func (m *Module) pendingRefundSum(intentID string) int64 {
-	rs, _ := m.app.FindRecordsByFilter(RefundsCollection, "intent={:i} && status='pending'", "", 0, 0, dbx.Params{"i": intentID})
+func pendingRefundSum(app kernel.App, intentID string) int64 {
+	rs, _ := app.FindRecordsByFilter(RefundsCollection, "intent={:i} && status='pending'", "", 0, 0, dbx.Params{"i": intentID})
 	var n int64
 	for _, r := range rs {
 		n += int64(r.GetInt("amount"))
@@ -347,30 +406,19 @@ func (m *Module) pendingRefundSum(intentID string) int64 {
 	return n
 }
 
+func refundable(status string) bool {
+	return status == StatusPaid || status == StatusPartiallyRefunded || status == StatusPaidLate
+}
+
 // Refund asks the provider to refund amount (0 = everything left) of a paid
-// intent. A provider that completes later reports through a webhook.
+// intent (or a paid_late one: refunding is the way to send late money back).
+// A provider that completes later reports through a webhook. The remaining
+// amount is checked and the pending row inserted in one transaction, so two
+// concurrent refunds cannot both pass the check.
 func (m *Module) Refund(ctx context.Context, intentID string, amount int64, reason, idemKey string) (*core.Record, error) {
 	intent, err := m.GetIntent(intentID)
 	if err != nil {
 		return nil, err
-	}
-	st := intent.GetString("status")
-	if st != StatusPaid && st != StatusPartiallyRefunded {
-		return nil, fmt.Errorf("%w: intent is %s, only paid intents can be refunded", ErrInvalid, st)
-	}
-	if idemKey != "" {
-		if ex, _ := m.app.FindFirstRecordByFilter(RefundsCollection, "intent={:i} && idempotency_key={:k}",
-			dbx.Params{"i": intentID, "k": idemKey}); ex != nil {
-			return ex, nil
-		}
-	}
-	total := int64(intent.GetInt("amount"))
-	remaining := total - int64(intent.GetInt("refunded_amount")) - m.pendingRefundSum(intentID)
-	if amount == 0 {
-		amount = remaining
-	}
-	if amount <= 0 || amount > remaining {
-		return nil, fmt.Errorf("%w: refund amount must be within 1..%d", ErrInvalid, remaining)
 	}
 	prov, err := m.Provider(intent.GetString("provider"))
 	if err != nil {
@@ -380,16 +428,46 @@ func (m *Module) Refund(ctx context.Context, intentID string, amount int64, reas
 	if err != nil {
 		return nil, err
 	}
-	rf := core.NewRecord(col)
-	rf.Set("intent", intentID)
-	rf.Set("amount", amount)
-	rf.Set("currency", intent.GetString("currency"))
-	rf.Set("status", "pending")
-	rf.Set("source", "api")
-	rf.Set("reason", truncate(reason, 900))
-	rf.Set("idempotency_key", idemKey)
-	if err := m.app.Save(rf); err != nil {
+	var rf, replay *core.Record
+	err = m.app.RunInTransaction(func(tx kernel.App) error {
+		if idemKey != "" {
+			if ex, _ := tx.FindFirstRecordByFilter(RefundsCollection, "intent={:i} && idempotency_key={:k}",
+				dbx.Params{"i": intentID, "k": idemKey}); ex != nil {
+				replay = ex
+				return nil
+			}
+		}
+		cur, err := tx.FindRecordById(IntentsCollection, intentID)
+		if err != nil {
+			return ErrNotFound
+		}
+		if st := cur.GetString("status"); !refundable(st) {
+			return fmt.Errorf("%w: intent is %s, only paid intents can be refunded", ErrInvalid, st)
+		}
+		intent = cur
+		total := int64(cur.GetInt("amount"))
+		remaining := total - int64(cur.GetInt("refunded_amount")) - pendingRefundSum(tx, intentID)
+		if amount == 0 {
+			amount = remaining
+		}
+		if amount <= 0 || amount > remaining {
+			return fmt.Errorf("%w: refund amount must be within 1..%d", ErrInvalid, remaining)
+		}
+		rf = core.NewRecord(col)
+		rf.Set("intent", intentID)
+		rf.Set("amount", amount)
+		rf.Set("currency", cur.GetString("currency"))
+		rf.Set("status", "pending")
+		rf.Set("source", "api")
+		rf.Set("reason", truncate(reason, 900))
+		rf.Set("idempotency_key", idemKey)
+		return tx.Save(rf)
+	})
+	if err != nil {
 		return nil, err
+	}
+	if replay != nil {
+		return replay, nil
 	}
 	audit(ActionRefund, RefundsCollection, rf.Id, map[string]any{"intent": intentID, "amount": amount, "status": "pending"})
 
@@ -406,27 +484,65 @@ func (m *Module) Refund(ctx context.Context, intentID string, amount int64, reas
 		audit(ActionRefund, RefundsCollection, rf.Id, map[string]any{"intent": intentID, "amount": amount, "status": "failed"})
 		return rf, rerr
 	}
-	rf.Set("provider_ref", res.ProviderRef)
+	if res.ProviderRef != "" {
+		// the webhook echo may have beaten us here and already counted this refund
+		if dup, _ := m.app.FindFirstRecordByFilter(RefundsCollection, "provider_ref={:r} && id!={:id}",
+			dbx.Params{"r": res.ProviderRef, "id": rf.Id}); dup != nil {
+			return m.mergeIntoEcho(rf, dup)
+		}
+		rf.Set("provider_ref", res.ProviderRef)
+	}
+	if err := m.app.Save(rf); err != nil {
+		if isUnique(err) { // the echo created its row between the check and the save
+			if dup, _ := m.app.FindFirstRecordByFilter(RefundsCollection, "provider_ref={:r} && id!={:id}",
+				dbx.Params{"r": res.ProviderRef, "id": rf.Id}); dup != nil {
+				return m.mergeIntoEcho(rf, dup)
+			}
+		}
+		return rf, err
+	}
 	if res.Done {
 		if err := m.completeRefund(rf, "api"); err != nil {
 			return rf, err
 		}
-		return rf, nil
+		rf.Set("status", "succeeded")
 	}
+	return rf, nil
+}
+
+// mergeIntoEcho settles an API refund row whose provider refund was already
+// recorded (and counted) from the webhook: it is closed without counting again.
+func (m *Module) mergeIntoEcho(rf, echo *core.Record) (*core.Record, error) {
+	rf.Set("provider_ref", "")
+	rf.Set("status", "succeeded")
+	rf.Set("error", "counted by provider row "+echo.Id)
+	audit(ActionRefund, RefundsCollection, rf.Id, map[string]any{"intent": rf.GetString("intent"), "status": "merged", "into": echo.Id})
 	return rf, m.app.Save(rf)
 }
 
-// completeRefund marks a refund row succeeded and counts it on the intent.
+// completeRefund marks a refund row succeeded and counts it on the intent,
+// exactly once: the status flip is a compare-and-set in SQL, so a webhook echo
+// racing the API answer (or a retried job) cannot count the same refund twice.
 func (m *Module) completeRefund(rf *core.Record, source string) error {
-	if rf.GetString("status") == "succeeded" {
-		return nil
-	}
-	rf.Set("status", "succeeded")
-	if err := m.app.Save(rf); err != nil {
+	nd := m.dt(m.now()).String()
+	res, err := m.app.DB().NewQuery("UPDATE {{" + RefundsCollection + "}} SET [[status]]='succeeded', [[updated]]={:u} WHERE [[id]]={:id} AND [[status]]!='succeeded'").
+		Bind(dbx.Params{"u": nd, "id": rf.Id}).Execute()
+	if err != nil {
 		return err
 	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil // somebody else counted it
+	}
+	prev := rf.GetString("status")
+	rf.Set("status", "succeeded")
 	audit(ActionRefund, RefundsCollection, rf.Id, map[string]any{"intent": rf.GetString("intent"), "amount": rf.GetInt("amount"), "status": "succeeded", "source": source})
-	return m.applyRefund(rf.GetString("intent"), int64(rf.GetInt("amount")), source)
+	if err := m.applyRefund(rf.GetString("intent"), int64(rf.GetInt("amount")), source); err != nil {
+		// not counted: put the row back so a retry can count it
+		_, _ = m.app.DB().NewQuery("UPDATE {{" + RefundsCollection + "}} SET [[status]]={:s} WHERE [[id]]={:id}").Bind(dbx.Params{"s": prev, "id": rf.Id}).Execute()
+		rf.Set("status", prev)
+		return err
+	}
+	return nil
 }
 
 // applyRefund adds amount to refunded_amount (0 = all that is left) and moves
@@ -437,7 +553,7 @@ func (m *Module) applyRefund(intentID string, amount int64, source string) error
 		if cur == StatusRefunded {
 			return nil
 		}
-		if cur != StatusPaid && cur != StatusPartiallyRefunded {
+		if !refundable(cur) {
 			return fmt.Errorf("%w: %s -> refund", ErrIllegalTransition, cur)
 		}
 		total := int64(r.GetInt("amount"))
@@ -464,4 +580,26 @@ func (m *Module) applyRefund(intentID string, amount int64, source string) error
 		return nil
 	})
 	return err
+}
+
+// sweepPendingRefunds marks API refunds the provider never confirmed as
+// failed (loudly): the operator must check the provider. A late webhook echo
+// can still complete such a row. Returns how many were marked.
+func (m *Module) sweepPendingRefunds() int {
+	cut := m.dt(m.now().Add(-m.RefundPendingTTL)).String()
+	rs, err := m.app.FindRecordsByFilter(RefundsCollection, "status='pending' && source='api' && created<{:c}", "created", 200, 0, dbx.Params{"c": cut})
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, rf := range rs {
+		rf.Set("status", "failed")
+		rf.Set("error", "not confirmed by the provider in time; check the provider dashboard")
+		if m.app.Save(rf) == nil {
+			n++
+			m.app.Logger().Error("payments: refund not confirmed by the provider", "refund", rf.Id, "intent", rf.GetString("intent"))
+			audit(ActionRefund, RefundsCollection, rf.Id, map[string]any{"intent": rf.GetString("intent"), "status": "failed", "level": "error", "reason": "unconfirmed"})
+		}
+	}
+	return n
 }

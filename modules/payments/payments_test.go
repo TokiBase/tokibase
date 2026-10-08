@@ -73,6 +73,8 @@ type fake struct {
 	createErr  error
 	statuses   map[string]*Status
 	refundErr  error
+	verifyErr  error
+	refundRef  string // forces the provider refund id (echo races)
 	refunds    []*RefundSpec
 	refundDone bool
 }
@@ -91,6 +93,9 @@ func (f *fake) VerifyWebhook(_ context.Context, h map[string]string, body []byte
 	if h["x-sig"] != "good" {
 		return nil, ErrInvalidSignature
 	}
+	if f.verifyErr != nil {
+		return nil, f.verifyErr
+	}
 	var evs []WebhookEvent
 	if err := json.Unmarshal(body, &evs); err != nil {
 		return nil, err
@@ -104,7 +109,11 @@ func (f *fake) Refund(_ context.Context, r *RefundSpec) (*RefundResult, error) {
 		return nil, f.refundErr
 	}
 	f.refunds = append(f.refunds, r)
-	return &RefundResult{ProviderRef: "rf-" + r.RefundID, Done: f.refundDone}, nil
+	ref := "rf-" + r.RefundID
+	if f.refundRef != "" {
+		ref = f.refundRef
+	}
+	return &RefundResult{ProviderRef: ref, Done: f.refundDone}, nil
 }
 func (f *fake) FetchStatus(_ context.Context, ref string, _ map[string]any) (*Status, error) {
 	f.mu.Lock()
@@ -389,17 +398,15 @@ func TestWebhookRejections(t *testing.T) {
 	if status(t, e, in.Id) != StatusPending || !e.hasAudit(ActionMismatch) {
 		t.Fatal("amount mismatch must not pay the intent")
 	}
-	// expire, then a late paid event is an illegal transition
+	// expired, then a verified payment with the same reference arrives inside
+	// the late window: re-opened to paid, flagged late (see TestLatePayment)
 	_, _ = e.deliver(t, "good", WebhookEvent{EventID: "x1", Type: EventExpired, ProviderRef: ref})
 	_, _ = e.deliver(t, "good", WebhookEvent{EventID: "p1", Type: EventPaid, ProviderRef: ref, Amount: 50000, Currency: "IDR"})
 	if f := e.q.run(t, e.app); f != 0 {
-		t.Fatal("rejections must not be retried")
+		t.Fatal("late payments must not be retried")
 	}
-	if status(t, e, in.Id) != StatusExpired || !e.hasAudit(ActionRejected) {
-		t.Fatalf("expired -> paid must be rejected, is %s", status(t, e, in.Id))
-	}
-	if e.m.Entitled(e.user.Id, "members", "pro") {
-		t.Fatal("no entitlement for a rejected payment")
+	if status(t, e, in.Id) != StatusPaid || !e.m.Entitled(e.user.Id, "members", "pro") {
+		t.Fatalf("expired -> paid inside the window must re-open, is %s", status(t, e, in.Id))
 	}
 	// orphan event is retried then resolves once the intent exists
 	_, _ = e.deliver(t, "good", WebhookEvent{EventID: "o1", Type: EventPaid, ProviderRef: "later-ref", Amount: 5, Currency: "IDR"})
