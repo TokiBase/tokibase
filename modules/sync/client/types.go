@@ -62,9 +62,6 @@ const (
 	EventRevoked        = "revoked"
 	EventDigestMismatch = "digest_mismatch"
 	EventSynced         = "synced"
-	// EventParked: the hub parked a change of this node (or reverted it for a
-	// record outside the view rule); the record is marked "pending review".
-	EventParked = "parked"
 )
 
 // Event is emitted by the loop (non-blocking: slow readers lose events).
