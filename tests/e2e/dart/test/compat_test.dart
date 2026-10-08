@@ -170,8 +170,8 @@ void main() {
     final col = await admin.collections.create(body: {
       'name': 'dart_protected',
       'type': 'base',
-      'listRule': '',
-      'viewRule': '',
+      'listRule': '@request.auth.id != ""',
+      'viewRule': '@request.auth.id != ""',
       'createRule': '',
       'fields': [
         {'name': 'doc', 'type': 'file', 'maxSelect': 1, 'maxSize': 1048576, 'protected': true},
@@ -211,6 +211,18 @@ void main() {
   });
 
   test('batch endpoint', () async {
+    // batch is disabled by default (403 "Batch requests are not allowed.")
+    final denied = user.createBatch();
+    denied.collection('posts').create(body: {'title': 'batch-denied'});
+    final de = await expectFail(denied.send());
+    expect(de.statusCode, 403);
+
+    await admin.settings.update(body: {
+      'batch': {'enabled': true, 'maxRequests': 10, 'timeout': 3, 'maxBodySize': 0},
+    });
+    addTearDown(() => admin.settings.update(body: {
+          'batch': {'enabled': false},
+        }));
     final batch = user.createBatch();
     batch.collection('posts').create(body: {'title': 'batch-1'});
     batch.collection('posts').create(body: {'title': 'batch-2'});
@@ -246,9 +258,13 @@ void main() {
       await user.collection('dart_notes').create(body: {'text': 'a', 'owner': me});
       await admin.collection('dart_notes').create(body: {'text': 'c', 'owner': null});
 
-      // filter using @request.auth + sort
+      // upstream: @request.* in a client-supplied filter is superuser-only (403)
+      final fe = await expectFail(user.collection('dart_notes').getList(filter: 'owner = @request.auth.id'));
+      expect(fe.statusCode, 403);
+
+      // @request.auth is usable in the collection rule; plus client filter + sort
       final list = await user.collection('dart_notes').getList(
-        filter: 'owner = @request.auth.id',
+        filter: 'text != ""',
         sort: 'text',
         expand: 'owner',
         fields: 'id,text,expand.owner.email',
