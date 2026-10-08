@@ -318,7 +318,7 @@ func TestLegacyASTParity(t *testing.T) {
 			t.Fatalf("%s: %v", raw, err)
 		}
 		r1 := core.NewRecordFieldResolver(e.app, e.docs, info, true)
-		viaAST, err := search.EmitAST(ast, r1, 0)
+		viaAST, err := search.EmitAST(ast, r1, 200)
 		if err != nil {
 			t.Fatalf("%s ast: %v", raw, err)
 		}
