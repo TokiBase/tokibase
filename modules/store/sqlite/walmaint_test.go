@@ -89,13 +89,13 @@ func TestMaintainWALWithOverlappingReaders(t *testing.T) {
 
 func TestTuningFromEnv(t *testing.T) {
 	t.Setenv("TOKI_DB_CACHE_KB", "4096")
-	t.Setenv("TOKI_DB_TEMP_STORE", "memory")
+	t.Setenv("TOKI_DB_TEMP_STORE", "file")
 	t.Setenv("TOKI_DB_HEAP_MB", "128")
 	t.Setenv("TOKI_DB_MMAP_MB", "")
 
 	tn := sqliteTuning()
 	q := tn.Query()
-	for _, want := range []string{"cache_size(-4096)", "temp_store(MEMORY)", "soft_heap_limit(134217728)"} {
+	for _, want := range []string{"cache_size(-4096)", "temp_store(FILE)", "soft_heap_limit(134217728)"} {
 		if !contains(q, want) {
 			t.Fatalf("expected %q in %s", want, q)
 		}
@@ -108,7 +108,7 @@ func TestTuningFromEnv(t *testing.T) {
 	t.Setenv("TOKI_DB_TEMP_STORE", "")
 	t.Setenv("TOKI_DB_HEAP_MB", "")
 	q = sqliteTuning().Query()
-	if !contains(q, "cache_size(-8192)") || !contains(q, "temp_store(FILE)") || contains(q, "soft_heap_limit") {
+	if !contains(q, "cache_size(-8192)") || !contains(q, "temp_store(MEMORY)") || contains(q, "soft_heap_limit") {
 		t.Fatalf("unexpected defaults %s", q)
 	}
 }

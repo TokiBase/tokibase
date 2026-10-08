@@ -19,10 +19,13 @@ const (
 	// EnvDBCacheKB is the page cache size of every connection in KiB (default 8192).
 	EnvDBCacheKB = "TOKI_DB_CACHE_KB"
 	// EnvDBTempStore selects where temporary tables and sort spill files live:
-	// "file" (default, the OS page cache keeps hot temp pages) or "memory".
+	// "memory" (default) or "file" (bounds the memory of huge sorts, needs a
+	// writable temp dir: SQLITE_TMPDIR or TMPDIR, else /var/tmp, /usr/tmp, /tmp).
+	// Measured: no difference in RSS or throughput for the FGR list queries.
 	EnvDBTempStore = "TOKI_DB_TEMP_STORE"
 	// EnvDBHeapMB sets the SQLite soft heap limit for the whole process in MiB
 	// (0 = no limit, default 0): above it SQLite frees cache pages before allocating.
+	// Measured: it did not lower the RSS of the read load, the pool size is the effective bound.
 	EnvDBHeapMB = "TOKI_DB_HEAP_MB"
 	// EnvDBMmapMB sets mmap_size of every connection in MiB (default 0 = off).
 	EnvDBMmapMB = "TOKI_DB_MMAP_MB"
@@ -34,20 +37,20 @@ const DefaultCacheKB = 8192
 // Tuning holds the resolved memory related pragmas.
 type Tuning struct {
 	CacheKB   int
-	TempStore string // "file" or "memory"
+	TempStore string // "memory" or "file"
 	HeapMB    int
 	MmapMB    int
 }
 
 // TuningFromEnv resolves the tuning from the environment (invalid values fall back to the defaults).
 func TuningFromEnv() Tuning {
-	t := Tuning{CacheKB: DefaultCacheKB, TempStore: "file"}
+	t := Tuning{CacheKB: DefaultCacheKB, TempStore: "memory"}
 
 	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv(EnvDBCacheKB))); err == nil && n > 0 {
 		t.CacheKB = n
 	}
-	if strings.EqualFold(strings.TrimSpace(os.Getenv(EnvDBTempStore)), "memory") {
-		t.TempStore = "memory"
+	if strings.EqualFold(strings.TrimSpace(os.Getenv(EnvDBTempStore)), "file") {
+		t.TempStore = "file"
 	}
 	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv(EnvDBHeapMB))); err == nil && n > 0 {
 		t.HeapMB = n
@@ -67,10 +70,10 @@ func (t Tuning) Query() string {
 	q := "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=journal_size_limit(200000000)" +
 		"&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)"
 
-	if t.TempStore == "memory" {
-		q += "&_pragma=temp_store(MEMORY)"
-	} else {
+	if t.TempStore == "file" {
 		q += "&_pragma=temp_store(FILE)"
+	} else {
+		q += "&_pragma=temp_store(MEMORY)"
 	}
 
 	q += fmt.Sprintf("&_pragma=cache_size(-%d)", t.CacheKB)
