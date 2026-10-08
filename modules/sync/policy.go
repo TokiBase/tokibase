@@ -183,7 +183,9 @@ func (c *policyCache) load() (map[string]*policy, error) {
 		if col, err := c.m.app.FindCachedCollectionByNameOrId(ref); err == nil && col != nil {
 			p.ColID = col.Id
 			if systemAllowed(col) {
-				p.SkipViewRule = true // rules are null by design (syscollections.go)
+				// rules are null by design (syscollections.go): the pull is limited
+				// by the policy direction, not by a view rule
+				p.SkipViewRule, p.PullViewRule, p.Trusted = true, false, true
 			}
 			out[col.Id] = p
 			out[col.Name] = p
