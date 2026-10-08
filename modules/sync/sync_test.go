@@ -881,7 +881,7 @@ func TestHLCFloorPersistedAndRestored(t *testing.T) {
 	// the node id survives a restart
 	id := e.m.NodeID()
 	_ = e.m.Init()
-	if e.m.NodeID() != id || id == "" || id[0] != 'n' {
+	if e.m.NodeID() != id || id == "" || id[0] != 'h' {
 		t.Fatalf("node id: %q vs %q", id, e.m.NodeID())
 	}
 
