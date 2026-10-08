@@ -416,7 +416,16 @@ Hub = the `solo` binary (`TOKI_SYNC_ROLE=hub`, the PR5 `syncconflict` wasm guest
 
 | | Assertion | Result |
 | --- | --- | --- |
-RESULTS_TABLE
+| (a) | Every created ticket exists exactly once on the hub and on every node, total = sum created on all nodes (zero loss) | PASS: 2048 tickets (30 seed + 961 gate-1 + 961 gate-2 + 97 phone, the purged one excluded) |
+| (b) | No duplicate `no` | PASS: 2048 distinct numbers on each of the 4 nodes |
+| (c) | `toki sync verify` digests equal on hub and all spokes for `tickets`, `payments`, `rates`, 0 pending | PASS |
+| (d) | Counters equal the sum of the increments, sets equal the union of the adds | PASS: fee total 1,644,100 on all 4 nodes |
+| (e) | Expected conflicts present and resolved: plate `concurrent_field` auto-merged (later HLC wins, status/exit_at/flags/fee merged), double payment merged by the wasm hook (`double payment CASH-9, refund`), 0 open | PASS |
+| (f) | Purged ticket absent everywhere, gate-1's late edit rejected as `legal_tombstone` | PASS (1 rejected log row) |
+| (g) | The phone shows the new rates (car 5000 to 7000 at hour 24) | PASS |
+| (h) | No webhook duplicates: the hub sink counts exactly one `record.create` per ticket | PASS: 2049 deliveries for 2049 tickets (the purged one included) |
+
+Run on the `tokibuild` VM: 1 minute of real time for the 48 simulated hours plus the reconnect (convergence 26 s after the network came back). `HOURS=6 bash tests/e2e/parking.sh` is a quick try; `KEEP=1` keeps the work dir.
 
 Deviations from the design text: gates and phone are all in branch `B1` (the shared-ticket conflict needs one partition; partitions are covered by `sync.sh`), the payment field is `provider_ref` (the PR5 guest's name), the phone also issues tickets (reserved numbers on nano), the phone needs a service actor to pull under an auth view rule, and the gates restart at reconnect.
 
