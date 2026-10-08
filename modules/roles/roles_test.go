@@ -134,7 +134,7 @@ func TestRoleGlobal(t *testing.T) {
 	if e.can(t, e.alice, `@role("admin") = true && team = "x"`, "y") || !e.can(t, e.alice, `@role("admin") = true && team = "x"`, "x") {
 		t.Fatal("compose")
 	}
-	if !Has(e.app, e.alice, "admin", "", "") || Has(e.app, e.bob, "admin", "", "") || Has(e.app, nil, "admin", "") {
+	if !Has(e.app, e.alice, "admin", "", "") || Has(e.app, e.bob, "admin", "", "") || Has(e.app, nil, "admin", "", "") {
 		t.Fatal("Has")
 	}
 }
