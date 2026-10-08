@@ -1,3 +1,5 @@
+//go:build !no_s3fs
+
 package fshttp
 
 import (

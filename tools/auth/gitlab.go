@@ -10,10 +10,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameGitlab] = wrapFactory(NewGitlabProvider)
-}
-
 var _ Provider = (*Gitlab)(nil)
 
 // NameGitlab is the unique name of the Gitlab provider.

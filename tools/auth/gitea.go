@@ -12,10 +12,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameGitea] = wrapFactory(NewGiteaProvider)
-}
-
 var _ Provider = (*Gitea)(nil)
 
 // NameGitea is the unique name of the Gitea/Forgejo provider.

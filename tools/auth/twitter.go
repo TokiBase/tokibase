@@ -8,10 +8,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameTwitter] = wrapFactory(NewTwitterProvider)
-}
-
 var _ Provider = (*Twitter)(nil)
 
 // NameTwitter is the unique name of the Twitter provider.

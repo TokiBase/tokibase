@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/spf13/cast"
 	"github.com/tokibase/tokibase/tools/auth/internal/jwk"
 	"github.com/tokibase/tokibase/tools/security"
 	"github.com/tokibase/tokibase/tools/types"
-	"github.com/spf13/cast"
 	"golang.org/x/oauth2"
 )
 
@@ -24,10 +24,6 @@ import (
 var idTokenLeeway time.Duration = 5 * time.Minute
 
 func init() {
-	Providers[NameOIDC] = wrapFactory(NewOIDCProvider)
-	Providers[NameOIDC+"2"] = wrapFactory(NewOIDCProvider)
-	Providers[NameOIDC+"3"] = wrapFactory(NewOIDCProvider)
-
 	if leewayStr := os.Getenv("PB_ID_TOKEN_LEEWAY"); leewayStr != "" {
 		leeway, err := strconv.Atoi(leewayStr)
 		if err == nil {

@@ -1,0 +1,40 @@
+//go:build !no_oauth2
+
+package auth
+
+// Provider registration lives in one place so that `-tags no_oauth2` (nano)
+// leaves Providers empty and the linker drops every provider implementation.
+func init() {
+	Providers[NameApple] = wrapFactory(NewAppleProvider)
+	Providers[NameBitbucket] = wrapFactory(NewBitbucketProvider)
+	Providers[NameBox] = wrapFactory(NewBoxProvider)
+	Providers[NameDiscord] = wrapFactory(NewDiscordProvider)
+	Providers[NameFacebook] = wrapFactory(NewFacebookProvider)
+	Providers[NameGitea] = wrapFactory(NewGiteaProvider)
+	Providers[NameGitee] = wrapFactory(NewGiteeProvider)
+	Providers[NameGithub] = wrapFactory(NewGithubProvider)
+	Providers[NameGitlab] = wrapFactory(NewGitlabProvider)
+	Providers[NameGoogle] = wrapFactory(NewGoogleProvider)
+	Providers[NameInstagram] = wrapFactory(NewInstagramProvider)
+	Providers[NameKakao] = wrapFactory(NewKakaoProvider)
+	Providers[NameLark] = wrapFactory(NewLarkProvider)
+	Providers[NameLinear] = wrapFactory(NewLinearProvider)
+	Providers[NameLivechat] = wrapFactory(NewLivechatProvider)
+	Providers[NameMailcow] = wrapFactory(NewMailcowProvider)
+	Providers[NameMicrosoft] = wrapFactory(NewMicrosoftProvider)
+	Providers[NameMonday] = wrapFactory(NewMondayProvider)
+	Providers[NameNotion] = wrapFactory(NewNotionProvider)
+	Providers[NameOIDC] = wrapFactory(NewOIDCProvider)
+	Providers[NameOIDC+"2"] = wrapFactory(NewOIDCProvider)
+	Providers[NameOIDC+"3"] = wrapFactory(NewOIDCProvider)
+	Providers[NamePatreon] = wrapFactory(NewPatreonProvider)
+	Providers[NamePlanningcenter] = wrapFactory(NewPlanningcenterProvider)
+	Providers[NameSpotify] = wrapFactory(NewSpotifyProvider)
+	Providers[NameStrava] = wrapFactory(NewStravaProvider)
+	Providers[NameTrakt] = wrapFactory(NewTraktProvider)
+	Providers[NameTwitch] = wrapFactory(NewTwitchProvider)
+	Providers[NameTwitter] = wrapFactory(NewTwitterProvider)
+	Providers[NameVK] = wrapFactory(NewVKProvider)
+	Providers[NameWakatime] = wrapFactory(NewWakatimeProvider)
+	Providers[NameYandex] = wrapFactory(NewYandexProvider)
+}

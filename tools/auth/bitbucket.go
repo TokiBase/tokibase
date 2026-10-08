@@ -10,10 +10,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameBitbucket] = wrapFactory(NewBitbucketProvider)
-}
-
 var _ Provider = (*Bitbucket)(nil)
 
 // NameBitbucket is the unique name of the Bitbucket provider.

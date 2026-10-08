@@ -8,10 +8,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameGoogle] = wrapFactory(NewGoogleProvider)
-}
-
 var _ Provider = (*Google)(nil)
 
 // NameGoogle is the unique name of the Google provider.

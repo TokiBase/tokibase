@@ -11,10 +11,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameGitee] = wrapFactory(NewGiteeProvider)
-}
-
 var _ Provider = (*Gitee)(nil)
 
 // NameGitee is the unique name of the Gitee provider.

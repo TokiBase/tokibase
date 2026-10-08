@@ -7,15 +7,11 @@ import (
 	"slices"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/tokibase/tokibase/tools/types"
 	"github.com/spf13/cast"
+	"github.com/tokibase/tokibase/tools/types"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/microsoft"
 )
-
-func init() {
-	Providers[NameMicrosoft] = wrapFactory(NewMicrosoftProvider)
-}
 
 var _ Provider = (*Microsoft)(nil)
 

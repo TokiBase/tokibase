@@ -9,10 +9,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameBox] = wrapFactory(NewBoxProvider)
-}
-
 var _ Provider = (*Box)(nil)
 
 // NameBox is the unique name of the Box provider.

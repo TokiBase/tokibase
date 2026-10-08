@@ -9,10 +9,6 @@ import (
 	"golang.org/x/oauth2/facebook"
 )
 
-func init() {
-	Providers[NameFacebook] = wrapFactory(NewFacebookProvider)
-}
-
 var _ Provider = (*Facebook)(nil)
 
 // NameFacebook is the unique name of the Facebook provider.

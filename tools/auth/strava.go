@@ -9,10 +9,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameStrava] = wrapFactory(NewStravaProvider)
-}
-
 var _ Provider = (*Strava)(nil)
 
 // NameStrava is the unique name of the Strava provider.

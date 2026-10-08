@@ -11,10 +11,6 @@ import (
 	"golang.org/x/oauth2/twitch"
 )
 
-func init() {
-	Providers[NameTwitch] = wrapFactory(NewTwitchProvider)
-}
-
 var _ Provider = (*Twitch)(nil)
 
 // NameTwitch is the unique name of the Twitch provider.

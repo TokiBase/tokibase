@@ -11,10 +11,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func init() {
-	Providers[NameLinear] = wrapFactory(NewLinearProvider)
-}
-
 var _ Provider = (*Linear)(nil)
 
 // NameLinear is the unique name of the Linear provider.
