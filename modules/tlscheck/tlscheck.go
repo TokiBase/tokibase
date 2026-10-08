@@ -14,6 +14,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/tokibase/tokibase/core"
+	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/tools/hook"
 )
 
@@ -124,6 +125,12 @@ func check(e *core.ServeEvent, mode Mode) error {
 	if !Exposed(in) {
 		return nil
 	}
+	if addr := edgeTLSAddr(); addr != "" {
+		// clients have an encrypted, authenticated door: the plain port is the
+		// local one (kiosk on the same host, health checks)
+		e.App.Logger().Info("tlscheck: plain HTTP is also served, but modules/devicecert serves HTTPS", "plain", in.Addr, "tls", addr)
+		return nil
+	}
 	msg := Message(in.Addr)
 	if mode == ModeStrict {
 		return fmt.Errorf("%s (TOKI_TLS_CHECK=strict: refusing to start)", msg)
@@ -131,6 +138,30 @@ func check(e *core.ServeEvent, mode Mode) error {
 	e.App.Logger().Warn(msg, "addr", in.Addr)
 	color.New(color.FgYellow, color.Bold).Fprintln(color.Error, "WARNING "+msg)
 	return nil
+}
+
+// edgeTLSAddr returns TOKI_DEVICECERT_LISTEN when modules/devicecert is on and
+// compiled in (its marker is not the stub's), "" otherwise. The check reads the
+// environment so the two modules do not import each other.
+func edgeTLSAddr() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TOKI_DEVICECERT"))) {
+	case "on", "true", "1", "yes":
+	default:
+		return ""
+	}
+	addr := strings.TrimSpace(os.Getenv("TOKI_DEVICECERT_LISTEN"))
+	if addr == "" {
+		return ""
+	}
+	for _, m := range kernel.ModuleMarkers() {
+		if m.Name == "devicecert" {
+			if m.Stubbed {
+				return ""
+			}
+			return addr
+		}
+	}
+	return ""
 }
 
 // tlsRequested reports whether the `serve` command line asks for HTTPS:

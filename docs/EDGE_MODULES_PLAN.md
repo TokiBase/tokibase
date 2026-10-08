@@ -339,7 +339,7 @@ Order matters. PRs 1 to 3 have no hardware dependency and can be built and teste
 | 3 (done) | `scanner` PR1 | `_scanners`/`_scan_events`, serial and web ingestion, dedupe, `@scan` topic, `/api/scan*`, CLI, `no_scanner`, docs. | 1 |
 | 4 (done) | `kiosk` PR1 | `_kiosk_devices`, pair/session/status/lock/unlock, embedded `kiosk.js` (indicator, wedge capture, lock overlay), CLI, `no_kiosk`, docs. Wires in the scanner wedge hook if PR 3 is merged. | 0, optionally 3 |
 | 5 (evdev reader and `devices` done in PR 3) | `scanner` PR2 | evdev reader with `EVIOCGRAB`, `toki scan devices`, 32/64-bit struct tests, udev docs. | 3 |
-| 6 | `devicecert` PR1 | Hub CA with wrapped key, `_device_certs`, `/api/sync/devcert` and spoke renewal in `modules/sync`, leaf key, `:8443` listener, `toki devicecert ca|status|list`, `no_devicecert`. | 0 |
+| 6 (done) | `devicecert` PR1 | Hub CA with wrapped key, `_device_certs`, `/api/sync/devcert` and spoke renewal in `modules/sync`, leaf key, `:8443` listener, `toki devicecert ca|status|list`, `no_devicecert`. | 0 |
 | 7 | `devicecert` PR2 | Client-cert issue/revoke, mTLS route allowlist, deny-list sync policy, `/api/device/identity` and `/api/device/attest`, rotate-ca. | 6 |
 | 8 | `edge` integration | `profiles.txt` (nano tags), size measurement and `docs/PROFILES.md`, `docs/EDGE_GATE.md`, parking e2e (`tests/e2e/edge-gate.sh`: hub, spoke, TCP printer stub, pty scanner, kiosk pair, 48 h offline compressed with `TOKI_SYNC_TEST_CLOCK_OFFSET`). Feeds SYNC_DESIGN PR10. | 2 to 7 |
 
@@ -369,6 +369,16 @@ Order matters. PRs 1 to 3 have no hardware dependency and can be built and teste
 - The wedge hook is wired: `kiosk.js` loads `/scan/wedge.js` and starts it with the session token. The SDK key is `pocketbase_auth` (the SDK default); `pb_auth` is written as well.
 - `GET /kiosk/pair` is a minimal page so the pairing URL works in any browser; `toki kiosk` is registered only when `TOKI_KIOSK=on` (as `print`).
 - e2e: `tests/e2e/kiosk.sh` (CI job `e2e-kiosk`, which also runs `node --test modules/kiosk/kiosk.test.js`).
+
+### Status of PR 6 (done)
+
+`modules/devicecert` PR1 as in section 6, with these decisions:
+- The wrapping key of the CA is `HKDF(Ed25519 signature of "toki_devicecert/ca/v1" by the hub key)`, not the raw hub seed: modules must not import sync, and `kernel.NodeIdentity` only exposes `Sign`. Ed25519 signatures are deterministic, so it is stable across restarts and needs the hub key. The wrapped blob is bound to the root PEM (GCM additional data).
+- The hub is its own edge: it issues its own leaf locally (same files in its data dir), so a solo hub can serve the TLS listener.
+- The spoke renewal is not hooked inside the sync loop (PR 8 touches `client/session.go` and `loop.go`). `modules/sync/devcert.go` runs a separate 10 s poller that asks `kernel.EdgeLeafOf(app)` (new `EdgeLeafProvider`: `LeafRequest`, `InstallLeaf`) and fetches through `Client.DevCert`, which handshakes first when needed. A new LAN address also triggers a renewal (once per distinct set).
+- `kernel.DeviceCert` gained `CAPEM`. The hub filters the SANs a node asks for (`.local`, `.lan`, `.home.arpa`, `.internal`, never `.edge.toki.local`, at most 12) and always adds the node's own name.
+- `TOKI_DEVICECERT_MTLS` is wired (`VerifyClientCertIfGiven` or `RequireAndVerifyClientCert` against the CA pool plus a deny list read from `_device_certs`); a verified client certificate grants no route yet (PR 7).
+- `tlscheck` reads the environment (`TOKI_DEVICECERT=on` and `TOKI_DEVICECERT_LISTEN`) and the module marker to know the listener is on; the plain port stays open.
 
 Parallelism: after PR 0 and 1, PRs 2, 3 and 6 are independent.
 
