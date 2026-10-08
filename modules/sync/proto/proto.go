@@ -114,7 +114,16 @@ type HandshakeResponse struct {
 	Rebootstrap  bool           `json:"rebootstrap"`
 	Reservations []any          `json:"reservations"`
 	PollMs       int64          `json:"poll_ms"`
+	// Caps lists optional protocol features of the hub. A client uses a feature
+	// only when the hub advertises it (an older hub answers 400 to an unknown op).
+	Caps []string `json:"caps,omitempty"`
 }
+
+// Hub capabilities (HandshakeResponse.Caps).
+const (
+	// CapFiller: the hub accepts push op "n" (a discarded change that only moves the sequence on).
+	CapFiller = "filler"
+)
 
 // PingResponse is the 200 body of GET /api/sync/ping.
 type PingResponse struct {

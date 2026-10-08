@@ -261,6 +261,10 @@ func (c *Client) beginSnapshot(ctx context.Context) (*snapState, error) {
 	if err := c.importSchema(start.Schema); err != nil {
 		return nil, fmt.Errorf("sync: cannot create the collections of the snapshot: %w", err)
 	}
+	if err := c.checkSchema(start); err != nil {
+		c.recordError(err)
+		return nil, err
+	}
 	// the collections this node replicates (its policy says pull) and the hub sends
 	var cols []proto.SnapshotCollection
 	for _, sc := range start.Collections {
@@ -341,6 +345,49 @@ func (c *Client) importSchema(raw []json.RawMessage) error {
 		return nil
 	}
 	return c.o.App.ImportCollections(missing, false)
+}
+
+// checkSchema fails loudly when a collection this node already has lacks a field
+// the hub syncs (not excluded, not a file): applying the snapshot would drop that
+// field's data silently and the node would never match the hub (P7-12). Schema
+// bundles (PR8) own the real fix; until then the operator adds the field.
+func (c *Client) checkSchema(start proto.SnapshotStart) error {
+	excluded := map[string]map[string]bool{}
+	for _, p := range start.Policies {
+		ex := map[string]bool{}
+		for _, f := range p.Exclude {
+			ex[f] = true
+		}
+		excluded[p.Collection] = ex
+	}
+	for _, raw := range start.Schema {
+		var m struct {
+			ID     string `json:"id"`
+			Name   string `json:"name"`
+			Fields []struct {
+				Name string `json:"name"`
+				Type string `json:"type"`
+			} `json:"fields"`
+		}
+		if json.Unmarshal(raw, &m) != nil {
+			continue
+		}
+		col, err := c.o.App.FindCachedCollectionByNameOrId(m.ID)
+		if err != nil {
+			continue
+		}
+		ex := excluded[m.Name]
+		if ex == nil {
+			ex = excluded[m.ID]
+		}
+		for _, f := range m.Fields {
+			if f.Type == "file" || ex[f.Name] || col.Fields.GetByName(f.Name) != nil {
+				continue
+			}
+			return fmt.Errorf("sync: collection %q on this node lacks the field %q that the hub syncs; add the field (schema bundles come with PR8) and bootstrap again", m.Name, f.Name)
+		}
+	}
+	return nil
 }
 
 func splitAfter(s string) (col, after string, phase string) {
@@ -560,27 +607,31 @@ func (c *Client) finishSnapshot() error {
 	return nil
 }
 
-// handleEpoch reacts to a hub whose epoch differs from the one this node knew
-// (backup restore, replica promote, §3.9): the pull cursor never stays above the
-// head at the start of the new epoch, and the acked changes the hub no longer
-// has are sent again by reconcile (they are kept for TOKI_SYNC_SPOKE_KEEP).
-func (c *Client) handleEpoch(hs *proto.HandshakeResponse) {
+// handleEpoch stores the hub epoch when it differs from the one this node knew
+// (backup restore, replica promote, §3.9) and reports whether it changed. The
+// hub decides in the handshake whether the node has to re-bootstrap
+// (`rebootstrap`, see epochRequiresRebootstrap); when it does not, the pull
+// cursor is already at or below the head at which the new epoch began, and the
+// acked changes the hub no longer has are sent again by reconcile (they are
+// kept for TOKI_SYNC_SPOKE_KEEP). The cursor never stays above that head.
+func (c *Client) handleEpoch(hs *proto.HandshakeResponse) bool {
 	if c.o.App == nil || hs.HubEpoch == "" {
-		return
+		return false
 	}
 	cur, err := LoadCursor(c.o.App)
 	if err != nil || cur == nil || cur.HubEpoch == "" || cur.HubEpoch == hs.HubEpoch {
-		return
+		return false
 	}
 	_, err = c.o.App.NonconcurrentDB().NewQuery("UPDATE _sync_cursors SET pull_after=MIN(pull_after,{:s}), hub_epoch={:e} WHERE hub_id={:h}").
 		Bind(dbx.Params{"s": hs.HubEpochSeq, "e": hs.HubEpoch, "h": cur.HubID}).Execute()
 	if err != nil {
 		c.recordError(err)
-		return
+		return false
 	}
 	if c.o.Logger != nil {
-		c.o.Logger.Warn("sync: the hub epoch changed (restore or failover); the pull cursor was reset and acked changes will be sent again",
-			"old", cur.HubEpoch, "new", hs.HubEpoch, "pull_after", cur.PullAfter, "epoch_seq", hs.HubEpochSeq)
+		c.o.Logger.Warn("sync: the hub epoch changed (restore or failover)",
+			"old", cur.HubEpoch, "new", hs.HubEpoch, "pull_after", cur.PullAfter, "epoch_seq", hs.HubEpochSeq, "rebootstrap", hs.Rebootstrap)
 	}
 	c.emit(Event{Type: EventEpoch, Message: "hub epoch changed"})
+	return true
 }

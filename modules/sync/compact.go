@@ -4,6 +4,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"strconv"
@@ -138,14 +139,26 @@ func (m *Module) Compact(ctx context.Context) (*CompactReport, error) {
 		emit(AuditCompact, "", "", map[string]any{"role": rep.Role, "changes_deleted": rep.ChangesDeleted,
 			"stale_nodes": rep.StaleNodes, "tombstones_deleted": rep.TombstonesDeleted, "low_water": rep.LowWater})
 	}
+	if m.role == RoleHub {
+		m.noteHead()
+	}
 	return rep, nil
 }
 
 // compactHub runs the hub specific steps 1 and 2.
 func (m *Module) compactHub(tx kernel.App, db dbx.Builder, now time.Time, retCut string, rep *CompactReport) error {
+	// snapshots in progress (P7-5): expired pins go; a live one keeps its node
+	// out of the stale marking and the log after its start_seq out of the pruning
+	if _, err := db.NewQuery("DELETE FROM _sync_state WHERE key LIKE 'snap:%' AND CAST(substr(value, instr(value, ':')+1) AS INTEGER) <= {:now}").
+		Bind(dbx.Params{"now": now.Unix()}).Execute(); err != nil {
+		return err
+	}
+	const livePins = "key LIKE 'snap:%' AND CAST(substr(value, instr(value, ':')+1) AS INTEGER) > {:now}"
+
 	// 1. silent nodes become stale and leave the minimum
-	res, err := db.NewQuery("UPDATE " + NodesCollection + " SET status={:s}, updated={:u} WHERE status={:a} AND COALESCE(NULLIF(last_seen,''), created) < {:c}").
-		Bind(dbx.Params{"s": NodeStale, "a": NodeActive, "c": retCut, "u": now.UTC().Format(types.DefaultDateLayout)}).Execute()
+	res, err := db.NewQuery("UPDATE " + NodesCollection + " SET status={:s}, updated={:u} WHERE status={:a} AND COALESCE(NULLIF(last_seen,''), created) < {:c}" +
+		" AND id NOT IN (SELECT substr(key, 6) FROM _sync_state WHERE " + livePins + ")").
+		Bind(dbx.Params{"s": NodeStale, "a": NodeActive, "c": retCut, "u": now.UTC().Format(types.DefaultDateLayout), "now": now.Unix()}).Execute()
 	if err != nil {
 		return err
 	}
@@ -167,6 +180,15 @@ func (m *Module) compactHub(tx kernel.App, db dbx.Builder, now time.Time, retCut
 	// parked changes wait for an admin decision and are never compacted
 	where := "status!='parked' AND ((seq <= {:safe} AND created < {:mk}) OR created < {:ret})"
 	p := dbx.Params{"safe": safe, "mk": cutoff(now, minKeep()), "ret": retCut}
+	var pin sql.NullInt64
+	if err := db.NewQuery("SELECT MIN(CAST(substr(value, 1, instr(value, ':')-1) AS INTEGER)) FROM _sync_state WHERE " + livePins).
+		Bind(dbx.Params{"now": now.Unix()}).Row(&pin); err != nil {
+		return err
+	}
+	if pin.Valid {
+		where += " AND seq < {:pin}" // the snapshot will pull what comes after its start_seq
+		p["pin"] = pin.Int64
+	}
 	var maxSeq int64
 	if err := db.NewQuery("SELECT COALESCE(MAX(seq),0) FROM _changes WHERE " + where).Bind(p).Row(&maxSeq); err != nil {
 		return err

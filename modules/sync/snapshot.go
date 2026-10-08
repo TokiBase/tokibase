@@ -160,6 +160,9 @@ func (m *Module) snapshotStartHandler(e *core.RequestEvent) error {
 	db := m.app.NonconcurrentDB()
 	_, _ = db.NewQuery("DELETE FROM _sync_sent WHERE node={:n}").Bind(dbx.Params{"n": nodeID}).Execute()
 	_, _ = db.NewQuery("DELETE FROM _sync_state WHERE key={:k}").Bind(dbx.Params{"k": "sent_legacy:" + nodeID}).Execute()
+	if err := m.pinSnapshot(nodeID, start, exp); err != nil {
+		return err
+	}
 	resp := proto.SnapshotStart{
 		SnapshotID: id, StartSeq: start, ServerTime: now.UTC().Format(proto.TimeLayout),
 		Expires: exp.UTC().Format(proto.TimeLayout), HubEpoch: m.hub.epoch,
@@ -227,6 +230,33 @@ func (m *Module) recordScope(v *viewer, rec *core.Record, p *policy) (bool, map[
 	return vr.visible, vr.hidden, nil
 }
 
+// snapshotScanCap bounds the rows one snapshot page request reads; a page that
+// reaches it answers with more=true and the scan position as `next`, even with
+// no record in it (the client continues from `next`).
+var snapshotScanCap = 20000
+
+// partitionColumnFilter returns the SQL condition that keeps the rows of other
+// partitions out of the scan, when the partition field is a plain column whose
+// comparison with the node parameter is exact; ok is false otherwise (the Go
+// filter still decides).
+func partitionColumnFilter(col *core.Collection, p *policy, pv string) (string, dbx.Params, bool) {
+	f := col.Fields.GetByName(p.PartField)
+	if f == nil || p.PartField == "" {
+		return "", nil, false
+	}
+	switch f.Type() {
+	case kernel.FieldTypeText, kernel.FieldTypeEmail, kernel.FieldTypeURL:
+		return "[[" + p.PartField + "]] = {:ppv}", dbx.Params{"ppv": pv}, true
+	case kernel.FieldTypeNumber:
+		n, err := strconv.ParseFloat(pv, 64)
+		if err != nil || partString(n) != pv {
+			return "", nil, false
+		}
+		return "[[" + p.PartField + "]] = {:ppv}", dbx.Params{"ppv": n}, true
+	}
+	return "", nil, false
+}
+
 // buildSnapshotPage reads one page of col after the record id `after`. Records
 // and tombstones are paged along the same id axis: the page covers the ids in
 // (after, next], and the tombstones in that interval travel with it.
@@ -235,12 +265,19 @@ func (m *Module) buildSnapshotPage(app kernel.App, nodeID string, col *core.Coll
 	fields := syncedFields(col, p)
 	page := &proto.SnapshotPage{Records: []proto.SnapshotRecord{}, Tombstones: []proto.SnapshotTombstone{}, Next: after}
 
-	_, hasPart := vw.nodePartition(p)
+	pv, hasPart := vw.nodePartition(p)
 	empty := p.PartField != "" && !hasPart // the node has no such parameter: it gets no records
 	scanned := after
 	recMore := false
 	size := 0
-	var ids []string
+	rows := 0
+	var partSQL string
+	var partParams dbx.Params
+	if !empty && p.PartField != "" {
+		if cond, prm, ok := partitionColumnFilter(col, p, pv); ok {
+			partSQL, partParams = cond, prm
+		}
+	}
 	if !empty {
 		for !recMore && len(page.Records) < limit {
 			var batch []*core.Record
@@ -248,11 +285,15 @@ func (m *Module) buildSnapshotPage(app kernel.App, nodeID string, col *core.Coll
 			if scanned != "" {
 				q = q.AndWhere(dbx.NewExp("id > {:a}", dbx.Params{"a": scanned}))
 			}
+			if partSQL != "" {
+				q = q.AndWhere(dbx.NewExp(partSQL, partParams))
+			}
 			if err := q.All(&batch); err != nil {
 				return nil, err
 			}
 			for _, rec := range batch {
 				scanned = rec.Id
+				rows++
 				ok, hidden, err := m.recordScope(vw, rec, p)
 				if err != nil {
 					return nil, err
@@ -268,12 +309,11 @@ func (m *Module) buildSnapshotPage(app kernel.App, nodeID string, col *core.Coll
 					sr := proto.SnapshotRecord{ID: rec.Id, Data: vals, Node: m.hub.id, HLC: hlc.HLC(0).String()}
 					sr.Hash = hex.EncodeToString(canonicalHash(col.Id, rec.Id, vals))
 					page.Records = append(page.Records, sr)
-					ids = append(ids, rec.Id)
 					if b, err := json.Marshal(vals); err == nil {
 						size += len(b) + 200
 					}
 				}
-				if len(page.Records) >= limit || size >= snapshotByteBudget {
+				if len(page.Records) >= limit || size >= snapshotByteBudget || rows >= snapshotScanCap {
 					recMore = true
 					break
 				}
@@ -387,7 +427,14 @@ func (m *Module) fillSnapshotMeta(app kernel.App, col *core.Collection, p *polic
 			if cl := parseFieldClocks(r.Fields); len(cl) > 0 {
 				recs[i].Fields = make(map[string]string, len(cl))
 				for f, h := range cl {
-					recs[i].Fields[f] = h.String()
+					// only the clocks of fields that travel: names and times of
+					// excluded or hidden fields must not leak (§7.7)
+					if _, shown := recs[i].Data[f]; shown {
+						recs[i].Fields[f] = h.String()
+					}
+				}
+				if len(recs[i].Fields) == 0 {
+					recs[i].Fields = nil
 				}
 			}
 		}
@@ -395,16 +442,44 @@ func (m *Module) fillSnapshotMeta(app kernel.App, col *core.Collection, p *polic
 	return nil
 }
 
+// snapKey is the `_sync_state` key of the snapshot a node has in progress.
+func snapKey(node string) string { return "snap:" + node }
+
+// pinSnapshot records the snapshot of node as in progress ("<start_seq>:<exp unix>")
+// until it is acknowledged, replaced or expires: compaction keeps the log after
+// start_seq and does not mark the node stale meanwhile (P7-5), and the ack of a
+// snapshot id only counts while the pin exists.
+func (m *Module) pinSnapshot(node string, start int64, exp time.Time) error {
+	return dbState{db: m.app.NonconcurrentDB()}.Set(snapKey(node), strconv.FormatInt(start, 10)+":"+strconv.FormatInt(exp.Unix(), 10))
+}
+
+func (m *Module) unpinSnapshot(node string) { unpinSnapshotIn(m.app, node) }
+
+func unpinSnapshotIn(app core.App, node string) {
+	_, _ = app.NonconcurrentDB().NewQuery("DELETE FROM _sync_state WHERE key={:k}").Bind(dbx.Params{"k": snapKey(node)}).Execute()
+}
+
 // completeSnapshot handles the snapshot_id of an ack: the node finished its
-// bootstrap, so it is active again and counts as having pulled start_seq.
+// bootstrap, so it is active again and counts as having pulled start_seq. It
+// reports false for an id that is invalid, expired, of another epoch, or void
+// (the operator marked the node again, or a newer snapshot replaced it).
 func (m *Module) completeSnapshot(nodeID, id string) (bool, error) {
 	c, ok := m.parseSnapshotID(id, nodeID)
 	if !ok {
 		return false, nil
 	}
+	if v, found, err := (dbState{db: m.app.DB()}).Get(snapKey(nodeID)); err != nil {
+		return false, err
+	} else if !found || !strings.HasPrefix(v, strconv.FormatInt(c.Seq, 10)+":") {
+		return false, nil
+	}
 	_, err := m.app.NonconcurrentDB().NewQuery("UPDATE " + NodesCollection + " SET status={:a}, pulled_seq={:s}, updated={:t} WHERE id={:id} AND status IN ({:s1},{:s2},{:a})").
 		Bind(dbx.Params{"a": NodeActive, "s": min(c.Seq, m.headSeq()), "t": m.created(), "id": nodeID, "s1": NodeStale, "s2": NodeRebootstrap}).Execute()
-	return err == nil, err
+	if err != nil {
+		return false, err
+	}
+	m.unpinSnapshot(nodeID)
+	return true, nil
 }
 
 // MarkRebootstrap flags a node so that its next handshake answers
@@ -431,6 +506,7 @@ func MarkRebootstrap(app core.App, ref string) (*core.Record, error) {
 	if cur.GetString("status") != NodeRebootstrap {
 		return nil, fmt.Errorf("node %q was not marked (status %s)", ref, cur.GetString("status"))
 	}
+	unpinSnapshotIn(app, cur.Id) // a snapshot id issued before the mark is void
 	emit(AuditRebootstrap, NodesCollection, cur.Id, map[string]any{"name": name, "cli": true})
 	return cur, nil
 }

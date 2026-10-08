@@ -621,6 +621,9 @@ func (s *stubPrinter) serve(c net.Conn, b behavior) {
 			}
 			record(pending[:i])
 			pending = pending[i+len(q):]
+			if b.dropAfter > 0 && total >= b.dropAfter {
+				return // the connection dies before it can answer the post-write status query
+			}
 			if !b.silent {
 				reply := readyReply
 				if b.paperOut {

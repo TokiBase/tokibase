@@ -30,9 +30,12 @@ func (d *digester) add(id string, hash []byte) {
 func (d *digester) sum() string { return hex.EncodeToString(d.h.Sum(nil)) }
 
 // metaDigest digests `_sync_meta` of one collection (the value compared by
-// /ack): ids sorted bytewise.
+// /ack): ids sorted bytewise. Rows with hlc 0 are left out on both sides: they
+// are records that existed before sync was enabled (the hub has no meta row for
+// them, a spoke gets one when it applies the snapshot), so counting them would
+// make a clean bootstrap look like a mismatch.
 func metaDigest(db dbx.Builder, colId string) (string, int, error) {
-	rows, err := db.NewQuery("SELECT record, hash FROM _sync_meta WHERE collection={:c} ORDER BY record").
+	rows, err := db.NewQuery("SELECT record, hash FROM _sync_meta WHERE collection={:c} AND hlc>0 ORDER BY record").
 		Bind(dbx.Params{"c": colId}).Rows()
 	if err != nil {
 		return "", 0, err

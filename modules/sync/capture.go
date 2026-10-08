@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	stdsync "sync"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/modules/sync/hlc"
 	"github.com/tokibase/tokibase/tools/hook"
+	"github.com/tokibase/tokibase/tools/router"
 	"github.com/tokibase/tokibase/tools/types"
 )
 
@@ -61,6 +63,75 @@ func (m *Module) bindCapture() {
 	app.OnRecordCreateExecute().Bind(&hook.Handler[*core.RecordEvent]{Id: hookId, Priority: capturePriority, Func: m.onExecute(OpCreate)})
 	app.OnRecordUpdateExecute().Bind(&hook.Handler[*core.RecordEvent]{Id: hookId, Priority: capturePriority, Func: m.onExecute(OpUpdate)})
 	app.OnRecordDeleteExecute().Bind(&hook.Handler[*core.RecordEvent]{Id: hookId, Priority: capturePriority, Func: m.onExecute(OpDelete)})
+
+	if m.role == RoleSpoke {
+		// optional: no reads of synced collections while a bootstrap replaces them
+		app.OnRecordsListRequest().Bind(&hook.Handler[*core.RecordsListRequestEvent]{Id: hookId + "bootreads", Priority: -900, Func: func(e *core.RecordsListRequestEvent) error {
+			if err := m.bootstrapReadGuard(e.App, e.Collection); err != nil {
+				return err
+			}
+			return e.Next()
+		}})
+		app.OnRecordViewRequest().Bind(&hook.Handler[*core.RecordRequestEvent]{Id: hookId + "bootreads", Priority: -900, Func: func(e *core.RecordRequestEvent) error {
+			if err := m.bootstrapReadGuard(e.App, e.Collection); err != nil {
+				return err
+			}
+			return e.Next()
+		}})
+	}
+}
+
+// EnvBootstrapBlockReads makes the local REST reads of synced collections answer
+// 503 sync_bootstrapping while a snapshot bootstrap runs (default: reads serve
+// whatever the collection holds at that moment, which can be partial).
+const EnvBootstrapBlockReads = "TOKI_SYNC_BOOTSTRAP_BLOCK_READS"
+
+// CodeBootstrapping is the code in the message of the 503 a local write (or a
+// read, with EnvBootstrapBlockReads) gets while the node bootstraps.
+const CodeBootstrapping = "sync_bootstrapping"
+
+func bootstrappingError() error {
+	return router.NewApiError(http.StatusServiceUnavailable,
+		"The node is replacing its data from the hub ("+CodeBootstrapping+"); retry when the bootstrap has finished.", nil)
+}
+
+// bootstrapping reports whether the cursor says a snapshot bootstrap is running
+// (the phase that replays the parked local changes is not counted: those writes
+// are the bootstrap's own).
+func bootstrapping(db dbx.Builder) bool {
+	var n int
+	if err := db.NewQuery("SELECT COUNT(*) FROM _sync_cursors WHERE state='bootstrapping' AND snapshot_after!='!rebase'").Row(&n); err != nil {
+		return false
+	}
+	return n > 0
+}
+
+// bootstrapGuard refuses a local write (no sync origin) to a synced collection
+// while the node bootstraps (P7-3): the collection is emptied and refilled page
+// by page, so such a write would be lost, applied on half data, or ordered
+// before the parked changes it must follow. It runs inside the capture
+// transaction, so it sees the cursor state the bootstrap committed.
+func (m *Module) bootstrapGuard(tx kernel.App, origin *kernel.SyncOrigin) error {
+	if m.role != RoleSpoke || origin != nil {
+		return nil
+	}
+	if bootstrapping(tx.NonconcurrentDB()) {
+		return bootstrappingError()
+	}
+	return nil
+}
+
+func (m *Module) bootstrapReadGuard(app core.App, col *core.Collection) error {
+	if !envFlag(EnvBootstrapBlockReads) {
+		return nil
+	}
+	if p, err := m.pol.For(col); err != nil || p == nil {
+		return nil
+	}
+	if bootstrapping(app.DB()) {
+		return bootstrappingError()
+	}
+	return nil
 }
 
 func (m *Module) actorFor(rec *core.Record) string {
@@ -106,6 +177,9 @@ func (m *Module) onExecute(op string) func(e *core.RecordEvent) error {
 		err = orig.RunInTransaction(func(tx kernel.App) error {
 			e.App = tx
 			return m.atomically(tx, nested, func() error {
+				if err := m.bootstrapGuard(tx, origin); err != nil {
+					return err
+				}
 				return m.capture(tx, e, op, p, origin)
 			})
 		})

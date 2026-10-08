@@ -140,6 +140,8 @@ type Client struct {
 	tokenExp time.Time
 	hubID    string
 	epoch    string
+	lastTs   int64    // last handshake timestamp (ms)
+	caps     []string // optional features of the hub (HandshakeResponse.Caps)
 	cert     string
 	offset   time.Duration
 }
@@ -388,7 +390,14 @@ func (c *Client) handshakeOnce(ctx context.Context) (*proto.HandshakeResponse, t
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	ts := strconv.FormatInt(c.wallNow().UnixMilli(), 10)
+	// strictly increasing: the hub refuses a timestamp at or below the last one it
+	// saw (replay floor), and two handshakes can start within one millisecond
+	nowMs := c.wallNow().UnixMilli()
+	c.mu.Lock()
+	tsMs := max(nowMs, c.lastTs+1)
+	c.lastTs = tsMs
+	c.mu.Unlock()
+	ts := strconv.FormatInt(tsMs, 10)
 	nonce := proto.NewNonce()
 	hdr := map[string]string{
 		proto.HeaderNode: c.nodeID, proto.HeaderSigTs: ts, proto.HeaderNonce: nonce,

@@ -43,7 +43,10 @@ type hubIdentity struct {
 	epoch string
 	// epochSeq is the hub head when the epoch began (see epoch.go).
 	epochSeq int64
-	secret   []byte
+	// epochHist lists every epoch with the head when it began, oldest first;
+	// the current epoch is the last entry (see epoch.go).
+	epochHist []epochEntry
+	secret    []byte
 }
 
 // getOrCreate returns the state value, generating and storing it once.

@@ -26,6 +26,16 @@ func (c *Client) dropToken() {
 	c.mu.Unlock()
 }
 
+// ForceHandshake drops the session so that the next request starts with a new
+// handshake (it shows a hub epoch change and a re-bootstrap request the hub
+// would otherwise only tell a node that is not holding a valid session).
+func (c *Client) ForceHandshake() {
+	c.dropToken()
+	c.loop.mu.Lock()
+	c.loop.needHS = true
+	c.loop.mu.Unlock()
+}
+
 // ensureSession runs the handshake when there is no valid session (or the
 // previous one was dropped) and processes its answer.
 func (c *Client) ensureSession(ctx context.Context) error {
@@ -39,16 +49,43 @@ func (c *Client) ensureSession(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	c.handleEpoch(hs)
+	c.mu.Lock()
+	c.caps = hs.Caps
+	c.mu.Unlock()
 	if hs.Rebootstrap && !c.isBootstrapping() {
+		// the state is stored first: a crash before the new epoch is stored still
+		// finds the epoch different at the next handshake (§3.3)
 		c.markRebootstrap(hs.LowWater)
+		c.handleEpoch(hs)
+		// the bootstrap decides what to park by the hub's contiguous position: after a
+		// restore that is lower than what this node believes, and the changes in
+		// between (acked before, lost by the hub) must be parked and replayed, not dropped
+		if err := c.reconcile(hs.PushFrom); err == nil {
+			c.loop.mu.Lock()
+			c.loop.pushFrom = hs.PushFrom
+			c.loop.mu.Unlock()
+		}
 		return ErrRebootstrap
 	}
+	epochChanged := c.handleEpoch(hs)
 	if err := c.applyPolicies(hs.Policies); err != nil {
 		return err
 	}
+	var ackedBefore int64
+	if epochChanged {
+		if cur, _ := LoadCursor(c.o.App); cur != nil {
+			ackedBefore = cur.AckedOrigin
+		}
+	}
 	if err := c.reconcile(hs.PushFrom); err != nil {
 		return err
+	}
+	if epochChanged && !c.isBootstrapping() && c.pushGap(hs.PushFrom, ackedBefore) {
+		// the hub lost changes of this node that are no longer kept here (older than
+		// TOKI_SYNC_SPOKE_KEEP): they can not be sent again, so the node takes the
+		// hub's state instead of keeping data that exists nowhere else
+		c.markRebootstrap(0)
+		return ErrRebootstrap
 	}
 	c.loop.mu.Lock()
 	c.loop.needHS = false
@@ -97,6 +134,33 @@ func (c *Client) reconcile(pushFrom int64) error {
 	}
 	_, err := db.NewQuery("UPDATE _sync_cursors SET acked_origin={:a}").Bind(dbx.Params{"a": max(pushFrom-1, 0)}).Execute()
 	return err
+}
+
+// pushGap reports whether the origin_seq rows from pushFrom on have a hole (rows
+// that were acked and compacted, then lost by a hub restore).
+func (c *Client) pushGap(pushFrom, ackedBefore int64) bool {
+	if c.o.App == nil {
+		return false
+	}
+	var n, top int64
+	if err := c.o.App.DB().NewQuery("SELECT COUNT(*), COALESCE(MAX(origin_seq),0) FROM _changes WHERE node={:n} AND origin_seq>={:p}").
+		Bind(dbx.Params{"n": c.nodeID, "p": pushFrom}).Row(&n, &top); err != nil {
+		return false
+	}
+	top = max(top, ackedBefore) // the highest origin_seq this node knows the hub had
+	return top >= pushFrom && n != top-pushFrom+1
+}
+
+// hubHas reports whether the hub advertised an optional protocol feature.
+func (c *Client) hubHas(cap string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, x := range c.caps {
+		if x == cap {
+			return true
+		}
+	}
+	return false
 }
 
 // applyPolicies makes the local `_sync_policies` equal to the hub's list (the

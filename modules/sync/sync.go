@@ -112,6 +112,9 @@ type Module struct {
 	// loop is the spoke client loop (nil unless role spoke and enrolled).
 	loop atomic.Pointer[client.Client]
 
+	// seenHead caches the highest head noted in max_seq_seen (hub).
+	seenHead atomic.Int64
+
 	// timeouts counts replay timeouts per group (node:origin_seq), see isReplayTimeout.
 	timeouts stdsync.Map
 	// stash maps the record of a client request to its actor (see actor.go).

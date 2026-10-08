@@ -56,7 +56,7 @@ jobs:
         run: |
           # solo/cluster budgets come from profiles.txt; no_ui is an extra check (not a profile)
           budget() { awk -v p="$1" '$1==p {print $2}' profiles.txt; }
-          bs=$(budget solo); bc=$(budget cluster); bn=43
+          bs=$(budget solo); bc=$(budget cluster); bn=44
           s=$(stat -c %s out/toki-solo); n=$(stat -c %s out/toki-noui); x=$(stat -c %s out/toki-solo-s3)
           echo "solo=$((s/1024/1024))MB (budget $bs) noui=$((n/1024/1024))MB (budget $bn) solo+s3=$((x/1024/1024))MB (budget $bc)"
           test -n "$bs" -a -n "$bc" || { echo "missing solo/cluster budget in profiles.txt"; exit 1; }

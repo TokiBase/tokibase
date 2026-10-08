@@ -101,6 +101,7 @@ func (m *Module) pullHandler(e *core.RequestEvent) error {
 		return syncErr(e, http.StatusGone, proto.CodeRebootstrap, "This node was offline longer than the retention; re-bootstrap.",
 			map[string]any{"low_water": m.lowWater(), "node_status": st})
 	}
+	m.noteHead()
 	m.ackPulled(nodeID, after) // pull implicitly acks `after`
 
 	deadline := time.NewTimer(time.Duration(wait) * time.Second)

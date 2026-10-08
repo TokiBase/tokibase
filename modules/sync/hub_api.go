@@ -512,7 +512,8 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 	// change, has to re-bootstrap
 	m.noteHead()
 	low := m.lowWater()
-	rebootstrap := cur.GetString("status") == NodeStale || cur.GetString("status") == NodeRebootstrap || req.PullAfter < low
+	rebootstrap := cur.GetString("status") == NodeStale || cur.GetString("status") == NodeRebootstrap || req.PullAfter < low ||
+		m.epochRequiresRebootstrap(req.HubEpoch, req.PullAfter)
 
 	expires := now.Add(SessionTTL)
 	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -542,6 +543,7 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 		Rebootstrap:  rebootstrap,
 		Reservations: []any{}, // TODO(PR8): sequence reservations
 		PollMs:       DefaultPollMs,
+		Caps:         []string{proto.CapFiller},
 	})
 }
 

@@ -206,6 +206,7 @@ func (m *Module) pushHandler(e *core.RequestEvent) error {
 	}
 	m.touchSeen(e.App, nodeID)
 	m.notifyHead()
+	m.noteHead()
 
 	acked, err := m.pushedSeq(e.App, nodeID)
 	if err != nil {
