@@ -79,7 +79,11 @@ func (c *Client) postPush(ctx context.Context, rows []outRow) (*proto.PushRespon
 			Op: r.Op, Patch: json.RawMessage(r.Patch), Actor: r.Actor, Tx: r.Tx, SV: r.SV,
 		}
 		if r.Code == CodeRebased {
-			pc.Op = proto.OpFiller // a change discarded by a bootstrap rebase: only the sequence moves on
+			if c.hubHas(proto.CapFiller) {
+				pc.Op = proto.OpFiller // a change discarded by a bootstrap rebase: only the sequence moves on
+			} else {
+				pc.Op, pc.Patch = "u", json.RawMessage(`{}`) // an older hub does not know op "n" (400 for the page)
+			}
 		}
 		if r.Base != 0 {
 			pc.Base = hlc.HLC(r.Base).String()

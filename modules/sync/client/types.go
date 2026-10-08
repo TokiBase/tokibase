@@ -113,6 +113,8 @@ type Status struct {
 	HashMismatches int64
 	HashStreak     int
 	DigestMismatch []string
+	// Heal is "heal_exhausted" when the auto-heal stopped after too many heals.
+	Heal string
 }
 
 // EventEpoch is emitted when the hub epoch changed.

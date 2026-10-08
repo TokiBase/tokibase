@@ -4,9 +4,11 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math/rand/v2"
 	"os"
+	"strconv"
 	"strings"
 	stdsync "sync"
 	"time"
@@ -58,6 +60,8 @@ type loopState struct {
 	// number of mismatching checks in a row.
 	digestAt     time.Time
 	digestStreak int
+	// heal is StatusHealExhausted once the auto-heal limit was reached.
+	heal string
 
 	kick     chan struct{}
 	reqs     chan syncReq
@@ -285,7 +289,7 @@ func (c *Client) Status() Status {
 	st := Status{
 		State: c.loop.state, Online: c.loop.cond.Online, Paused: c.loop.paused, Running: c.loop.running,
 		LastOK: c.loop.lastOK, LastError: c.loop.lastErr, Failures: c.loop.failures, NextAttempt: c.loop.next,
-		ApplyErrors: c.loop.applyErr, HashMismatches: c.loop.hashMis, HashStreak: c.loop.hashStreak, DigestMismatch: append([]string(nil), c.loop.mismatch...),
+		ApplyErrors: c.loop.applyErr, HashMismatches: c.loop.hashMis, HashStreak: c.loop.hashStreak, DigestMismatch: append([]string(nil), c.loop.mismatch...), Heal: c.loop.heal,
 	}
 	c.loop.mu.Unlock()
 	st.OffsetMs = c.Offset().Milliseconds()
@@ -412,6 +416,10 @@ func (c *Client) cycle(ctx context.Context) (res Result) {
 			c.setState("idle")
 		}
 	}()
+	if c.bootstrapPending() {
+		res.Err = ErrRebootstrap
+		return
+	}
 	c.setState("syncing")
 	if err := c.ensureSession(ctx); err != nil {
 		res.Err = err
@@ -436,12 +444,28 @@ func (c *Client) RunOnce(ctx context.Context) Result { return c.cycle(ctx) }
 // PullOnce runs only the session and the pull side of a cycle.
 func (c *Client) PullOnce(ctx context.Context) Result {
 	var res Result
+	if c.bootstrapPending() {
+		res.Err = ErrRebootstrap
+		return res
+	}
 	if err := c.ensureSession(ctx); err != nil {
 		res.Err = err
 		return res
 	}
 	res.Err = c.pullAll(ctx, &res)
 	return res
+}
+
+// bootstrapPending reports whether the cursor says a bootstrap is in progress or
+// required while none runs in this process: a plain cycle must not push or pull
+// then (log entries would land on half-emptied collections and the cursor would
+// move past them, P7-10). The caller bootstraps (Bootstrap) or gives up.
+func (c *Client) bootstrapPending() bool {
+	if c.o.App == nil || c.isBootstrapping() {
+		return false
+	}
+	cur, err := LoadCursor(c.o.App)
+	return err == nil && cur != nil && (cur.State == StateBootstrapping || cur.State == StateRebootstrapRequired)
 }
 
 // cycleBoot is one loop iteration: a cycle, preceded by the snapshot bootstrap
@@ -537,11 +561,61 @@ func (c *Client) healDue(ctx context.Context) bool {
 	return false
 }
 
+// Auto-heal limit: a mismatch that a fresh snapshot does not fix (data the hub
+// holds outside the sync metadata, a field this node lacks) would otherwise
+// re-download everything every few minutes for ever.
+const (
+	maxHealsPerWindow = 2
+	healWindow        = 24 * time.Hour
+	stateKeyHeals     = "heal_log"
+
+	// StatusHealExhausted is Status.Heal when the limit stopped the auto-heal.
+	StatusHealExhausted = "heal_exhausted"
+)
+
+// healBudget returns the unix times of the heals in the window and whether
+// another one is allowed.
+func (c *Client) healBudget() ([]int64, bool) {
+	var all, kept []int64
+	if v, ok := stateGet(c.o.App.DB(), stateKeyHeals); ok {
+		_ = json.Unmarshal([]byte(v), &all)
+	}
+	cut := c.wallNow().Add(-healWindow).Unix()
+	for _, t := range all {
+		if t > cut {
+			kept = append(kept, t)
+		}
+	}
+	return kept, len(kept) < maxHealsPerWindow
+}
+
 func (c *Client) scheduleHeal(reason string) bool {
+	heals, ok := c.healBudget()
+	if !ok {
+		msg := "auto-heal stopped (" + StatusHealExhausted + "): " + strconv.Itoa(len(heals)) + " heals in 24 h did not cure \"" + reason + "\"; fix the cause or run `toki sync rebootstrap`"
+		c.loop.mu.Lock()
+		first := c.loop.heal != StatusHealExhausted
+		c.loop.heal = StatusHealExhausted
+		c.loop.hashStreak, c.loop.digestStreak = 0, 0
+		c.loop.mu.Unlock()
+		if first {
+			c.recordError(errors.New(msg))
+			if c.o.Logger != nil {
+				c.o.Logger.Error("sync: " + msg)
+			}
+			c.emit(Event{Type: EventError, Message: msg})
+		}
+		return false
+	}
 	if err := ScheduleRebootstrap(c.o.App, reason); err != nil {
 		return false
 	}
+	_ = stateSet(c.o.App.NonconcurrentDB(), stateKeyHeals, func() string {
+		b, _ := json.Marshal(append(heals, c.wallNow().Unix()))
+		return string(b)
+	}())
 	c.loop.mu.Lock()
+	c.loop.heal = ""
 	c.loop.hashStreak, c.loop.digestStreak = 0, 0
 	c.loop.mu.Unlock()
 	if c.o.Logger != nil {

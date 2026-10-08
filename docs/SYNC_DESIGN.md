@@ -413,7 +413,8 @@ Headers: `X-Toki-Node`, `X-Toki-Sig-Ts`, `X-Toki-Sig-Nonce`, `X-Toki-Sig`.
 }
 // 200
 {
-  "session_token":"<jwt>", "expires":"...", "hub_id":"h9...", "hub_epoch":"e5f...",
+  "session_token":"<jwt>", "expires":"...", "hub_id":"h9...", "hub_epoch":"e5f...", "hub_epoch_seq": 88000,
+  "caps": ["filler"],
   "server_time":"2026-10-08T10:00:01.002Z",
   "clock": {"ok": true, "offset_ms": 882, "max_drift_ms": 300000},
   "schema": {"version": 14, "bundles": [{"version":13,"hash":"...","bundle":{}}, {"version":14,"hash":"...","bundle":{}}]},
@@ -433,7 +434,7 @@ Rules:
 
 - `client_time` is the spoke wall time WITH its current offset. `push_from` is the hub's contiguous+1: the spoke resends from there. `low_water` is the oldest retained hub seq.
 - `clock.ok=false` when `|client_time - server_time| > max_drift`. The handshake still succeeds and returns `offset_ms`, but push returns 409 `sync_clock_drift` until a handshake with corrected time succeeds (§3.7).
-- `rebootstrap=true` when `pull_after < low_water`, the node is `stale`/`rebootstrap`, `schema_version` is older than the oldest kept bundle, or the hub epoch differs and the spoke's cursor is ahead of the hub's max seq (§3.9).
+- `rebootstrap=true` when `pull_after < low_water`, the node is `stale`/`rebootstrap`, `schema_version` is older than the oldest kept bundle, or the hub epoch differs and the spoke cannot prove its cursor safe: the hub keeps a history of `{epoch, seq}` (head when each epoch began) and lets the spoke continue only when its epoch is in the history and its `pull_after` is at or below `seq` of every later epoch (§3.9). `caps` lists optional hub features the client may use (`filler`: push op `n`).
 - `bundles` lists every version greater than the spoke's, up to `TOKI_SYNC_MAX_BUNDLES` (50). Beyond that the answer is `rebootstrap`.
 
 ### 3.4 `POST /api/sync/push`
@@ -535,11 +536,11 @@ Compaction (hourly cron through `kernel.Jobs`, `CronKey("sync.compact:<hour>")`)
  "tombstones":[{"record":"...","kind":"legal","hlc":"..."}], "next":"<last id>", "more":true}
 ```
 
-- Scope: policy pull-enabled collections, filtered by partition and `pull_view_rule`. Tombstones: all `legal` ones plus `delete` ones newer than retention.
+- Scope: policy pull-enabled collections, filtered by exactly the pull's logic (partition, `pull_view_rule` or the `TOKI_SYNC_PULL_VIEW_RULE=1` default, fieldperm-hidden fields removed; one function for both). Tombstones: all `legal` ones plus `delete` ones newer than retention; collections with a partition or an active view rule send none (a deleted record cannot be checked against the node's scope), so a fresh node has no `legal` tombstone for them either. The hub pins `start_seq` of a snapshot in progress (`_sync_state snap:<node>`): compaction keeps the log after it and does not mark the node stale.
 - Fuzzy snapshot plus log: pages are read without a long transaction. After the last page the spoke pulls from `start_seq`. Re-applying a change already in the snapshot is a no-op (HLC/hash compare), so the result converges.
-- Spoke apply: before the first page, unpushed local changes are exported to a side table and the synced collections are emptied inside one transaction per collection. Rows are inserted with `SaveNoValidateWithContext(origin=Snapshot)`, which accepts ciphertext verbatim. The cursor `snapshot_after` is updated per page, so the snapshot resumes after a crash or loss of network. After finishing, the exported local changes are re-captured as new local changes with fresh HLCs (rebase). Those older than retention become `orphaned` conflicts.
-- Re-bootstrap triggers: 410 from pull, `rebootstrap=true` from handshake, digest mismatch twice in a row (optional, `TOKI_SYNC_AUTO_HEAL=1`), or `toki sync rebootstrap`.
-- Hub epoch: a random id in `_sync_state`, regenerated on backup restore and on walreplica promote (hook `OnBackupRestore` plus a check at boot: `max(seq) < stored max_seq_seen`). If the handshake shows a different epoch, the spoke: (a) resets `pull_after = min(pull_after, hub max seq)`, (b) re-pushes its acked changes still kept (`SPOKE_KEEP` 24 h; duplicates are cheap). This covers the seconds of hub writes lost by an async replica failover.
+- Spoke apply: before the first page, unpushed local changes are parked in place (`_changes.status = 'rebase'`) and each synced collection is emptied inside the transaction of its first page. Local writes to synced collections are refused with 503 `sync_bootstrapping` until the bootstrap ends. Rows are inserted with `SaveNoValidateWithContext(origin=Snapshot)`, which accepts ciphertext verbatim. The cursor `snapshot_after` is updated per page, so the snapshot resumes after a crash or loss of network. After finishing, the parked changes are replayed as new local changes that keep their ORIGINAL HLC (rebase); a plain field whose hub value is newer than the change is not overridden (open `orphaned` conflict), and so are changes older than retention.
+- Re-bootstrap triggers: 410 from pull, `rebootstrap=true` from handshake, digest mismatch twice in a row (optional, `TOKI_SYNC_AUTO_HEAL=1`; at most 2 heals per 24 h, then `heal_exhausted`), or `toki sync rebootstrap`.
+- Hub epoch: a random id in `_sync_state`, regenerated on backup restore and on walreplica promote (hook `OnBackupRestore` plus a check at boot: `max(seq) < stored max_seq_seen`). `max_seq_seen` is also kept in a file outside `data.db` (a swap of `data.db` cannot take it back). If the handshake shows a different epoch, the hub answers `rebootstrap` unless the spoke's cursor is provably inside the log both hubs share (§3.3: history of `{epoch, seq}`); then the spoke (a) keeps `pull_after` (never above the epoch's `seq`), (b) re-pushes its acked changes still kept (`SPOKE_KEEP` 24 h; duplicates are cheap) and re-bootstraps if some of them are gone. Hub-origin writes a restore lost are reconciled by the re-bootstrap of every spoke that had pulled them.
 
 ### 3.10 `POST /api/sync/reserve`
 
@@ -805,7 +806,7 @@ Flutter wiring: `connectivity_plus` → `SyncSetConditions`. Android WorkManager
 | 7.4 | **Forged HLC** (future, to always win lww) | `future_hlc` rejects `> hub_now + 5 m`. Drift correction plus re-stamp. A max-skew metric per node. Backdating only lets a change lose. Backdating to sneak under a revocation does not work, because revocation is checked at apply time (§1.6). Backdating to use an EXPIRED grant does not work either: besides `iat - 5 m <= hlc <= exp` the hub requires `hub_now <= exp + TOKI_SYNC_GRACE` (24 h), so a forged HLC only helps inside the grace that honest offline devices need anyway. |
 | 7.5 | **Reservation exhaustion** | `max_open_per_node`, `max_block`, the `sync:reserve` rate-limit label, per-sequence global cap and alert at 80%. Ranges are audited, retired on revoke, and values are validated against issued ranges on push. |
 | 7.6 | **Crypto fields** | See below. |
-| 7.7 | **Exfiltration via pull filters** | Pull scope is computed **on the hub** from policy plus node `params` set by the admin at enrollment. The spoke cannot send filters. `pull_view_rule` intersects with the collection viewRule for the node's service actor. Collections with null rules (superuser only) are never pulled unless policy `trusted=true`. Auth collections never include password/tokenKey. `crypto: strip` withholds encrypted fields. |
+| 7.7 | **Exfiltration via pull filters** | Pull scope is computed **on the hub** from policy plus node `params` set by the admin at enrollment. The spoke cannot send filters. `pull_view_rule` (or the `TOKI_SYNC_PULL_VIEW_RULE=1` default) intersects with the collection viewRule for the node's service actor, in pull AND snapshot (one function). Collections with null rules (superuser only) are never pulled unless policy `trusted=true`. Auth collections never include password/tokenKey. `crypto: strip` withholds encrypted fields. |
 | 7.8 | Stolen device data at rest | Out of sync scope. Use crypto with a Keychain/Keystore master key. Revoke the node. |
 | 7.9 | Hub key compromise (backup leak) | `TOKI_SYNC_HUB_KEY_FILE` outside `pb_data`. `toki sync rotate-hub-key` re-issues certs at the next handshake (old key accepted for a grace period). |
 | 7.10 | Malicious bundle / MITM | TLS with optional SPKI pin. Bundles are only accepted from the authenticated hub session. The bundle hash is checked. |

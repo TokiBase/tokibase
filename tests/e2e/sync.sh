@@ -49,7 +49,7 @@ toki() { # role dir args...
   TOKI_SYNC_ROLE="$role" TOKI_SYNC_INSECURE=1 "$TOKI" "$@" --dir "$dir"
 }
 start() { # name role dir port
-  TOKI_SYNC_ROLE="$2" TOKI_SYNC_INSECURE=1 TOKI_SYNC_INTERVAL=1s TOKI_SYNC_PAGE=25 TOKI_SYNC_SNAPSHOT_PAGE=500 \
+  TOKI_SYNC_ROLE="$2" TOKI_SYNC_INSECURE=1 TOKI_SYNC_INTERVAL=1s TOKI_SYNC_PAGE=25 TOKI_SYNC_SNAPSHOT_PAGE="${SNAP_PAGE:-500}" \
     "$TOKI" serve --automigrate=false --dir "$3" --http "127.0.0.1:$4" >>"$TMP/$1.log" 2>&1 &
   echo $! >"$TMP/$1.pid"
 }
@@ -373,8 +373,9 @@ CODE3="$(toki hub "$HUB" sync enroll --name s3 --profile edge --actor "_superuse
 [ -n "$CODE3" ] || fail "no enrollment code for s3"
 toki spoke "$S3" superuser upsert "$EMAIL" "$PASS" >/dev/null
 toki spoke "$S3" sync join "$URL_HUB" "$CODE3" >/dev/null || fail "join s3"
-# the collections do NOT exist on s3: the snapshot creates them
-start s3 spoke "$S3" "$PORT_S3"
+# the collections do NOT exist on s3: the snapshot creates them (small pages, so that the
+# kill below cannot miss the window on a fast machine)
+SNAP_PAGE=100 start s3 spoke "$S3" "$PORT_S3"
 wait_health "$URL_S3" 30 || fail "s3 did not start"
 T3="$(token "$URL_S3")"
 

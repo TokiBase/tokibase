@@ -407,16 +407,22 @@ func TestSpokeFollowsAHubEpochChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	newEpoch := h.m.Epoch()
-	// a client that already knows the hub gets the new epoch with the next handshake
+	// a client that already knows the hub gets the new epoch with the next handshake;
+	// its cursor is ahead of the restored head, so the hub sends it to re-bootstrap (§3.3)
 	h.create(t, map[string]any{"title": "after restore"})
 	a.c.Kick()
-	a.sync(t)
+	if r := a.c.RunOnce(ctxb); !errors.Is(r.Err, client.ErrRebootstrap) {
+		t.Fatalf("a spoke that is ahead of the restored hub must re-bootstrap, got %v", r.Err)
+	}
+	if err := a.c.Bootstrap(ctxb); err != nil {
+		t.Fatal(err)
+	}
 	cur := cursorOf(t, a.spokeEnv)
 	if cur.HubEpoch != newEpoch {
 		t.Fatalf("epoch %q != %q", cur.HubEpoch, newEpoch)
 	}
 	if cur.PullAfter > h.m.headSeq() || cur.PullAfter < head {
-		t.Fatalf("pull_after %d must be back at the hub's head (%d..%d)", cur.PullAfter, head, h.m.headSeq())
+		t.Fatalf("pull_after %d must follow the hub's head (%d..%d)", cur.PullAfter, head, h.m.headSeq())
 	}
 	b.sync(t)
 	a.sync(t)
