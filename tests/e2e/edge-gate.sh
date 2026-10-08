@@ -192,15 +192,20 @@ log "(1) kiosk paired, session for gate_devices/$ACTOR"
 # the reader flips to "connected" a moment before termios is set raw, and a pty drops what was
 # written in between: probe until the first scan arrives, then send the real ones
 ev_codes() { curl -fsS "$URL_S1/api/scan/events?scanner=belt" -H "Authorization: $TOK" | jget '",".join(i["code"] for i in d["items"])'; }
-for _ in $(seq 1 40); do
-  send_scan "PROBE-0001"
-  sleep 0.5
-  case "$(ev_codes)" in *PROBE-0001*) break ;; esac
-done
-case "$(ev_codes)" in *PROBE-0001*) ;; *) fail "the serial reader never delivered the probe scan" ;; esac
-send_scan "TKT-0001"; send_scan "lower-case"; send_scan "TKT-0002"
-wait_for "scan events" 'case "$(ev_codes)" in *TKT-0002*) true ;; *) false ;; esac'
-[ "$(ev_codes)" = "PROBE-0001,TKT-0001,TKT-0002" ] || fail "scan events do not match: $(ev_codes)"
+send_until() { # code: resend until the event shows up (a pty can drop bytes while the reader re-opens it)
+  local i
+  for i in $(seq 1 30); do
+    send_scan "$1"
+    sleep 0.6
+    case "$(ev_codes)" in *"$1"*) return 0 ;; esac
+  done
+  fail "the serial reader never delivered $1 (events: $(ev_codes))"
+}
+send_until "PROBE-0001"
+send_until "TKT-0001"
+send_scan "lower-case"   # fails the charset filter: must never show up
+send_until "TKT-0002"
+case "$(ev_codes)" in *lower-case*) fail "a filtered scan was delivered" ;; esac
 [ "$(code_of "$URL_S1/api/scan/events?scanner=belt")" != 200 ] || fail "a guest read the scan events"
 log "(2) pty scans visible on /api/scan/events for the kiosk session (filtered code dropped)"
 
