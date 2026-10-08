@@ -439,7 +439,8 @@ func TestRevertCarriesNoDataOutsideTheViewRule(t *testing.T) { // P3-2
 	for _, ch := range pr.Changes {
 		if ch.Revert && ch.Record == hidden.Id {
 			found = true
-			if ch.Op != OpDelete || strings.Contains(string(ch.Patch), "secret") || strings.Contains(string(ch.Patch), "qty") {
+			// P4-6: a verdict without data, never an op d (it would delete the device copy)
+			if ch.Op == OpDelete || ch.Notice != proto.NoticeInvisible || strings.Contains(string(ch.Patch), "secret") || strings.Contains(string(ch.Patch), "qty") {
 				t.Fatalf("the revert leaks the record: %+v %s", ch, ch.Patch)
 			}
 		}
