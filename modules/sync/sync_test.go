@@ -359,7 +359,7 @@ func TestRollbackLeavesNoRow(t *testing.T) {
 	e := setup(t)
 
 	// the surrounding transaction fails after a successful save
-	err := e.app.RunInTransaction(func(tx core.App) error {
+	err := e.app.RunInTransaction(func(tx kernel.App) error {
 		r := core.NewRecord(e.items)
 		r.Set("title", "x")
 		if err := tx.Save(r); err != nil {
@@ -435,7 +435,7 @@ func TestExecuteHookAppReachesDBWrite(t *testing.T) {
 func TestTxGroups(t *testing.T) {
 	e := setup(t)
 	e.item(t, "title", "alone")
-	if err := e.app.RunInTransaction(func(tx core.App) error {
+	if err := e.app.RunInTransaction(func(tx kernel.App) error {
 		for _, title := range []string{"g1", "g2", "g3"} {
 			r := core.NewRecord(e.items)
 			r.Set("title", title)
@@ -891,7 +891,7 @@ func TestHLCFloorPersistedAndRestored(t *testing.T) {
 	if _, due := c.NeedsFloor(); due {
 		t.Fatal("a committed write must mark the floor as persisted")
 	}
-	_ = e.app.RunInTransaction(func(tx core.App) error {
+	_ = e.app.RunInTransaction(func(tx kernel.App) error {
 		r := core.NewRecord(e.items)
 		r.Set("title", "rb")
 		if err := tx.Save(r); err != nil {

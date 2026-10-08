@@ -96,7 +96,7 @@ func (m *Module) onExecute(op string) func(e *core.RecordEvent) error {
 			return e.Next() // hub replay of a pushed change: PR3
 		}
 		orig := e.App
-		err := e.App.RunInTransaction(func(tx core.App) error {
+		err := e.App.RunInTransaction(func(tx kernel.App) error {
 			e.App = tx
 			return m.capture(tx, e, op, p, origin)
 		})
@@ -105,7 +105,7 @@ func (m *Module) onExecute(op string) func(e *core.RecordEvent) error {
 	}
 }
 
-func (m *Module) capture(tx core.App, e *core.RecordEvent, op string, p *policy, origin *kernel.SyncOrigin) error {
+func (m *Module) capture(tx kernel.App, e *core.RecordEvent, op string, p *policy, origin *kernel.SyncOrigin) error {
 	rec := e.Record
 	col := rec.Collection()
 	replica := kernel.IsSyncReplica(e.Context)
@@ -197,7 +197,7 @@ func (m *Module) capture(tx core.App, e *core.RecordEvent, op string, p *policy,
 
 // captureReplica handles pull/snapshot/bundle applies: no _changes row (spokes
 // are never a source for others), only the per record clock and tombstones.
-func (m *Module) captureReplica(tx core.App, op string, rec *core.Record, p *policy, origin *kernel.SyncOrigin) error {
+func (m *Module) captureReplica(tx kernel.App, op string, rec *core.Record, p *policy, origin *kernel.SyncOrigin) error {
 	col := rec.Collection()
 	db := tx.NonconcurrentDB()
 	h := int64(0)
@@ -317,7 +317,7 @@ type change struct {
 
 // insertChange appends the row, assigns the atomic group id and persists the
 // clock floor when it is due. All of it happens in the caller's transaction.
-func (m *Module) insertChange(tx core.App, c *change) error {
+func (m *Module) insertChange(tx kernel.App, c *change) error {
 	db := tx.NonconcurrentDB()
 	var last int64
 	if err := db.NewQuery("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='_changes'),0)").Row(&last); err != nil {
@@ -371,7 +371,7 @@ func (m *Module) insertChange(tx core.App, c *change) error {
 }
 
 // maybePersistFloor writes hlc_floor in the running transaction every N ticks.
-func (m *Module) maybePersistFloor(tx core.App, st *txState) error {
+func (m *Module) maybePersistFloor(tx kernel.App, st *txState) error {
 	clock := m.Clock()
 	h, due := clock.NeedsFloor()
 	if !due || (st != nil && st.floorSet) {
@@ -396,7 +396,7 @@ func (m *Module) maybePersistFloor(tx core.App, st *txState) error {
 
 // txStateOf returns the group state of the transaction behind tx, creating it
 // (and its cleanup) on first use.
-func (m *Module) txStateOf(tx core.App) *txState {
+func (m *Module) txStateOf(tx kernel.App) *txState {
 	info := tx.TxInfo()
 	if info == nil {
 		return nil
