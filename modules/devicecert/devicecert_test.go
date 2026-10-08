@@ -340,7 +340,7 @@ func TestLeafRenewalThreshold(t *testing.T) {
 		t.Fatal("the leaf key must be stable")
 	}
 
-	c, err := m.Issue(context.Background(), kernel.DeviceCertRequest{Name: "n", Node: "n", Kind: kernel.DeviceCertServer, SANs: req.SANs, SPKI: req.SPKI, Days: 14})
+	c, err := m.Issue(context.Background(), kernel.DeviceCertRequest{Name: "hhub000000000001", Node: "hhub000000000001", Kind: kernel.DeviceCertServer, SANs: req.SANs, SPKI: req.SPKI, Days: 14})
 	if err != nil {
 		t.Fatal(err)
 	}
