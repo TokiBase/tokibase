@@ -35,6 +35,7 @@ import (
 	"github.com/tokibase/tokibase/modules/push"
 	"github.com/tokibase/tokibase/modules/roles"
 	"github.com/tokibase/tokibase/modules/ruleguard"
+	"github.com/tokibase/tokibase/modules/scanner"
 	"github.com/tokibase/tokibase/modules/sessions"
 	"github.com/tokibase/tokibase/modules/store/sqlite"
 	toksync "github.com/tokibase/tokibase/modules/sync"
@@ -460,6 +461,11 @@ func NewWithConfig(config Config) *PocketBase {
 		}
 	}
 
+	// barcode/QR scanner ingestion: serial, evdev and web wedge (opt in with TOKI_SCANNER=on)
+	if scanner.Enabled() {
+		scanner.Register(pb.App.(core.App))
+	}
+
 	// provider-neutral payments: webhooks, intents, entitlements (TOKI_PAYMENTS=off disables)
 	if payments.Enabled() {
 		payments.Register(pb.App.(core.App))
@@ -589,6 +595,7 @@ func (pb *PocketBase) Start() error {
 	if webhooks.Enabled() {
 		pb.RootCmd.AddCommand(webhooks.NewCommand(pb))
 	}
+	pb.RootCmd.AddCommand(scanner.NewCommand(pb))
 	if push.Enabled() {
 		pb.RootCmd.AddCommand(push.NewCommand(pb))
 	}
