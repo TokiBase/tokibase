@@ -18,8 +18,8 @@ make edge GOOS=linux GOARCH=arm64   # cross-compile
 | solo | none | 42.8 MiB | 40.4 MiB | 46 MiB |
 | team | none (= solo) | 42.8 MiB | 40.4 MiB | 46 MiB |
 | cluster | `replica_s3` | 51.1 MiB | 47.6 MiB | 55 MiB |
-| edge | `no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd` | 25.0 MiB | 23.5 MiB | 28 MiB |
-| nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo` | 21.7 MiB | 20.4 MiB | 24 MiB |
+| edge | `no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd no_roles` | 25.0 MiB | 23.5 MiB | 28 MiB |
+| nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo` (edge already has `no_roles`) | 21.7 MiB | 20.4 MiB | 24 MiB |
 
 Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.  darwin/arm64 solo measures 41.6 MiB.
 
@@ -49,6 +49,7 @@ Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.  darw
 | totp | `no_totp` | yes | yes | yes | no |
 | nativeauth | `no_nativeauth` | yes | yes | yes | yes |
 | geo | `no_geo` | yes | yes | yes | no |
+| roles | `no_roles` | yes | yes | no | no |
 | jsvm plugin (pb_hooks, JS migrations) | `no_jsvm` | yes | yes | no | no |
 | migrate command | `no_migratecmd` | yes | yes | no | no |
 | ghupdate (`update` command) | `no_ghupdate` | yes | yes | no | no |

@@ -31,6 +31,7 @@ import (
 	"github.com/tokibase/tokibase/modules/nativeauth"
 	"github.com/tokibase/tokibase/modules/passkey"
 	"github.com/tokibase/tokibase/modules/push"
+	"github.com/tokibase/tokibase/modules/roles"
 	"github.com/tokibase/tokibase/modules/ruleguard"
 	"github.com/tokibase/tokibase/modules/sessions"
 	"github.com/tokibase/tokibase/modules/store/sqlite"
@@ -360,6 +361,9 @@ func NewWithConfig(config Config) *PocketBase {
 	timelint.Register(pb.App.(core.App))
 	geo.Register(pb.App.(core.App))
 
+	// named roles and scoped memberships, rule functions @role()/@member() (see docs/modules/roles.md)
+	roles.Register(pb.App.(core.App))
+
 	// structured logs for every 401/403/429 response (TOKI_DENYLOG=off disables)
 	denylog.Register(pb.App.(core.App))
 
@@ -532,6 +536,7 @@ func (pb *PocketBase) Start() error {
 	pb.RootCmd.AddCommand(batchguard.NewCommand(pb))
 	pb.RootCmd.AddCommand(crypto.NewCommand(pb))
 	pb.RootCmd.AddCommand(geo.NewCommand(pb))
+	pb.RootCmd.AddCommand(roles.NewCommand(pb))
 	if c := wasm.NewCommand(pb); c != nil {
 		pb.RootCmd.AddCommand(c)
 	}
