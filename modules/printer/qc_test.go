@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tokibase/tokibase/internal/escpos"
+	"github.com/tokibase/tokibase/kernel"
 )
 
 func TestE1DataCannotInjectDirectives(t *testing.T) {
@@ -72,8 +73,8 @@ func TestE4ErrorsHideAddresses(t *testing.T) {
 	rec := do(h, "POST", "/api/print", `{"template":"t"}`, user)
 	var res Result
 	_ = json.Unmarshal(rec.Body.Bytes(), &res)
-	e.now = time.Now().Add(time.Minute) // the job was queued with the real clock
-	e.process(t)
+	payload, _ := json.Marshal(map[string]string{"id": res.ID})
+	_ = e.pm.handle(context.Background(), e.app, &kernel.Job{Payload: payload, Attempt: 1, MaxAttempts: 20})
 	if rec = do(h, "GET", "/api/print/"+res.ID, "", user); strings.Contains(rec.Body.String(), "10.1.2") || !strings.Contains(rec.Body.String(), "last_error") {
 		t.Fatalf("job leaks the address or has no error: %s", rec.Body)
 	}
