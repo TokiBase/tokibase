@@ -354,7 +354,12 @@ func processInternalRequest(
 			continue
 		}
 		// only the sync replay may set the node header (rules can rely on it)
-		if infoContext != core.RequestInfoContextSync && strings.EqualFold(k, SyncNodeHeader) {
+		if infoContext != core.RequestInfoContextSync && IsTrustedHeader(k, SyncNodeHeader) {
+			continue
+		}
+		// the device header is set only by modules/devicecert on the real
+		// request (the base headers are cloned above), never by a batch body
+		if IsTrustedHeader(k, DeviceHeader) {
 			continue
 		}
 

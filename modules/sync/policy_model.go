@@ -162,6 +162,9 @@ func checkPolicy(app kernel.App, rec *core.Record) []policyIssue {
 	if col.IsAuth() && dir != DirPull && dir != DirNone {
 		add("error", "direction", "auth collections can only be pull or none in v1 (got %q)", dir)
 	}
+	if systemAllowed(col) && dir != DirPull && dir != DirNone {
+		add("error", "direction", "system collection %q is pull-only (got %q); use --direction pull", col.Name, dir)
+	}
 	strategy := rec.GetString("strategy")
 	if strategy == "" {
 		strategy = "lww"

@@ -3,6 +3,7 @@
 package devicecert
 
 import (
+	"github.com/tokibase/tokibase/apis"
 	"net"
 	"os"
 	"strconv"
@@ -18,6 +19,11 @@ const (
 	MaxLeafDays = 90
 	// MaxClientDays is the longest lifetime of a client certificate.
 	MaxClientDays = 365
+	// MaxOverlapDays bounds --overlap-days and TOKI_DEVICECERT_CA_OVERLAP_DAYS.
+	MaxOverlapDays = 365
+	// EnvAcceptRotation lets a node accept a hub bundle with a root it does not
+	// know yet (a deliberate CA rotation). Off: a node keeps the root it got first.
+	EnvAcceptRotation = "TOKI_DEVICECERT_ACCEPT_ROTATION"
 	// CADays is the lifetime of the root (10 years).
 	CADays = 3650
 	// Backdate is how far NotBefore lies in the past, so a node with a bad RTC
@@ -44,7 +50,7 @@ const (
 	// HeaderDevice is the request header that carries the name of a trusted
 	// mTLS device. The server strips it from every inbound request and sets it
 	// only for a verified client certificate whose route_scope covers the path.
-	HeaderDevice = "X-Toki-Device"
+	HeaderDevice = apis.DeviceHeader
 
 	// NodeDNSSuffix is the DNS name suffix of a node: <node_id>.edge.toki.local.
 	NodeDNSSuffix = ".edge.toki.local"
@@ -89,7 +95,7 @@ func LeafDays() int {
 // CAOverlapDays is TOKI_DEVICECERT_CA_OVERLAP_DAYS (default 30).
 func CAOverlapDays() int {
 	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("TOKI_DEVICECERT_CA_OVERLAP_DAYS"))); err == nil && n >= 0 {
-		return min(n, 3650)
+		return min(n, MaxOverlapDays)
 	}
 	return DefaultCAOverlapDays
 }

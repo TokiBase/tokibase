@@ -495,7 +495,8 @@ func stripSyncNodeHeader() *hook.Handler[*core.RequestEvent] {
 		Id:       DefaultStripSyncNodeHeaderMiddlewareId,
 		Priority: DefaultWWWRedirectMiddlewarePriority + 1,
 		Func: func(e *core.RequestEvent) error {
-			e.Request.Header.Del(SyncNodeHeader)
+			StripTrustedHeader(e.Request.Header, SyncNodeHeader)
+			StripTrustedHeader(e.Request.Header, DeviceHeader)
 			return e.Next()
 		},
 	}

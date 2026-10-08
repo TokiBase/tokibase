@@ -162,9 +162,8 @@ func (s *leafStore) install(certPEM, bundlePEM []byte, persist, pin bool) error 
 		s.mu.RLock()
 		known := s.roots
 		s.mu.RUnlock()
-		if len(known) > 0 && !sharesRoot(known, roots) {
-			return errors.New("devicecert: the hub sent a root this node does not trust (it pins the root it received first); " +
-				"if the hub CA was replaced on purpose, delete " + BundleFile + ", " + CAFile + " and " + LeafCertFile + " in the data dir")
+		if err := checkPin(known, roots, leaf, now); err != nil {
+			return err
 		}
 	}
 	k, err := s.key()
@@ -196,6 +195,47 @@ func (s *leafStore) install(certPEM, bundlePEM []byte, persist, pin bool) error 
 	s.cert = &tls.Certificate{Certificate: [][]byte{leaf.Raw}, PrivateKey: k, Leaf: leaf}
 	s.leaf, s.roots = leaf, roots
 	s.mu.Unlock()
+	return nil
+}
+
+const pinHelp = "if the hub CA was replaced on purpose, set " + EnvAcceptRotation + "=on for one renewal, or delete " +
+	BundleFile + ", " + CAFile + " and " + LeafCertFile + " in the data dir"
+
+// checkPin enforces the root pin of a node that got its bundle from the hub.
+// Without an explicit rotation (EnvAcceptRotation) the leaf must be signed by a
+// root the node already trusts and the bundle may not add roots. With it, the
+// bundle must still contain a root the node trusts and that is active.
+func checkPin(known, roots []Root, leaf *x509.Certificate, now time.Time) error {
+	if len(known) == 0 {
+		return nil
+	}
+	if envOn(EnvAcceptRotation) {
+		for _, k := range known {
+			if !k.Active(now) {
+				continue
+			}
+			for _, r := range roots {
+				if k.Cert.Equal(r.Cert) {
+					return nil
+				}
+			}
+		}
+		return errors.New("devicecert: the hub bundle shares no active root with this node (it pins the root it received first); " + pinHelp)
+	}
+	signed := false
+	for _, k := range known {
+		if k.Active(now) && leaf.CheckSignatureFrom(k.Cert) == nil {
+			signed = true
+		}
+	}
+	if !signed {
+		return errors.New("devicecert: the leaf is not signed by a root this node trusts (it pins the root it received first); " + pinHelp)
+	}
+	for _, r := range roots {
+		if !slices.ContainsFunc(known, func(k Root) bool { return k.Cert.Equal(r.Cert) }) {
+			return errors.New("devicecert: the hub bundle adds a root this node does not know (it pins the root it received first); " + pinHelp)
+		}
+	}
 	return nil
 }
 

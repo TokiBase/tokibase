@@ -90,14 +90,14 @@ func (m *Module) bindHTTP() {
 	})
 }
 
-// scopeMiddleware strips X-Toki-Device from every inbound request and, when
+// scopeMiddleware strips X-Toki-Device (every spelling that snake-cases to x_toki_device) from every inbound request and, when
 // the request carries a verified, unrevoked client certificate of kind client
 // and no auth token, marks it as made by that device if the path is inside the
 // certificate's route_scope. The device is not a user and not the service
 // actor: only routes that ask for it (edgeguard.Device) serve it, and rules can
 // test @request.headers.x_toki_device.
 func (m *Module) scopeMiddleware(e *core.RequestEvent) error {
-	e.Request.Header.Del(HeaderDevice)
+	apis.StripTrustedHeader(e.Request.Header, HeaderDevice)
 	if e.Auth != nil || e.Request.TLS == nil || len(e.Request.TLS.VerifiedChains) == 0 || len(e.Request.TLS.VerifiedChains[0]) == 0 {
 		return e.Next()
 	}

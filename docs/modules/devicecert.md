@@ -48,7 +48,7 @@ toki devicecert list [--json]        # rows of _device_certs
 ```
 toki devicecert issue --name gate-ctrl-1 --days 90 [--scope /api/scan,/api/print,/api/kiosk/status] [--out dir] [--p12 [--p12-pass pw]]
 toki devicecert revoke <serial|name>
-toki devicecert rotate-ca [--overlap-days N]
+toki devicecert rotate-ca [--overlap-days N]   # 0 to 365
 ```
 
 ## Installing the root
@@ -81,7 +81,8 @@ Open the node by one of the names in its leaf: `https://<node_id>.edge.toki.loca
 With `TOKI_DEVICECERT_MTLS=optional|require`, a request on the TLS port with a verified, unrevoked client certificate and NO auth token is a **trusted device** when the `kind=client` row exists on that node and its `route_scope` (comma separated path prefixes) covers the path:
 
 - Route code asks `edgeguard.Device(e)`; the scanner (`/api/scan`, `/api/scan/events`, `/api/scan/scanners`), the printer (`/api/print*`) and `GET /api/kiosk/status` serve it. The actor of a scan or print job is `device:<name>`.
-- Rules can test `@request.headers.x_toki_device != ""`; the header is set by the server only inside the scope and is removed from every inbound request, on every port.
+- Rules can test `@request.headers.x_toki_device != ""`; the header is set by the server only inside the scope and is removed from every inbound request, on every port, whatever its spelling: every header name that snake-cases to `x_toki_device` (`X_Toki_Device`, `x.toki.device`, ...) is deleted, and the `/api/batch` sub-requests cannot set it either (same rule for `X-Toki-Sync-Node`). The sessions module reads its client input from `X-Toki-Session-Device`.
+- A route scope on `/api/scan` or `/api/print` is a full grant of those modules (every scanner, every printer and template, all scan events): there is no per-scanner or per-printer binding and no method restriction yet (planned).
 - It is NOT a user, NOT a superuser and NOT the service actor. A certificate without a scope proves identity and grants nothing. Scopes must have at least two path segments and can never cover `/api/collections`, `/api/sync`, `/api/batch`, `/api/settings`, `/api/backups`, `/api/files`, `/api/realtime`, `/api/logs`, `/api/crons`, `/api/mcp`, `/api/device`, `/api/health` or `/_` (nor a parent such as `/api`).
 - A request that carries an auth token keeps its normal identity. Mapping a certificate to an actor is v1.1.
 
@@ -93,7 +94,7 @@ With `TOKI_DEVICECERT_MTLS=optional|require`, a request on the TLS port with a v
 toki sync policies set _device_certs --direction pull
 ```
 
-`_device_certs` is the only system collection a sync policy may name (explicit allowlist in `modules/sync/syscollections.go`; it is pulled without the view-rule check because its rules are `null`). The in-memory deny set is re-read at most every 15 s and by a background refresh; the check runs in `tls.Config.VerifyConnection`, so a revoked certificate is refused on resumed sessions too. If the table cannot be read for 5 minutes, every client certificate is refused (fail closed). Offline nodes rely on the certificate lifetime. `toki sync revoke <node>` also revokes the certificates named after that node, so a revoked node's leaf is on the deny list. Rows that expired more than 30 days ago are pruned on the hub (the deletes sync to the nodes).
+`_device_certs` is the only system collection a sync policy may name (explicit allowlist in `modules/sync/syscollections.go`; it is pulled without the view-rule check because its rules are `null`). The in-memory deny set is re-read at most every 15 s and by a background refresh; the check runs in `tls.Config.VerifyConnection`, so a revoked certificate is refused on resumed sessions too. If the table cannot be read for 5 minutes (the clock starts at the last good read, background refreshes do not reset it), every client certificate is refused (fail closed). `_device_certs` is pull-only whatever the policy row says: `policies set` with another direction is refused by the lint and the loader forces `pull`; pushes of it are rejected with `policy_direction`. Offline nodes rely on the certificate lifetime. `toki sync revoke <node>` also revokes the certificates named after that node, so a revoked node's leaf is on the deny list. Rows that expired more than 30 days ago are pruned on the hub (the deletes sync to the nodes).
 
 ### CA rotation
 
@@ -101,13 +102,13 @@ toki sync policies set _device_certs --direction pull
 
 ### Device identity
 
-- `GET /api/device/identity` returns `{node_id, hub_id, cert, leaf_fp}`: `cert` is the compact JWS node certificate issued by the hub (empty on the hub itself), `leaf_fp` the SHA-256 fingerprint of the edge TLS leaf.
-- `POST /api/device/attest {"nonce": "<16 to 128 bytes>", "ts": <unix seconds, optional>}` returns `{node_id, hub_id, nonce, ts, alg: "Ed25519", sig (base64), cert}` where `sig = Ed25519(node_key, "toki-attest/v1|<node_id>|<nonce>|<ts>")`. `ts` must be within 5 minutes of the node clock (the node uses its own clock when it is absent). The app verifies the JWS `cert` against the hub public key it trusts (`proto.VerifyCert`) and `sig` with the node public key (`pub` claim), so it knows which enrolled device answered. No key leaves the process. Both endpoints are public, throttled (30 requests per minute and address each), need sync for the identity and answer 501 without it.
+- `GET /api/device/identity` returns `{node_id, hub_id, leaf_fp}` and, only for a request that carries a valid auth token, `cert`: the compact JWS node certificate issued by the hub (empty on the hub itself; its claims include the partition `params`, so it is not served to anonymous callers). `leaf_fp` the SHA-256 fingerprint of the edge TLS leaf.
+- `POST /api/device/attest {"nonce": "<16 to 128 bytes>", "ts": <unix seconds, optional>}` returns `{node_id, hub_id, nonce, ts, alg: "Ed25519", sig (base64), cert}` (`cert` again only with an auth token) where `sig = Ed25519(node_key, "toki-attest/v1|<node_id>|<nonce>|<ts>")`. `ts` must be within 5 minutes of the node clock (the node uses its own clock when it is absent). The app verifies the JWS `cert` against the hub public key it trusts (`proto.VerifyCert`) and `sig` with the node public key (`pub` claim), so it knows which enrolled device answered. No key leaves the process. Both endpoints are reachable without a token (without `cert`), throttled (30 requests per minute and address each), need sync for the identity and answer 501 without it.
 
 ## Security notes
 
 - The deny check, the EKU split and the route scope are three layers: a server leaf has no `clientAuth` (and is rejected as a client in `VerifyConnection` and in the scope middleware), a client certificate has no `serverAuth`, and the middleware requires a `kind=client` row.
-- A node pins the first root it receives (trust on first use) and refuses an expired or not yet valid leaf and a leaf without its own node name. The hub refuses SANs for public addresses, its own addresses, the bare `edge.toki.local` and more than 4 DNS names; a revoked node gets 403 on `/api/sync/devcert` and its poller stops.
+- A node pins the first root it receives (trust on first use): the leaf must be signed by a root it already trusts and the hub bundle may not add roots. A deliberate rotation needs `TOKI_DEVICECERT_ACCEPT_ROTATION=on` on the node for one renewal (the bundle must still contain an active root the node knows). A node also refuses an expired or not yet valid leaf and a leaf without its own node name. The hub refuses SANs for public addresses, its own addresses, the bare `edge.toki.local` and more than 4 DNS names; a revoked node gets 403 on `/api/sync/devcert` and its poller stops.
 - The deny list is read per process: `toki devicecert revoke` in the CLI reaches a running server within 15 s.
 - A node and the hub write the leaf and the roots in one file (`devicecert_bundle.pem`, one atomic rename); `devicecert_leaf.pem` and `devicecert_ca.pem` are derived copies. A damaged `devicecert_leaf.key` is regenerated.
 

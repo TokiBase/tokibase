@@ -878,3 +878,39 @@ func TestNodeBinding(t *testing.T) {
 		t.Fatalf("same node: %d", st)
 	}
 }
+
+func TestSessionThrottleAndRowCap(t *testing.T) {
+	e := setup(t, true)
+	code, d := e.provision(t, nil, "")
+	tok, _ := e.pair(t, code)
+	ok, limited := 0, false
+	for i := 0; i < sessionPerWindow+3; i++ {
+		st, _, _ := e.do(t, req{method: "POST", path: "/api/kiosk/session", cookie: tok})
+		switch st {
+		case 200:
+			ok++
+		case 429:
+			limited = true
+		default:
+			t.Fatalf("session %d: %d", i, st)
+		}
+	}
+	if ok != sessionPerWindow || !limited {
+		t.Fatalf("ok=%d limited=%v", ok, limited)
+	}
+	// the rows kept per device are capped, the oldest are pruned
+	dev := e.dbRow(t, d.Name).Id
+	for i := 0; i < maxSessionRows+20; i++ {
+		e.clk.t = e.clk.t.Add(time.Second)
+		e.m.rememberSID(dev, "sid-"+strconvI(i), e.clk.now().Add(time.Hour))
+	}
+	var n int
+	if err := e.app.DB().NewQuery(`SELECT COUNT(*) FROM {{` + SessionsTable + `}} WHERE [[device]]={:d}`).Bind(map[string]any{"d": dev}).Row(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n > maxSessionRows {
+		t.Fatalf("%d rows kept, cap %d", n, maxSessionRows)
+	}
+}
+
+func strconvI(i int) string { return strconv.Itoa(i) }

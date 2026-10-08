@@ -154,6 +154,8 @@ NOCERT="$(curl -s -o /dev/null -w '%{http_code}' --cacert "$TMP/root.pem" "https
 [ "$NOCERT" = 401 ] || fail "no client cert must get 401 (got $NOCERT)"
 FORGED="$(curl -s -o /dev/null -w '%{http_code}' --cacert "$TMP/root.pem" -H 'X-Toki-Device: gate-ctrl-1' "https://127.0.0.1:$TLS_S1/api/scan/scanners" || true)"
 [ "$FORGED" = 401 ] || fail "a forged X-Toki-Device header must not authenticate (got $FORGED)"
+FORGED_U="$(curl -s -o /dev/null -w '%{http_code}' --cacert "$TMP/root.pem" -H 'X_Toki_Device: gate-ctrl-1' "https://127.0.0.1:$TLS_S1/api/scan/scanners" || true)"
+[ "$FORGED_U" = 401 ] || fail "a forged X_Toki_Device header must not authenticate (got $FORGED_U)"
 # the spoke's own server leaf is not a client certificate
 cp "$S1/devicecert_leaf.key" "$TMP/s1leaf.key"
 if curl -s -o /dev/null --cacert "$TMP/root.pem" --cert "$S1/devicecert_leaf.pem" --key "$TMP/s1leaf.key" "https://127.0.0.1:$TLS_S1/api/scan/scanners" 2>/dev/null; then
@@ -161,7 +163,9 @@ if curl -s -o /dev/null --cacert "$TMP/root.pem" --cert "$S1/devicecert_leaf.pem
 fi
 
 # identity and attest
-curl -fsS --cacert "$TMP/root.pem" "https://127.0.0.1:$TLS_S1/api/device/identity" >"$TMP/ident.json" || fail "identity"
+curl -fsS --cacert "$TMP/root.pem" "https://127.0.0.1:$TLS_S1/api/device/identity" >"$TMP/anon-ident.json" || fail "identity (anonymous)"
+[ -z "$(jget 'd.get("cert","")' <"$TMP/anon-ident.json")" ] || fail "anonymous identity must not carry the node cert"
+curl -fsS --cacert "$TMP/root.pem" -H "Authorization: $TOK" "https://127.0.0.1:$TLS_S1/api/device/identity" >"$TMP/ident.json" || fail "identity"
 [ "$(jget 'd["node_id"]' <"$TMP/ident.json")" = "$NODE_ID" ] || fail "identity node_id"
 [ -n "$(jget 'd["cert"]' <"$TMP/ident.json")" ] || fail "identity cert"
 NONCE="0123456789abcdef0123"

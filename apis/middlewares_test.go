@@ -709,3 +709,73 @@ func TestSyncNodeHeaderIsStripped(t *testing.T) {
 		scenario.Test(t)
 	}
 }
+
+func TestTrustedHeadersStrippedByRuleKey(t *testing.T) {
+	t.Parallel()
+
+	var got []string
+	seen := func(info *core.RequestInfo) string {
+		return info.Headers["x_toki_device"] + "|" + info.Headers["x_toki_sync_node"]
+	}
+	scenarios := []tests.ApiScenario{
+		{
+			Name:   "direct request, other spellings of the trusted headers",
+			Method: http.MethodGet,
+			URL:    "/my/test",
+			Headers: map[string]string{
+				"X_Toki_Device":    "forged",
+				"x.toki.device":    "forged",
+				"X~Toki~Device":    "forged",
+				"X_Toki_Sync_Node": "forged",
+			},
+			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
+				got = nil
+				e.Router.GET("/my/test", func(e *core.RequestEvent) error {
+					info, err := e.RequestInfo()
+					if err != nil {
+						return err
+					}
+					got = append(got, seen(info))
+					return e.String(http.StatusOK, "ok")
+				})
+			},
+			ExpectedStatus:  200,
+			ExpectedContent: []string{"ok"},
+			AfterTestFunc: func(t testing.TB, app *tests.TestApp, res *http.Response) {
+				if len(got) != 1 || got[0] != "|" {
+					t.Fatalf("a spelling of the trusted headers reached the rules: %q", got)
+				}
+			},
+		},
+		{
+			Name:   "batch sub-request, other spellings of the trusted headers",
+			Method: http.MethodPost,
+			URL:    "/api/batch",
+			Headers: map[string]string{
+				"Authorization": "eyJhbGciOiJIUzI1NiJ9.eyJpZCI6ImdrMzkwcWVnczR5NDd3biIsInR5cGUiOiJhdXRoIiwiY29sbGVjdGlvbklkIjoidjg1MXE0cjc5MHJoa25sIiwiZXhwIjoyNTI0NjA0NDYxLCJyZWZyZXNoYWJsZSI6dHJ1ZX0.0ONnm_BsvPRZyDNT31GN1CKUB6uQRxvVvQ-Wc9AZfG0",
+			},
+			Body: strings.NewReader(`{"requests":[{"method":"POST","url":"/api/collections/demo2/records","body":{"title":"xyz"},"headers":{"X-Toki-Device":"forged","X_Toki_Device":"forged","x.toki.sync.node":"forged","X_Toki_Sync_Node":"forged"}}]}`),
+			BeforeTestFunc: func(t testing.TB, app *tests.TestApp, e *core.ServeEvent) {
+				got = nil
+				app.OnRecordCreateRequest("demo2").BindFunc(func(e *core.RecordRequestEvent) error {
+					info, err := e.RequestInfo()
+					if err != nil {
+						return err
+					}
+					got = append(got, seen(info))
+					return e.Next()
+				})
+			},
+			ExpectedStatus:  200,
+			ExpectedContent: []string{`"status":200`},
+			AfterTestFunc: func(t testing.TB, app *tests.TestApp, res *http.Response) {
+				if len(got) != 1 || got[0] != "|" {
+					t.Fatalf("a spelling of the trusted headers reached the sub-request: %q", got)
+				}
+			},
+		},
+	}
+	for _, scenario := range scenarios {
+		scenario.Test(t)
+	}
+}

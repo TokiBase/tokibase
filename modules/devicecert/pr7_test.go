@@ -72,7 +72,8 @@ func newScopeEnv(t *testing.T) *scopeEnv {
 	m.bindHTTP()
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
 		h := func(e *core.RequestEvent) error {
-			return e.JSON(200, map[string]any{"device": edgeguard.Device(e), "hdr": e.Request.Header.Get(HeaderDevice)})
+			info, _ := e.RequestInfo()
+			return e.JSON(200, map[string]any{"device": edgeguard.Device(e), "hdr": e.Request.Header.Get(HeaderDevice), "rule": info.Headers["x_toki_device"]})
 		}
 		se.Router.GET("/api/scan/scanners", h).Bind(edgeguard.RequireAuthOrDevice())
 		se.Router.GET("/api/other/thing", h).Bind(edgeguard.RequireAuthOrDevice())

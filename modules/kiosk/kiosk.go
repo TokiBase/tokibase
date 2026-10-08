@@ -58,7 +58,12 @@ const (
 	throttleWindow = time.Minute
 	pairPerWindow  = 20
 	unlockPerWin   = 30
-	maxThrottleIPs = 4096
+	// sessionPerWindow bounds POST /api/kiosk/session per device per minute;
+	// maxSessionRows caps the _kiosk_sessions rows kept per device (the oldest
+	// are revoked and pruned).
+	sessionPerWindow = 10
+	maxSessionRows   = 100
+	maxThrottleIPs   = 4096
 
 	pinFailures  = 5
 	pinLockBase  = 60 * time.Second
@@ -522,8 +527,27 @@ func (m *Module) rememberSID(device, sid string, expires time.Time) {
 		m.purgeAt = now
 	}
 	m.mu.Unlock()
+	m.capSessions(device)
 	if purge { // sessions whose token already expired need no revocation
 		_, _ = m.app.DB().NewQuery(`DELETE FROM {{` + SessionsTable + `}} WHERE [[expires]] < {:n}`).Bind(dbx.Params{"n": fmtTime(now)}).Execute()
+	}
+}
+
+// capSessions keeps at most maxSessionRows recorded sessions per device: the
+// oldest beyond that are revoked (so a lock still covers them) and deleted.
+func (m *Module) capSessions(device string) {
+	var old []string
+	if err := m.app.DB().NewQuery(`SELECT [[sid]] FROM {{` + SessionsTable + `}} WHERE [[device]]={:d} ORDER BY [[issued]] DESC, [[sid]] DESC LIMIT -1 OFFSET {:o}`).
+		Bind(dbx.Params{"d": device, "o": maxSessionRows}).Column(&old); err != nil || len(old) == 0 {
+		return
+	}
+	for _, sid := range old {
+		if fn := kernel.RevokeSession; fn != nil {
+			if _, err := fn(m.app, sid, "kiosk session cap"); err != nil {
+				m.app.Logger().Warn("kiosk: failed to revoke a pruned session", "error", err)
+			}
+		}
+		_, _ = m.app.DB().NewQuery(`DELETE FROM {{` + SessionsTable + `}} WHERE [[device]]={:d} AND [[sid]]={:s}`).Bind(dbx.Params{"d": device, "s": sid}).Execute()
 	}
 }
 

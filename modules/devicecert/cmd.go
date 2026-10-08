@@ -212,6 +212,9 @@ func issueCommand(app core.App) *cobra.Command {
 			if name == "" {
 				return errors.New("--name is required")
 			}
+			if days <= 0 || days > MaxClientDays {
+				return fmt.Errorf("--days must be between 1 and %d", MaxClientDays)
+			}
 			if !validDNS(name) && !validLabel(name) {
 				return errors.New("--name may contain letters, digits, '-', '_' and '.'")
 			}
@@ -290,6 +293,12 @@ func makeP12(key, crt, ca, out, pass string) error {
 	if err != nil {
 		return errors.New("--p12 needs the openssl binary in PATH")
 	}
+	// create the file 0600 first: openssl truncates and keeps the mode
+	if f, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600); err != nil {
+		return err
+	} else {
+		_ = f.Close()
+	}
 	cmd := exec.Command(bin, "pkcs12", "-export", "-inkey", key, "-in", crt, "-certfile", ca, "-out", out, "-passout", "env:TOKI_P12_PASS")
 	cmd.Env = append(os.Environ(), "TOKI_P12_PASS="+pass)
 	if b, err := cmd.CombinedOutput(); err != nil {
@@ -327,6 +336,9 @@ func rotateCommand(app core.App) *cobra.Command {
 			}
 			if overlap < 0 {
 				overlap = CAOverlapDays()
+			}
+			if overlap > MaxOverlapDays {
+				return fmt.Errorf("--overlap-days must be at most %d", MaxOverlapDays)
 			}
 			ca, retire, err := m.RotateCA(overlap)
 			if err != nil {

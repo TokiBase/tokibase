@@ -385,3 +385,10 @@ func TestPruneSeen(t *testing.T) {
 		t.Fatal("fresh entry pruned")
 	}
 }
+
+// X-Toki-Device is reserved for modules/devicecert (stripped from inbound requests).
+func TestDeviceHeaderIsNotTheCertHeader(t *testing.T) {
+	if strings.EqualFold(DeviceHeader, apis.DeviceHeader) {
+		t.Fatalf("sessions must not read %s", apis.DeviceHeader)
+	}
+}

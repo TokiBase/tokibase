@@ -167,10 +167,14 @@ type denyList struct {
 
 // get returns the deny set; failed is true when it can not be trusted (never
 // loaded, or the reload kept failing past the grace period).
-func (d *denyList) get() (set map[string]bool, failed bool) {
+func (d *denyList) get() (set map[string]bool, failed bool) { return d.read(false) }
+
+// read is get; force skips the ttl cache but keeps the previous set and its
+// timestamp when the reload fails, so the fail-closed grace still applies.
+func (d *denyList) read(force bool) (set map[string]bool, failed bool) {
 	d.mu.Lock()
 	now := d.m.now()
-	if d.set != nil && now.Sub(d.at) < d.ttl {
+	if !force && d.set != nil && now.Sub(d.at) < d.ttl {
 		set = d.set
 		d.mu.Unlock()
 		return set, false
@@ -202,10 +206,7 @@ func (d *denyList) has(serial string) bool {
 
 // refresh forces a reload and returns the size of the set.
 func (d *denyList) refresh() int {
-	d.mu.Lock()
-	d.at = time.Time{}
-	d.mu.Unlock()
-	set, _ := d.get()
+	set, _ := d.read(true)
 	return len(set)
 }
 
