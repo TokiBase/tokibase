@@ -75,7 +75,7 @@ func (m *Module) onExecute(op Op) func(e *core.RecordEvent) error {
         if !m.captures(e.Record.Collection()) { return e.Next() }
         return e.App.RunInTransaction(func(tx kernel.App) error {   // joins an outer tx
             e.App = tx
-            pre := m.snapshotBefore(e)                 // Original() for update/delete
+            pre := m.snapshotBefore(e)                 // implemented as FindRecordById in the tx (Original() can be stale); see docs/modules/sync.md
             if err := m.guardTombstone(tx, e, op); err != nil { return err }
             if err := e.Next(); err != nil { return err }   // crypto has encrypted by now
             return m.record(tx, e, op, pre)            // _changes + _sync_meta (+ tombstone)
@@ -106,7 +106,7 @@ func (h HLC) String() string        // 16 lowercase hex chars, used on the wire 
 func Parse(s string) (HLC, error)
 func Less(a HLC, an string, b HLC, bn string) bool   // total order: (hlc, node id)
 
-type Clock struct { /* mu, last HLC, offset atomic.Int64 (ms), now func() time.Time */ }
+type Clock struct { /* mu, last HLC, offset atomic.Int64 (ns in code), now func() time.Time */ }
 func NewClock(now func() time.Time, last HLC) *Clock
 func (c *Clock) Now() HLC                    // local event; logical overflow spins to next ms
 func (c *Clock) Observe(remote HLC) HLC      // merge on receive (pull apply, push accept)
