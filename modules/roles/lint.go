@@ -5,6 +5,7 @@ package roles
 import (
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/tokibase/tokibase/core"
 )
@@ -52,8 +53,14 @@ func Lint(app core.App) ([]Finding, error) {
 			for _, m := range reRoleCall.FindAllStringSubmatch(*rule, -1) {
 				name := m[1] + m[2]
 				if !known[name] {
-					out = append(out, Finding{Collection: c.Name, Rule: kind, Role: name, Severity: "warning",
-						Message: "role " + name + " does not exist in _roles"})
+					msg := "role " + name + " does not exist in _roles"
+					for k := range known {
+						if strings.EqualFold(k, strings.TrimSpace(name)) {
+							msg += " (role names are case-sensitive; did you mean " + k + "?)"
+							break
+						}
+					}
+					out = append(out, Finding{Collection: c.Name, Rule: kind, Role: name, Severity: "warning", Message: msg})
 				}
 			}
 		}

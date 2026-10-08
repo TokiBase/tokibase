@@ -19,9 +19,12 @@ import (
 const (
 	hookId = "__tokiNativeAuth__"
 
-	EnvSwitch          = "TOKI_NATIVEAUTH"
-	EnvGoogleAudiences = "TOKI_NATIVEAUTH_GOOGLE_AUDIENCES"
-	EnvAppleAudiences  = "TOKI_NATIVEAUTH_APPLE_AUDIENCES"
+	EnvSwitch = "TOKI_NATIVEAUTH"
+	// EnvAudiencesPrefix + <PROVIDER>_AUDIENCES_<COLLECTION> lists extra audiences
+	// of one collection (see [AudienceEnv]). The former global
+	// TOKI_NATIVEAUTH_<PROVIDER>_AUDIENCES variables are ignored (a token for one
+	// app must not open every collection).
+	EnvAudiencesPrefix = "TOKI_NATIVEAUTH_"
 
 	ActionLogin  = "auth.native"
 	ActionFailed = "auth.native_failed"
@@ -118,6 +121,12 @@ func Register(app core.App) *Module {
 		"google": newJWKS(googleJWKSURL, func() time.Time { return m.now() }),
 		"apple":  newJWKS(appleJWKSURL, func() time.Time { return m.now() }),
 	}
+	for _, p := range []string{"GOOGLE", "APPLE"} {
+		if os.Getenv(EnvAudiencesPrefix+p+"_AUDIENCES") != "" {
+			app.Logger().Warn("nativeauth: " + EnvAudiencesPrefix + p + "_AUDIENCES is ignored; use " +
+				EnvAudiencesPrefix + p + "_AUDIENCES_<COLLECTION> or the provider extra.audiences")
+		}
+	}
 	app.OnServe().Bind(&hook.Handler[*core.ServeEvent]{
 		Id: hookId,
 		Func: func(e *core.ServeEvent) error {
@@ -126,6 +135,23 @@ func Register(app core.App) *Module {
 		},
 	})
 	return m
+}
+
+// AudienceEnv returns the name of the env var with the extra audiences of
+// provider ("google" or "apple") on the named collection, for example
+// TOKI_NATIVEAUTH_GOOGLE_AUDIENCES_USERS. Characters of the collection name
+// other than letters and digits become "_".
+func AudienceEnv(provider, collection string) string {
+	up := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r - 32
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		}
+		return '_'
+	}, collection)
+	return EnvAudiencesPrefix + strings.ToUpper(provider) + "_AUDIENCES_" + up
 }
 
 func splitList(v string) []string {

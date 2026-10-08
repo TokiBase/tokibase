@@ -28,33 +28,37 @@ func init() {
 
 type resolveFn = func(fexpr.Token) (*search.ResolverResult, error)
 
-// @role("name") | @role("name", scope)
+// @role("name") | @role("name", scope, "collection")
+//
+// A scoped grant is matched on the scope record id AND its collection (record
+// ids are only unique per collection), so the collection of the scope is a
+// mandatory string literal (collection name or id).
 func roleFunc(resolve resolveFn, args ...fexpr.Token) (*search.ResolverResult, error) {
-	if len(args) < 1 || len(args) > 2 {
-		return nil, fmt.Errorf("[%s] expected 1 or 2 arguments (name, [scope]), got %d", FuncRole, len(args))
+	if len(args) != 1 && len(args) != 3 {
+		return nil, fmt.Errorf("[%s] expected 1 or 3 arguments (name, [scope, \"scopeCollection\"]), got %d", FuncRole, len(args))
 	}
 	if args[0].Type != fexpr.TokenText || strings.TrimSpace(args[0].Literal) == "" {
 		return nil, fmt.Errorf("[%s] the role name must be a non-empty string literal", FuncRole)
 	}
-	var scope *fexpr.Token
-	if len(args) == 2 {
-		scope = &args[1]
+	var scope, scopeCol *fexpr.Token
+	if len(args) == 3 {
+		scope, scopeCol = &args[1], &args[2]
 	}
-	return build(resolve, FuncRole, args[0].Literal, scope)
+	return build(resolve, FuncRole, args[0].Literal, scope, scopeCol)
 }
 
-// @member(scope)
+// @member(scope, "collection")
 func memberFunc(resolve resolveFn, args ...fexpr.Token) (*search.ResolverResult, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("[%s] expected 1 argument (scope), got %d", FuncMember, len(args))
+	if len(args) != 2 {
+		return nil, fmt.Errorf("[%s] expected 2 arguments (scope, \"scopeCollection\"), got %d", FuncMember, len(args))
 	}
-	return build(resolve, FuncMember, "", &args[0])
+	return build(resolve, FuncMember, "", &args[0], &args[1])
 }
 
 // build emits an EXISTS subquery over the memberships of the requesting auth
 // record. Every value is a bound parameter. A guest has an empty auth id, which
 // never matches (the id is also checked for non-emptiness explicitly).
-func build(resolve resolveFn, fn, role string, scope *fexpr.Token) (*search.ResolverResult, error) {
+func build(resolve resolveFn, fn, role string, scope, scopeCol *fexpr.Token) (*search.ResolverResult, error) {
 	authId, err := resolve(fexpr.Token{Type: fexpr.TokenIdentifier, Literal: "@request.auth.id"})
 	if err != nil || authId.Identifier == "" {
 		return nil, fmt.Errorf("[%s] failed to resolve @request.auth.id: %v", fn, err)
@@ -109,6 +113,13 @@ func build(resolve resolveFn, fn, role string, scope *fexpr.Token) (*search.Reso
 			params[k] = v
 		}
 		sb.WriteString(" AND [[" + m + ".scope]] = " + sr.Identifier + " AND " + sr.Identifier + " != ''")
+		if scopeCol == nil || scopeCol.Type != fexpr.TokenText || strings.TrimSpace(scopeCol.Literal) == "" {
+			return nil, fmt.Errorf("[%s] the scope collection must be a non-empty string literal (collection name or id)", fn)
+		}
+		cp := "tkc" + security.PseudorandomString(8)
+		params[cp] = strings.TrimSpace(scopeCol.Literal)
+		sb.WriteString(" AND [[" + m + ".scope_collection]] IN (SELECT [[id]] FROM {{_collections}} WHERE [[id]] = {:" + cp + "}" +
+			" OR [[name]] = {:" + cp + "})")
 	}
 	sb.WriteString(" AND ([[" + m + ".expires]] = '' OR [[" + m + ".expires]] > {:" + nowP + "}))")
 

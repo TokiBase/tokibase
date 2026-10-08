@@ -6,9 +6,9 @@ import (
 	"crypto"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -69,7 +69,11 @@ func (m *Module) verifyToken(provider, raw string, audiences []string) (*verifie
 		jwt.WithTimeFunc(m.now),
 		jwt.WithExpirationRequired(),
 		jwt.WithIssuedAt(),
+		jwt.WithStrictDecoding(),
 	)
+	if err := canonicalJWT(raw); err != nil {
+		return nil, err
+	}
 	claims := jwt.MapClaims{}
 	_, err := parser.ParseWithClaims(raw, claims, func(t *jwt.Token) (any, error) {
 		kid, _ := t.Header["kid"].(string)
@@ -128,15 +132,46 @@ func (m *Module) verifyToken(provider, raw string, audiences []string) (*verifie
 	if jti := strClaim(claims, "jti"); jti != "" {
 		v.ReplayKey = provider + ":jti:" + jti
 	} else {
-		h := sha256.Sum256([]byte(raw))
+		// key on the signed content (header.payload) only: the signature segment
+		// is malleable (base64 tail bits, ECDSA s -> n-s)
+		i := strings.LastIndexByte(raw, '.')
+		h := sha256.Sum256([]byte(raw[:i]))
 		v.ReplayKey = provider + ":h:" + hex.EncodeToString(h[:])
 	}
 	return v, nil
 }
 
-// checkNonce compares the request nonce with the token claim. The claim may be
-// the nonce itself (Google) or its hex SHA-256 (the usual Apple pattern).
-func checkNonce(v *verified, reqNonce string) error {
+// canonicalJWT rejects a compact token whose segments are not canonical
+// unpadded base64url (padding, stray characters, non-zero trailing bits), so
+// one token has exactly one string form.
+func canonicalJWT(raw string) error {
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 {
+		return errors.New("malformed token")
+	}
+	for _, p := range parts {
+		if p == "" {
+			return errors.New("malformed token")
+		}
+		b, err := base64.RawURLEncoding.Strict().DecodeString(p)
+		if err != nil || base64.RawURLEncoding.EncodeToString(b) != p {
+			return errors.New("non-canonical token encoding")
+		}
+	}
+	return nil
+}
+
+// checkNonce compares the request nonce (the RAW value the app generated) with
+// the token claim. The comparison depends on the provider and never accepts the
+// claim as its own proof:
+//   - apple: the claim must be the lowercase-hex SHA-256 of the raw nonce
+//     (what sign_in_with_apple is given as `nonce`);
+//   - google: the claim must equal the raw nonce (google_sign_in `nonce`).
+//
+// A holder of the token can read the claim, but for Apple it cannot derive the
+// raw value from it. For Google the claim IS the raw value, so there the nonce
+// only binds the token to the app instance that created it.
+func checkNonce(provider string, v *verified, reqNonce string) error {
 	if reqNonce == "" {
 		if v.Nonce != "" {
 			return errors.New("token carries a nonce but none was submitted")
@@ -149,10 +184,17 @@ func checkNonce(v *verified, reqNonce string) error {
 		}
 		return errors.New("token has no nonce")
 	}
-	h := sha256.Sum256([]byte(reqNonce))
-	if subtle.ConstantTimeCompare([]byte(v.Nonce), []byte(reqNonce)) == 1 ||
-		subtle.ConstantTimeCompare([]byte(strings.ToLower(v.Nonce)), []byte(hex.EncodeToString(h[:]))) == 1 {
+	want := reqNonce
+	if provider == "apple" {
+		h := sha256.Sum256([]byte(reqNonce))
+		want = hex.EncodeToString(h[:])
+		if subtle.ConstantTimeCompare([]byte(strings.ToLower(v.Nonce)), []byte(want)) == 1 {
+			return nil
+		}
+		return errors.New("nonce mismatch")
+	}
+	if subtle.ConstantTimeCompare([]byte(v.Nonce), []byte(want)) == 1 {
 		return nil
 	}
-	return fmt.Errorf("nonce mismatch")
+	return errors.New("nonce mismatch")
 }

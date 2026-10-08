@@ -65,7 +65,7 @@ byte offsets and the tokenizer was deliberately not rewritten, so offsets are no
 | Strings | `'a'`, `"a"` with escapes | `Literal{String}` |
 | Numbers | `1`, `-2.5`, `1e3` | `Literal{Number}` |
 | null/true/false | identifiers, case-insensitive | `Ident{Kind: KindKeyword}` |
-| Functions | `geoDistance(lonA, latA, lonB, latB)`, `strftime(fmt, [time, mods...])`, `@role(name[, scope])`, `@member(scope)` (SQLite only, from `modules/roles`, compare with `= true`) | `Call` |
+| Functions | `geoDistance(lonA, latA, lonB, latB)`, `strftime(fmt, [time, mods...])`, `@role(name[, scope, "collection"])`, `@member(scope, "collection")` (SQLite only, from `modules/roles`, compare with `= true`) | `Call` |
 | Comments | `// ...`, `/* ... */` | dropped by the scanner |
 
 Keywords stay identifiers (not literal nodes) because the resolver gets the first chance to
