@@ -327,7 +327,7 @@ func TestLegacyASTParity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s legacy: %v", raw, err)
 		}
-		db := e.app.DB().(*dbx.DB)
+		db := &dbx.DB{}
 		ps1, ps2 := dbx.Params{}, dbx.Params{}
 		a := normalize(viaAST.Build(db, ps1), ps1)
 		b := normalize(legacy.Build(db, ps2), ps2)
