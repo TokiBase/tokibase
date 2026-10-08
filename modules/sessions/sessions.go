@@ -185,6 +185,9 @@ func Register(app core.App) *Module {
 	kernel.OnAuthTokenIssue = m.onIssue
 	// sync actor grants are validated against the session at apply time
 	kernel.SessionActive = sessionActive
+	// modules/kiosk locks a device by revoking its session
+	kernel.RevokeSession = Revoke
+	kernel.RevokeUserSessions = RevokeUser
 
 	// validate
 	app.OnServe().Bind(&hook.Handler[*core.ServeEvent]{

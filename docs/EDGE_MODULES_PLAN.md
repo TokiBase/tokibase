@@ -337,7 +337,7 @@ Order matters. PRs 1 to 3 have no hardware dependency and can be built and teste
 | 1 (done) | `internal/devio` + `internal/escpos` | Linux serial and evdev readers, TCP/file dialer with the CIDR policy, ESC/POS builder, codepages, QR (native plus raster). Pure unit tests with fakes. | none |
 | 2 (done) | `printer` PR1 | Collections, template DSL, `print.send` handler, status/paper-out logic, `/api/print*`, CLI, marker/stub, `no_printer`, docs, TCP-stub integration test. | 1 |
 | 3 (done) | `scanner` PR1 | `_scanners`/`_scan_events`, serial and web ingestion, dedupe, `@scan` topic, `/api/scan*`, CLI, `no_scanner`, docs. | 1 |
-| 4 | `kiosk` PR1 | `_kiosk_devices`, pair/session/status/lock/unlock, embedded `kiosk.js` (indicator, wedge capture, lock overlay), CLI, `no_kiosk`, docs. Wires in the scanner wedge hook if PR 3 is merged. | 0, optionally 3 |
+| 4 (done) | `kiosk` PR1 | `_kiosk_devices`, pair/session/status/lock/unlock, embedded `kiosk.js` (indicator, wedge capture, lock overlay), CLI, `no_kiosk`, docs. Wires in the scanner wedge hook if PR 3 is merged. | 0, optionally 3 |
 | 5 (evdev reader and `devices` done in PR 3) | `scanner` PR2 | evdev reader with `EVIOCGRAB`, `toki scan devices`, 32/64-bit struct tests, udev docs. | 3 |
 | 6 | `devicecert` PR1 | Hub CA with wrapped key, `_device_certs`, `/api/sync/devcert` and spoke renewal in `modules/sync`, leaf key, `:8443` listener, `toki devicecert ca|status|list`, `no_devicecert`. | 0 |
 | 7 | `devicecert` PR2 | Client-cert issue/revoke, mTLS route allowlist, deny-list sync policy, `/api/device/identity` and `/api/device/attest`, rotate-ca. | 6 |
@@ -359,6 +359,16 @@ Order matters. PRs 1 to 3 have no hardware dependency and can be built and teste
 ### Status of PR 3 (done)
 
 `modules/scanner`: `_scanners`/`_scan_events` (raw SQL writes, no hooks, local only), serial and evdev readers over `internal/devio` with reconnect backoff and health block `scanner`, web wedge (`POST /api/scan`, `/scan/wedge.js`), dedupe LRU plus `client_seq`, `@scan` topic restricted to authenticated clients (`TOKI_SCAN_TOPIC_AUTH`), `GET /api/scan/events` and `/api/scan/scanners`, `toki scan list|listen|simulate|devices`, `no_scanner` (nano), `tests/e2e/scanner.sh`, docs in `docs/modules/scanner.md`. The evdev reader and `toki scan devices` landed here, so PR 5 only has what is left (real-device checks). Decisions: the dedupe window starts at the first read and is not extended; `terminator` is validated but all of CR/LF/CRLF end a scan in v1; a non-positive `dedupe_ms` of 0 means the default and a negative value disables it.
+
+### Status of PR 4 (done)
+
+`modules/kiosk` as specified in section 4, with these decisions:
+- Two small seams were added so that modules do not import each other: `kernel.RevokeSession` and `kernel.RevokeUserSessions` (set by `modules/sessions`), and `apis.HealthExtra(app, name)` to read the `printer` health block for the status route.
+- The session is `NewStaticAuthToken(ttl_hours)`, a non-refreshable token, so `kiosk.js` fetches a new one at 80% of the TTL. Without the `sessions` module the TTL is capped at 10 minutes (a token cannot be revoked then).
+- `lock` needs a PIN (409 otherwise); the lock flag is stored in `_kiosk_devices.locked`, so a restart keeps a locked device locked. The PIN brake is in memory.
+- The wedge hook is wired: `kiosk.js` loads `/scan/wedge.js` and starts it with the session token. The SDK key is `pocketbase_auth` (the SDK default); `pb_auth` is written as well.
+- `GET /kiosk/pair` is a minimal page so the pairing URL works in any browser; `toki kiosk` is registered only when `TOKI_KIOSK=on` (as `print`).
+- e2e: `tests/e2e/kiosk.sh` (CI job `e2e-kiosk`, which also runs `node --test modules/kiosk/kiosk.test.js`).
 
 Parallelism: after PR 0 and 1, PRs 2, 3 and 6 are independent.
 

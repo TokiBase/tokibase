@@ -19,7 +19,7 @@ make edge GOOS=linux GOARCH=arm64   # cross-compile
 | team | none (= solo) | 42.8 MiB | 40.4 MiB | 47 MiB |
 | cluster | `replica_s3` | 51.1 MiB | 47.6 MiB | 55 MiB |
 | edge | `no_payments no_mcp no_passkey no_push no_webhooks no_ui no_adminlock no_wasm no_jsvm no_ghupdate no_migratecmd no_roles` | 25.5 MiB | 24.0 MiB | 28 MiB |
-| nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo no_thumbs no_oauth2 no_s3fs no_printer no_scanner` (edge already has `no_roles`) | 21.1 MiB | 19.9 MiB | 23 MiB |
+| nano | edge + `no_replica no_backupcheck no_audit no_totp no_geo no_thumbs no_oauth2 no_s3fs no_printer no_scanner no_kiosk` (edge already has `no_roles`) | 21.1 MiB | 19.9 MiB | 23 MiB |
 
 Sizes: stripped (`-s -w`, `-trimpath`, `CGO_ENABLED=0`) `./examples/base`.  darwin/arm64 solo measures 41.6 MiB.
 
@@ -33,6 +33,7 @@ Each edge module PR records its measured cost here (linux/amd64, stripped, `make
 | 1 | `internal/devio` + `internal/escpos` (all entry points forced reachable with a temporary probe, nothing links them yet) | 27,623,584 B | 27,742,368 B (26.46 MiB) | +118,784 B (116 KiB); linux/arm64 with probe 25,886,880 B (24.69 MiB) |
 | 2 | `modules/printer` (collections, `print.send`, `/api/print*`, `toki print`; compiled in, runtime opt-in) | 27,660,448 B (26.38 MiB, origin/main) | 27,914,400 B (26.62 MiB) | +253,952 B (248 KiB); budget 28 MiB leaves 1.38 MiB |
 | 3 | `modules/scanner` (serial, evdev, web wedge, `@scan`, `/api/scan*`, `toki scan`; `wedge.js` embedded) | 27,914,400 B (origin/main with printer) | 28,061,856 B (26.76 MiB) | +147,456 B (144 KiB) |
+| 4 | `modules/kiosk` (pairing, device sessions, `/api/kiosk*`, `kiosk.js` embedded, `toki kiosk`; plus the `sessions` revoke seam and `apis.HealthExtra`) | 28,131,488 B (26.83 MiB, origin/main 4db9ab73) | 28,225,696 B (26.92 MiB) | +94,208 B (92 KiB); budget 28 MiB leaves 1.08 MiB |
 
 `go-qrcode` (raster QR fallback) is already linked into edge through `modules/totp`, so it adds nothing; a hand written encoder was not needed. `x/text/encoding/charmap` is not linked in edge, so the codepages are hand tables (about 2 KiB). The 25.5 MiB in the table above predates later PRs; the measured baseline at PR 1 is 26.34 MiB.
 
@@ -55,6 +56,7 @@ Each edge module PR records its measured cost here (linux/amd64, stripped, `make
 | walreplica | `no_replica` (s3 backend: `replica_s3`) | file:// | file:// + s3:// | file:// | no |
 | webhooks | `no_webhooks` | yes | yes | no | no |
 | scanner (opt in: `TOKI_SCANNER=on`) | `no_scanner` | yes | yes | yes | no |
+| kiosk (opt in: `TOKI_KIOSK=on`) | `no_kiosk` | yes | yes | yes | no |
 | push | `no_push` | yes | yes | no | no |
 | passkey | `no_passkey` | yes | yes | no | no |
 | mcp | `no_mcp` | yes | yes | no | no |

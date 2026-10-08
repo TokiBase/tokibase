@@ -164,3 +164,11 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod }
       - run: tests/e2e/scanner.sh
+  e2e-kiosk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: tests/e2e/kiosk.sh
+      - run: node --test modules/kiosk/kiosk.test.js
