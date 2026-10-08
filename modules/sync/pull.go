@@ -162,7 +162,10 @@ func (m *Module) pullChange(app kernel.App, r *pullRow) (proto.PullChange, bool,
 	if err != nil {
 		return proto.PullChange{}, false, nil // collection deleted since
 	}
-	p := m.pol.For(col)
+	p, perr := m.pol.For(col)
+	if perr != nil {
+		return proto.PullChange{}, false, perr
+	}
 	if p == nil || (p.Direction != DirBoth && p.Direction != DirPull) {
 		return proto.PullChange{}, false, nil
 	}
@@ -184,7 +187,7 @@ func (m *Module) pullChange(app kernel.App, r *pullRow) (proto.PullChange, bool,
 			pc.Op, pc.Patch, pc.Hash = OpDelete, json.RawMessage(`{}`), ""
 			return pc, true, nil
 		}
-		vals, err := fieldValues(rec, fields)
+		vals, err := fieldValues(rec, fields, p.Types)
 		if err != nil {
 			return pc, false, err
 		}
@@ -220,7 +223,7 @@ func (m *Module) pullChange(app kernel.App, r *pullRow) (proto.PullChange, bool,
 		if !loaded {
 			loaded = true
 			if rec, _ := app.FindRecordById(col.Id, r.Record); rec != nil {
-				if cur, err = fieldValues(rec, fields); err != nil {
+				if cur, err = fieldValues(rec, fields, p.Types); err != nil {
 					return pc, false, err
 				}
 			}

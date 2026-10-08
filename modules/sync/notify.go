@@ -83,8 +83,10 @@ func (m *Module) bindHubNotify() {
 		if o := kernel.SyncOriginFrom(e.Context); o != nil && o.Mode == kernel.SyncModePush {
 			return err // the push handler notifies once per batch
 		}
-		if m.ready.Load() && m.pol.For(e.Record.Collection()) != nil {
-			m.notifyHead()
+		if m.ready.Load() {
+			if p, _ := m.pol.For(e.Record.Collection()); p != nil {
+				m.notifyHead()
+			}
 		}
 		return err
 	}

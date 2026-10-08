@@ -181,7 +181,7 @@ func (m *Module) pushHandler(e *core.RequestEvent) error {
 		results = append(results, res...)
 		i = j
 	}
-	m.touchNode(e.App, nodeID)
+	m.touchSeen(e.App, nodeID)
 	m.notifyHead()
 
 	acked, err := m.pushedSeq(e.App, nodeID)
@@ -200,7 +200,7 @@ func (m *Module) pushedSeq(app kernel.App, nodeID string) (int64, error) {
 	return int64(v), err
 }
 
-func (m *Module) touchNode(app kernel.App, nodeID string) {
+func (m *Module) touchSeen(app kernel.App, nodeID string) {
 	_, _ = app.NonconcurrentDB().NewQuery("UPDATE " + NodesCollection + " SET last_seen={:t} WHERE id={:id}").
 		Bind(dbx.Params{"t": m.created(), "id": nodeID}).Execute()
 }
@@ -353,7 +353,10 @@ func (m *Module) insertRevert(tx kernel.App, nodeID, colRef, recID string) (int6
 	if err != nil {
 		return 0, nil
 	}
-	p := m.pol.For(col)
+	p, err := m.pol.For(col)
+	if err != nil {
+		return 0, err
+	}
 	if p == nil {
 		return 0, nil
 	}
@@ -363,7 +366,7 @@ func (m *Module) insertRevert(tx kernel.App, nodeID, colRef, recID string) (int6
 	if rec == nil {
 		r.op, r.patch = OpDelete, "{}"
 	} else {
-		vals, err := fieldValues(rec, syncedFields(col, p))
+		vals, err := fieldValues(rec, syncedFields(col, p), p.Types)
 		if err != nil {
 			return 0, err
 		}
@@ -464,14 +467,16 @@ func (m *Module) applyOne(tx kernel.App, nodeID string, c *hubChange) (*outcome,
 	if err != nil {
 		return nil, reject(proto.CodePolicyDirection, "unknown collection")
 	}
-	p := m.pol.For(col)
+	p, perr := m.pol.For(col)
+	if perr != nil {
+		return nil, perr
+	}
 	if p == nil || (p.Direction != DirBoth && p.Direction != DirPush) {
 		return nil, reject(proto.CodePolicyDirection, "the collection does not accept pushes")
 	}
-	if c.hlc.Physical().After(m.now().Add(maxDrift())) {
+	if _, err := m.Clock().ObserveBounded(c.hlc, maxDrift()); err != nil {
 		return nil, reject(proto.CodeFutureHLC, "the change hlc is too far in the future")
 	}
-	m.Clock().Observe(c.hlc)
 
 	db := tx.NonconcurrentDB()
 	origin := &kernel.SyncOrigin{Mode: kernel.SyncModePush, Node: nodeID, HLC: uint64(c.hlc), ChangeID: c.ID, Actor: c.Actor}
@@ -549,7 +554,7 @@ func (m *Module) applyOne(tx kernel.App, nodeID string, c *hubChange) (*outcome,
 		rec = core.NewRecord(col)
 		rec.Set("id", c.Record)
 	} else {
-		if pre, err = fieldValues(rec, fields); err != nil {
+		if pre, err = fieldValues(rec, fields, p.Types); err != nil {
 			return nil, err
 		}
 	}
@@ -590,7 +595,7 @@ func (m *Module) applyOne(tx kernel.App, nodeID string, c *hubChange) (*outcome,
 	if err != nil {
 		return nil, err
 	}
-	post, err := fieldValues(fresh, fields)
+	post, err := fieldValues(fresh, fields, p.Types)
 	if err != nil {
 		return nil, err
 	}

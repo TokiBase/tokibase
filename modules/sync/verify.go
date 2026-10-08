@@ -75,7 +75,10 @@ func Verify(app core.App) (*VerifyReport, error) {
 	}
 	sort.Slice(cols, func(i, j int) bool { return cols[i].Name < cols[j].Name })
 	for _, col := range cols {
-		p := pc.For(col)
+		p, err := pc.For(col)
+		if err != nil {
+			return nil, err
+		}
 		if p == nil {
 			continue
 		}

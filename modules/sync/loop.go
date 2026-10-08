@@ -24,15 +24,19 @@ const EnvPage = "TOKI_SYNC_PAGE"
 type backend struct{ m *Module }
 
 func (b backend) Policy(col *core.Collection) *client.PolicyView {
-	p := b.m.pol.For(col)
-	if p == nil {
+	p, err := b.m.pol.For(col)
+	if err != nil || p == nil {
 		return nil
 	}
 	return &client.PolicyView{Direction: p.Direction, Types: p.Types, Exclude: p.Exclude}
 }
 
 func (b backend) Rehash(tx kernel.App, rec *core.Record) error {
-	hash, err := RecordHash(rec, b.m.pol.For(rec.Collection()))
+	p, err := b.m.pol.For(rec.Collection())
+	if err != nil {
+		return err
+	}
+	hash, err := RecordHash(rec, p)
 	if err != nil {
 		return err
 	}
@@ -111,8 +115,10 @@ func (m *Module) bindLoop() {
 	})
 	after := func(e *core.RecordEvent) error {
 		err := e.Next()
-		if c := m.loop.Load(); c != nil && kernel.SyncOriginFrom(e.Context) == nil && m.pol.For(e.Record.Collection()) != nil {
-			c.NotifyWrite()
+		if c := m.loop.Load(); c != nil && kernel.SyncOriginFrom(e.Context) == nil {
+			if p, _ := m.pol.For(e.Record.Collection()); p != nil {
+				c.NotifyWrite()
+			}
 		}
 		return err
 	}
