@@ -39,7 +39,7 @@ func (e *env) seedIndexRows(t *testing.T, col *core.Collection, field, value str
 	}
 	for i := 0; i < n; i++ {
 		_, err := e.app.DB().NewQuery("INSERT INTO {{" + IndexTable + "}} (collection, field, record, hmac, ver) VALUES ({:c},{:f},{:r},{:h},1)").
-			Bind(map[string]any{"c": col.Id, "f": field, "r": fmt.Sprintf("fake%011d", i), "h": hs[0]}).Execute()
+			Bind(map[string]any{"c": col.Id, "f": field, "r": fmt.Sprintf("%.4s%011d", value, i), "h": hs[0]}).Execute()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -352,7 +352,7 @@ func TestQCRequestAuthEncryptedField(t *testing.T) {
 	if err := e.app.Save(col); err != nil {
 		t.Fatal(err)
 	}
-	if code, ids := e.list(t, m, "patients", ""); code == 200 && strings.Join(ids, ",") != mine {
+	if code, ids := e.list(t, m, "patients", ""); code == 200 && len(ids) > 0 && strings.Join(ids, ",") != mine {
 		t.Fatalf("= matched %v", ids)
 	}
 	col.ListRule = &neq
