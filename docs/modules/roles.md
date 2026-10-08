@@ -34,7 +34,7 @@ A function cannot stand alone in a rule expression, compare it with `true`:
 
 The scope collection is a mandatory string literal (name or id): `@role("x", team)` and `@member(team)` are refused. A relation field cannot tell the rule compiler which collection it points to, so say it explicitly; this stops a record of another collection that reuses the id (ids can be chosen by clients) from matching someone else's grant. `= false` / `!= true` negate. Guests (no auth) are always false. A global grant does not imply every scope: scopes are matched exactly. The role name must be a string literal; the scope may be a field identifier (single-value; a multi-value field is rejected) or a literal. Works in all rules, filters (including a `filter=` sent by a client; it can only observe the caller's own memberships) and in `fieldperm` rules, with both compilers (legacy and `TOKI_RULE_AST=1`); SQLite only (other dialects return `rule.ErrUnsupported`). MCP agents (`_agents`) can hold roles and are checked through the Go API; they are not `@request.auth` records, so rules do not see them.
 
-Example: `listRule = "@member(team) = true || @role(\"admin\") = true"`.
+Example: `listRule = "@member(team, \"teams\") = true || @role(\"admin\") = true"`.
 
 ### SQL shape
 
