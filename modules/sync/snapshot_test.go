@@ -198,9 +198,6 @@ func TestSnapshotPartitionAndNoTombstoneLeak(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := newTicketSpoke(t, h, "gate-a", "A")
-	if _, err := n.c.Handshake(ctxb); err != nil {
-		t.Fatal(err)
-	}
 	if err := n.c.Bootstrap(ctxb); err != nil {
 		t.Fatal(err)
 	}
