@@ -117,7 +117,7 @@ func (c *Clock) WallNow() time.Time          // now()+offset, used for client_ti
 
 - Persistence: at boot, `last = max(SELECT max(hlc) FROM _changes, _sync_state.hlc_floor)`. `hlc_floor` is written every 1000 ticks and on stop, so a pruned `_changes` never lets the clock go backwards.
 - The hub's `Observe` rejects remote HLCs whose physical part is more than `TOKI_SYNC_MAX_DRIFT` (5 m) ahead of hub wall time (`future_hlc`).
-- Tests inject `now`. e2e uses `TOKI_SYNC_TEST_CLOCK_OFFSET` (only honored when `TOKI_SYNC_TEST=1`) to compress 48 h.
+- Tests inject `now`. e2e uses `TOKI_SYNC_TEST_CLOCK_OFFSET` (only honored when `TOKI_SYNC_TEST=1` and the binary is built with `-tags synctest`; a release build refuses to start with the variable set) to compress 48 h.
 
 ### 1.4 Node identity and `device-cert`
 

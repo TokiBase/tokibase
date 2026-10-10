@@ -302,7 +302,7 @@ Triggers: the handshake says `rebootstrap`, pull answers 410, `_sync_cursors.sta
 - `toki sync rebootstrap <node>` (hub): status `rebootstrap`; the next handshake answers `rebootstrap: true`. Audit `sync.node.rebootstrap`.
 - `TOKI_SYNC_AUTO_HEAL=1`: two hash mismatches in a row, or two digest checks in a row (at most every `TOKI_SYNC_DIGEST_INTERVAL`, default 10 min, only without pending changes and only when the node is at the hub head) that the hub reports as different, schedule a re-bootstrap. At most 2 heals per 24 h (`_sync_state.heal_log`); after that the loop stops healing, `Status().Heal` is `heal_exhausted`, `last_error` says so and one error is logged, until the cause is fixed or `toki sync rebootstrap` is run. A digest ignores rows without hub meta (`hlc 0`) on both sides and is not compared for subsets or fieldperm-reduced rows.
 - Compaction (hub) keeps every `_changes` row with `seq >= start_seq` of a snapshot in progress and does not mark that node `stale` while the pin lives (expiry: the snapshot id's 24 h).
-- New env: `TOKI_SYNC_SNAPSHOT_PAGE` (default 1000, halved after a too-large response), `TOKI_SYNC_AUTO_HEAL`, `TOKI_SYNC_DIGEST_INTERVAL`, `TOKI_SYNC_BOOTSTRAP_BLOCK_READS`, `TOKI_SYNC_TEST` + `TOKI_SYNC_TEST_CLOCK_OFFSET` (shifts the wall clock of the process, for tests).
+- New env: `TOKI_SYNC_SNAPSHOT_PAGE` (default 1000, halved after a too-large response), `TOKI_SYNC_AUTO_HEAL`, `TOKI_SYNC_DIGEST_INTERVAL`, `TOKI_SYNC_BOOTSTRAP_BLOCK_READS`, `TOKI_SYNC_TEST` + `TOKI_SYNC_TEST_CLOCK_OFFSET` (shifts the wall clock of the process, for tests; compiled only with `-tags synctest`).
 
 ### Hub epoch (design §3.9)
 
@@ -408,7 +408,7 @@ Going online, entering or leaving a background slot, and leaving `Metered` kick 
 
 ### Test clock file
 
-`TOKI_SYNC_TEST=1` plus `TOKI_SYNC_TEST_CLOCK_FILE=<path>` shifts the wall clock of the process by the duration in the file (`48h`, `1h30m`, `2d`), re-read every 50 ms. A driver that writes one file read by the hub and all spokes advances them in lockstep, which `TOKI_SYNC_TEST_CLOCK_OFFSET` (fixed at start) cannot do. Test use only.
+`TOKI_SYNC_TEST=1` plus `TOKI_SYNC_TEST_CLOCK_FILE=<path>` shifts the wall clock of the process by the duration in the file (`48h`, `1h30m`, `2d`), re-read every 50 ms. A driver that writes one file read by the hub and all spokes advances them in lockstep, which `TOKI_SYNC_TEST_CLOCK_OFFSET` (fixed at start) cannot do. Test use only: the test clock is compiled only into binaries built with `-tags synctest` (the e2e scripts do). A release binary has no clock override and refuses to start (panic at module registration) when any `TOKI_SYNC_TEST*` variable is set, so a host that can set its environment cannot shift HLC time.
 
 ### Parking exit gate (`tests/e2e/parking.sh`, CI job `e2e-parking`)
 
@@ -446,7 +446,7 @@ Deviations from the design text: gates and phone are all in branch `B1` (the sha
 | `TOKI_SYNC_INTERVAL` | spoke: idle sync interval (default `30s`) |
 | `TOKI_SYNC_PAGE` | spoke: changes per push/pull page (default `500`) |
 | `TOKI_SYNC_POKE` | spoke: `0` disables the realtime `@sync` subscription |
-| `TOKI_SYNC_TEST`, `TOKI_SYNC_TEST_CLOCK_OFFSET`, `TOKI_SYNC_TEST_CLOCK_FILE` | tests: shift the wall clock of the process (fixed offset, or a file that is re-read) |
+| `TOKI_SYNC_TEST`, `TOKI_SYNC_TEST_CLOCK_OFFSET`, `TOKI_SYNC_TEST_CLOCK_FILE` | tests, `-tags synctest` builds only: shift the wall clock of the process (fixed offset, or a file that is re-read) |
 
 The remaining `TOKI_SYNC_*` variables of the design arrive with the PRs that use them.
 
