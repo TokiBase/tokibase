@@ -424,6 +424,7 @@ Hub = the `solo` binary (`TOKI_SYNC_ROLE=hub`, the PR5 `syncconflict` wasm guest
 | (f) | Purged ticket absent everywhere, gate-1's late edit rejected as `legal_tombstone` | PASS (1 rejected log row) |
 | (g) | The phone shows the new rates (car 5000 to 7000 at hour 24) | PASS |
 | (h) | No webhook duplicates: the hub sink counts exactly one `record.create` per ticket | PASS: 2049 deliveries for 2049 tickets (the purged one included) |
+| (i) | Partition and actor scope (added after QC): a hub ticket of branch B2 never reaches the B1 nodes (a B1 control ticket created after it is the positive signal), and the phone officer token can neither read nor change it | not part of the recorded 48 h run above; runs at the end of `tests/e2e/parking.sh` |
 
 Run on the `tokibuild` VM: 1 minute of real time for the 48 simulated hours plus the reconnect (convergence 26 s after the network came back). `HOURS=6 bash tests/e2e/parking.sh` is a quick try; `KEEP=1` keeps the work dir.
 
