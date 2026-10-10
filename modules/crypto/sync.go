@@ -75,59 +75,75 @@ func (p syncProvider) RefreshSyncConfig() {
 }
 
 // ExportKeys wraps every DEK version of the collections to recipient. One
-// ephemeral key serves the whole call (one handshake).
-func (p syncProvider) ExportKeys(collectionIds []string, recipient []byte) ([]kernel.WrappedKey, error) {
+// ephemeral key serves the whole call (one handshake). A collection whose keys
+// cannot all be exported (a version that does not unwrap under the master key)
+// is left out completely and returned in failed; err is only set when nothing
+// can be exported (no master key, an unusable recipient key).
+func (p syncProvider) ExportKeys(collectionIds []string, recipient []byte) ([]kernel.WrappedKey, []kernel.KeyFailure, error) {
 	m := p.m
 	if !m.Active() {
-		return nil, ErrNoMasterKey
+		return nil, nil, ErrNoMasterKey
 	}
 	pub, err := ecdh.X25519().NewPublicKey(recipient)
 	if err != nil {
-		return nil, fmt.Errorf("crypto: invalid recipient key: %w", err)
+		return nil, nil, fmt.Errorf("crypto: invalid recipient key: %w", err)
 	}
 	eph, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	shared, err := eph.ECDH(pub)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ids := append([]string(nil), collectionIds...)
 	sort.Strings(ids)
 	var out []kernel.WrappedKey
+	var failed []kernel.KeyFailure
 	for _, id := range ids {
-		recs, err := m.keyRecords(id)
+		keys, err := p.exportCollection(id, eph, shared)
+		if err != nil {
+			failed = append(failed, kernel.KeyFailure{Collection: id, Err: err})
+			continue
+		}
+		out = append(out, keys...)
+	}
+	return out, failed, nil
+}
+
+func (p syncProvider) exportCollection(id string, eph *ecdh.PrivateKey, shared []byte) ([]kernel.WrappedKey, error) {
+	m := p.m
+	recs, err := m.keyRecords(id)
+	if err != nil {
+		return nil, err
+	}
+	var out []kernel.WrappedKey
+	for _, r := range recs {
+		ver := r.GetInt("version")
+		wk := kernel.WrappedKey{Collection: id, Version: ver}
+		if !r.GetDateTime("retired_at").IsZero() || r.GetString("wrapped_dek") == "" {
+			wk.Retired = true
+			out = append(out, wk)
+			continue
+		}
+		dek, err := m.unwrap(id, ver, r.GetString("wrapped_dek"))
+		if err != nil {
+			return nil, fmt.Errorf("crypto: cannot unwrap key v%d of %s (wrong master key?): %w", ver, id, err)
+		}
+		k, err := syncWrapKey(shared, id, ver)
 		if err != nil {
 			return nil, err
 		}
-		for _, r := range recs {
-			ver := r.GetInt("version")
-			wk := kernel.WrappedKey{Collection: id, Version: ver}
-			if !r.GetDateTime("retired_at").IsZero() || r.GetString("wrapped_dek") == "" {
-				wk.Retired = true
-				out = append(out, wk)
-				continue
-			}
-			dek, err := m.unwrap(id, ver, r.GetString("wrapped_dek"))
-			if err != nil {
-				return nil, fmt.Errorf("crypto: cannot unwrap key v%d of %s (wrong master key?): %w", ver, id, err)
-			}
-			k, err := syncWrapKey(shared, id, ver)
-			if err != nil {
-				return nil, err
-			}
-			b64, err := sealRaw(k, syncKeyAAD(id, ver), dek)
-			if err != nil {
-				return nil, err
-			}
-			raw, err := b64Decode(b64)
-			if err != nil {
-				return nil, err
-			}
-			wk.Wrapped = append(append([]byte{}, eph.PublicKey().Bytes()...), raw...)
-			out = append(out, wk)
+		b64, err := sealRaw(k, syncKeyAAD(id, ver), dek)
+		if err != nil {
+			return nil, err
 		}
+		raw, err := b64Decode(b64)
+		if err != nil {
+			return nil, err
+		}
+		wk.Wrapped = append(append([]byte{}, eph.PublicKey().Bytes()...), raw...)
+		out = append(out, wk)
 	}
 	return out, nil
 }
@@ -136,8 +152,8 @@ func (p syncProvider) ExportKeys(collectionIds []string, recipient []byte) ([]ke
 // them wrapped under the local master key. A version that already exists must
 // hold the same DEK (a node that created its own key for a synced collection
 // cannot join it). A retired version is dropped locally unless a local row
-// still holds a ciphertext of it (the hub rotation does not emit sync changes,
-// so such a row keeps its old ciphertext until it is written again).
+// still holds a ciphertext of it (the hub's rotation sweep emits change rows
+// that replace the old ciphertext; until they are pulled the row keeps it).
 func (p syncProvider) ImportKeys(keys []kernel.WrappedKey, localPriv []byte) error {
 	m := p.m
 	if len(keys) == 0 {

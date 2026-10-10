@@ -250,6 +250,7 @@ func (m *Module) onValidate(e *core.RecordEvent) error {
 	if err != nil || len(cfg) == 0 {
 		return e.Next()
 	}
+	var remembered []syncCTKey
 	for field := range cfg {
 		isJSON := isJSONField(col, field)
 		stored := storedOf(e.Record, field)
@@ -261,12 +262,21 @@ func (m *Module) onValidate(e *core.RecordEvent) error {
 			if origin != nil {
 				// a sync apply: the stored form must stay the ciphertext that came over the
 				// wire (same bytes, same hash on every node), see onWrite
-				origin.Remember(syncCTKey{e.Record, field}, ct)
+				k := syncCTKey{e.Record, field}
+				origin.Remember(k, ct)
+				remembered = append(remembered, k)
 			}
 			setStored(e.Record, field, p, isJSON)
 		} // on failure the ciphertext stays; execute treats it as unchanged
 	}
-	return e.Next()
+	err = e.Next()
+	if err != nil && origin != nil {
+		// a failed validation never reaches the write hook that forgets them: do not pin the record
+		for _, k := range remembered {
+			origin.Forget(k)
+		}
+	}
+	return err
 }
 
 type indexOp struct {
@@ -295,6 +305,11 @@ func (m *Module) onWrite(e *core.RecordEvent) error {
 	}
 	ver, dek, err := m.activeKey(col.Id)
 	if err != nil {
+		if o := kernel.SyncOriginFrom(e.Context); o != nil && o.Mode != kernel.SyncModePush && errors.Is(err, errNoActiveKey) {
+			// a node that has not received any key of the collection yet: the handshake brings it (or the
+			// sync client gives the collection up after a few attempts)
+			return fmt.Errorf("%w (%s)", kernel.ErrSyncKeyMissing, col.Name)
+		}
 		return err
 	}
 	isNew := e.Record.IsNew()
@@ -486,6 +501,11 @@ func (m *Module) syncField(origin *kernel.SyncOrigin, col *core.Collection, rec 
 			// a new key version (rotation) that the next handshake brings: retry then, with the index
 			return nil, false, fmt.Errorf("%w (%s.%s)", kernel.ErrSyncKeyMissing, col.Name, field)
 		}
+		if ct, _ := ctOf(cur, isJSON); origin.Mode == kernel.SyncModePush && m.keyRetiredHere(col.Id, ct) {
+			// an offline node wrote it under a version the hub has since retired: the hub cannot read
+			// it any more. The change is parked with this code, never silently reverted.
+			return nil, false, fmt.Errorf("%w (%s.%s)", kernel.ErrSyncKeyRetired, col.Name, field)
+		}
 		if origin.Mode == kernel.SyncModePush {
 			return nil, false, fmt.Errorf("crypto: the ciphertext sent for %s.%s cannot be decrypted by the hub (unknown or retired key version, or it belongs to another record): refused", col.Name, field)
 		}
@@ -518,4 +538,15 @@ func (m *Module) keyUnknown(collId, ct string) bool {
 		return false
 	}
 	return true
+}
+
+// keyRetiredHere reports whether the ciphertext names a key version this node
+// retired.
+func (m *Module) keyRetiredHere(collId, ct string) bool {
+	ver, _, ok := parseCT(ct)
+	if !ok {
+		return false
+	}
+	k, err := m.keysFor(collId)
+	return err == nil && k.retired[ver]
 }

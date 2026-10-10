@@ -561,6 +561,11 @@ func classify(err error) error {
 	if errors.As(err, &rj) {
 		return err
 	}
+	// ciphertext under a retired key version: the hub cannot read it, and an offline edit
+	// must not vanish silently, so it is parked (not reverted) with a clear code
+	if retiredKeyErr(err) {
+		return &rejection{code: proto.CodeCryptoRetired, msg: err.Error(), park: true}
+	}
 	var ve validation.Errors
 	if strings.Contains(err.Error(), "UNIQUE constraint") {
 		return reject(proto.CodeUniqueViolation, err.Error())
@@ -592,6 +597,24 @@ func classify(err error) error {
 		}
 	}
 	return err
+}
+
+// retiredKeyErr reports whether err (or the error behind an API error) says that
+// pushed ciphertext used a retired key version.
+func retiredKeyErr(err error) bool {
+	is := func(e error) bool {
+		return errors.Is(e, kernel.ErrSyncKeyRetired) || strings.Contains(e.Error(), proto.CodeCryptoRetired)
+	}
+	if is(err) {
+		return true
+	}
+	var ae *router.ApiError
+	if errors.As(err, &ae) {
+		if raw, ok := ae.RawData().(error); ok && raw != nil {
+			return is(raw)
+		}
+	}
+	return false
 }
 
 func codeForValidation(ve validation.Errors) string {

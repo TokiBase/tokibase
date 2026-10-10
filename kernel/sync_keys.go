@@ -10,6 +10,11 @@ import (
 // handshake, so the sync client drops its session and retries the change.
 var ErrSyncKeyMissing = errors.New("sync: the data key of this ciphertext has not arrived yet")
 
+// ErrSyncKeyRetired is returned (wrapped) by the hub for pushed ciphertext whose
+// key version was retired: the hub can no longer read it. The message starts
+// with the sync code so that the push result carries it (`crypto_version_retired`).
+var ErrSyncKeyRetired = errors.New("crypto_version_retired: the data key of this ciphertext was retired on the hub")
+
 // WrappedKey is one data-encryption-key version of a collection, wrapped for
 // one device (docs/SYNC_DESIGN.md §7.6).
 type WrappedKey struct {
@@ -31,8 +36,12 @@ type WrappedKey struct {
 // re-wraps every imported DEK under its own master key.
 type SyncKeyProvider interface {
 	// ExportKeys (hub) returns the DEK versions of the collections, wrapped to
-	// recipientX25519 (the X25519 public key of the node).
-	ExportKeys(collectionIds []string, recipientX25519 []byte) ([]WrappedKey, error)
+	// recipientX25519 (the X25519 public key of the node). A collection whose
+	// keys cannot be exported (one version does not unwrap, for example) is
+	// reported in failed and left out of keys: the others are still answered.
+	// err is set when nothing can be exported (no master key, unusable
+	// recipient key).
+	ExportKeys(collectionIds []string, recipientX25519 []byte) (keys []WrappedKey, failed []KeyFailure, err error)
 	// ImportKeys (spoke) unwraps keys with the X25519 private key of the node and
 	// stores them under the local master key. It fails when the node has no
 	// master key.
@@ -40,6 +49,55 @@ type SyncKeyProvider interface {
 	// NeedsKeys reports whether the collection has encrypted fields whose
 	// ciphertext this node must be able to read or write.
 	NeedsKeys(collectionId string) bool
+}
+
+// KeyFailure is a collection whose data keys could not be exported.
+type KeyFailure struct {
+	Collection string
+	Err        error
+}
+
+// SyncSweeper is implemented by modules/sync. modules/crypto calls it to keep
+// the change log of a synced collection in step with the bulk rewrites of
+// `toki crypto enable|disable|rotate` (docs/SYNC_DESIGN.md §7.6), and to ask
+// whether a key version may be retired.
+type SyncSweeper interface {
+	// SyncRole is "hub" or "spoke".
+	SyncRole() string
+	// IsSynced reports whether the collection has an enabled sync policy.
+	IsSynced(collectionId string) bool
+	// RecordSweep runs inside the transaction of a sweep batch, after the
+	// stored values were rewritten: changed maps a record id to the fields that
+	// were rewritten. The hub writes one `u` change per record (current stored
+	// values, new HLC) so that every node converges on the new ciphertext.
+	RecordSweep(tx App, collectionId string, changed map[string][]string) error
+	// RetireBlockers lists the active nodes that may still hold or write
+	// ciphertext of one of the versions ("" entries are never returned).
+	RetireBlockers(collectionId string, versions []int) ([]string, error)
+}
+
+var syncSweepers sync.Map // App -> SyncSweeper
+
+// SetSyncSweeper registers the sweeper of app (nil removes it).
+func SetSyncSweeper(app App, s SyncSweeper) {
+	if app == nil {
+		return
+	}
+	if s == nil {
+		syncSweepers.Delete(app)
+		return
+	}
+	syncSweepers.Store(app, s)
+}
+
+// SyncSweeperOf returns the sweeper of app, or nil when sync is off or compiled out.
+func SyncSweeperOf(app App) SyncSweeper {
+	if app == nil {
+		return nil
+	}
+	v, _ := syncSweepers.Load(app)
+	s, _ := v.(SyncSweeper)
+	return s
 }
 
 // SyncKeyRefresher is the optional part of a [SyncKeyProvider] that reloads its

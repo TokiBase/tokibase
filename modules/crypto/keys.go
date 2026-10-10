@@ -14,6 +14,9 @@ import (
 	"github.com/tokibase/tokibase/tools/types"
 )
 
+// errNoActiveKey is returned when a collection has no usable data key.
+var errNoActiveKey = errors.New("crypto: no active data key")
+
 // collKeys are the unwrapped data keys of one collection.
 type collKeys struct {
 	loaded  time.Time
@@ -106,7 +109,7 @@ func (m *Module) activeKey(collId string) (int, []byte, error) {
 		return 0, nil, err
 	}
 	if k.cur == 0 {
-		return 0, nil, errors.New("crypto: no active data key for collection " + collId)
+		return 0, nil, fmt.Errorf("%w for collection %s", errNoActiveKey, collId)
 	}
 	return k.cur, k.deks[k.cur], nil
 }

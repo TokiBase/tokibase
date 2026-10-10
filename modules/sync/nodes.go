@@ -51,6 +51,10 @@ func EnsureNodesCollection(app core.App) error {
 				changed = true
 			}
 		}
+		if c.Fields.GetByName("key_report") == nil {
+			c.Fields.Add(&core.JSONField{Name: "key_report", MaxSize: 65536, Hidden: true})
+			changed = true
+		}
 		if changed {
 			return app.Save(c)
 		}
@@ -84,6 +88,9 @@ func EnsureNodesCollection(app core.App) error {
 		&core.DateField{Name: "last_seen"},
 		&core.DateField{Name: "revoked_at"},
 		&core.TextField{Name: "app_version", Max: 64},
+		// key_report: per encrypted collection, the newest data key version handed to the node
+		// and the versions its unsent changes use (retire guard, see RetireBlockers)
+		&core.JSONField{Name: "key_report", MaxSize: 65536, Hidden: true},
 		&core.AutodateField{Name: "created", OnCreate: true},
 		&core.AutodateField{Name: "updated", OnCreate: true, OnUpdate: true},
 	)

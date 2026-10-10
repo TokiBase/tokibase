@@ -64,6 +64,11 @@ func (c *Client) applyPage(hubID string, pr *proto.PullResponse) (applied, faile
 					return rerr
 				}
 				_, _ = db.NewQuery("RELEASE " + sp).Execute()
+				if errors.Is(aerr, kernel.ErrSyncKeyMissing) && c.noteKeyMissing(db, c.colID(tx, ch.Collection)) {
+					// the key never arrived after several handshakes: this collection is skipped
+					// from now on (the others keep syncing), see keymissing.go
+					continue
+				}
 				failed++
 				events = append(events, Event{Type: EventError, ID: ch.ID, Collection: ch.Collection,
 					Record: ch.Record, Message: "apply failed: " + aerr.Error()})
@@ -80,6 +85,7 @@ func (c *Client) applyPage(hubID string, pr *proto.PullResponse) (applied, faile
 			}
 			if ok {
 				applied++
+				c.keyApplied(c.colID(tx, ch.Collection))
 			}
 		}
 		return setPullAfter(db, hubID, next)
@@ -103,6 +109,14 @@ func (c *Client) applyPage(hubID string, pr *proto.PullResponse) (applied, faile
 	return applied, failed, nil
 }
 
+// colID resolves the collection reference of a change to the collection id.
+func (c *Client) colID(tx kernel.App, ref string) string {
+	if col, err := tx.FindCachedCollectionByNameOrId(ref); err == nil && col != nil {
+		return col.Id
+	}
+	return ref
+}
+
 // applyChange applies one pulled change in tx (docs/SYNC_DESIGN.md §4.7). It
 // reports whether anything was written.
 func (c *Client) applyChange(tx kernel.App, ch *proto.PullChange) (bool, error) {
@@ -119,6 +133,9 @@ func (c *Client) applyChangeMode(tx kernel.App, ch *proto.PullChange, mode kerne
 	pv := c.o.Backend.Policy(col)
 	if pv == nil {
 		return false, nil // not replicated on this node
+	}
+	if keyMissingMarked(tx.NonconcurrentDB(), col.Id) {
+		return false, nil // its data key never arrived: skipped until it does (keymissing.go)
 	}
 	if ch.Notice != "" {
 		// informational row of the hub: no data, the local value stays

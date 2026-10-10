@@ -26,6 +26,9 @@ const (
 	CodeEnrollInvalid  = "sync_enroll_invalid"
 	CodeRateLimited    = "sync_rate_limited"
 	CodeHubUnavailable = "sync_hub_unavailable"
+	// CodeClientUpgrade: the node is too old for a feature of the hub that it
+	// would misread (426).
+	CodeClientUpgrade = "sync_client_upgrade"
 )
 
 // TimeLayout is the wire format of times: RFC3339 UTC with milliseconds.
@@ -66,6 +69,10 @@ type HandshakeRequest struct {
 	Profile       string   `json:"profile"`
 	AppVersion    string   `json:"app_version"`
 	Caps          []string `json:"caps"`
+	// KeyPending lists, per collection id, the data key versions that the
+	// unsent local changes of the node hold ciphertext of. The hub refuses to
+	// retire a version while a node reports it (docs/SYNC_DESIGN.md §7.6).
+	KeyPending map[string][]int `json:"key_pending,omitempty"`
 }
 
 // Clock is the clock verdict of the hub (docs/SYNC_DESIGN.md §3.7). In PR2 Ok
@@ -104,6 +111,16 @@ type Key struct {
 	Retired    bool   `json:"retired,omitempty"`
 }
 
+// KeyError reports a collection whose keys the hub could not export: it is left
+// out of Keys and the node holds back that collection only.
+type KeyError struct {
+	Collection string `json:"collection"`
+	Code       string `json:"code"`
+}
+
+// CodeKeyExport is the KeyError code of a collection whose keys cannot be exported.
+const CodeKeyExport = "crypto_key_export_failed"
+
 // HandshakeResponse is the 200 body of POST /api/sync/handshake.
 type HandshakeResponse struct {
 	SessionToken string `json:"session_token"`
@@ -113,18 +130,23 @@ type HandshakeResponse struct {
 	HubEpoch     string `json:"hub_epoch"`
 	// HubEpochSeq is the hub head when the epoch began: after an epoch change a
 	// spoke never keeps a pull cursor above it (docs/SYNC_DESIGN.md §3.9).
-	HubEpochSeq  int64          `json:"hub_epoch_seq"`
-	ServerTime   string         `json:"server_time"`
-	Clock        Clock          `json:"clock"`
-	Schema       Schema         `json:"schema"`
-	Policies     []Policy       `json:"policies"`
-	Params       map[string]any `json:"params"`
-	Keys         []Key          `json:"keys"`
-	PushFrom     int64          `json:"push_from"`
-	LowWater     int64          `json:"low_water"`
-	Rebootstrap  bool           `json:"rebootstrap"`
-	Reservations []Reservation  `json:"reservations"`
-	PollMs       int64          `json:"poll_ms"`
+	HubEpochSeq int64          `json:"hub_epoch_seq"`
+	ServerTime  string         `json:"server_time"`
+	Clock       Clock          `json:"clock"`
+	Schema      Schema         `json:"schema"`
+	Policies    []Policy       `json:"policies"`
+	Params      map[string]any `json:"params"`
+	Keys        []Key          `json:"keys"`
+	// KeyErrors lists the encrypted collections whose keys are missing from Keys.
+	KeyErrors []KeyError `json:"key_errors,omitempty"`
+	// KeysSig is the hub signature over the node, the hub, the request (ts and
+	// nonce), Keys and KeyErrors (see SignKeys): without it a node accepts no key.
+	KeysSig      string        `json:"keys_sig,omitempty"`
+	PushFrom     int64         `json:"push_from"`
+	LowWater     int64         `json:"low_water"`
+	Rebootstrap  bool          `json:"rebootstrap"`
+	Reservations []Reservation `json:"reservations"`
+	PollMs       int64         `json:"poll_ms"`
 	// Caps lists optional protocol features of the hub. A client uses a feature
 	// only when the hub advertises it (an older hub answers 400 to an unknown op).
 	Caps []string `json:"caps,omitempty"`
@@ -134,6 +156,12 @@ type HandshakeResponse struct {
 const (
 	// CapFiller: the hub accepts push op "n" (a discarded change that only moves the sequence on).
 	CapFiller = "filler"
+	// CapKeysSig: the hub signs Keys (HandshakeResponse.KeysSig).
+	CapKeysSig = "keys_sig"
+	// CapStrip: the hub gives `crypto: strip` collections the `state: stripped` bundle rows
+	// and `strip_fields`. A client sends the same cap in HandshakeRequest.Caps; the hub refuses
+	// (CodeClientUpgrade) a client without it as long as a strip policy exists.
+	CapStrip = "crypto_strip"
 )
 
 // PingResponse is the 200 body of GET /api/sync/ping.

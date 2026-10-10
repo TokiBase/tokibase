@@ -177,16 +177,28 @@ func NewCommand(app core.App) *cobra.Command {
 	}
 	rotate.Flags().BoolVar(&background, "background", false, "enqueue as a kernel job instead of running now")
 
+	var force bool
 	retire := &cobra.Command{
 		Use: "retire <collection>", Short: "Retire old key versions that no row uses any more (blanks the wrapped key; copies in backups/WAL survive)",
+		Long: "Retires the non-active key versions of a collection that no row holds a ciphertext of.\n" +
+			"On a sync hub the versions are also kept while an active node may still hold or write ciphertext of them\n" +
+			"(a node that has not fetched the newer key since the rotation, or whose unsent changes still use the old key);\n" +
+			"the blocking nodes are listed. --force retires anyway: a change an offline node made under a retired version is then\n" +
+			"parked on the hub with the code crypto_version_retired instead of applied.",
 		Args: cobra.ExactArgs(1), SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
 			if err := ensure(); err != nil {
 				return err
 			}
-			r, err := Retire(app, args[0])
+			r, err := RetireForce(app, args[0], force)
 			if err != nil {
 				return err
+			}
+			if len(r.Blocked) > 0 {
+				for _, b := range r.Blocked {
+					fmt.Fprintf(c.OutOrStdout(), "blocked by node %s\n", b)
+				}
+				return errors.New("some sync nodes may still use the old key version; let them sync, or pass --force")
 			}
 			fmt.Fprintf(c.OutOrStdout(), "retired versions: %v\n", r.Retired)
 			for v, why := range r.InUse {
@@ -198,6 +210,8 @@ func NewCommand(app core.App) *cobra.Command {
 			return nil
 		},
 	}
+
+	retire.Flags().BoolVar(&force, "force", false, "retire even if sync nodes may still use the version (their offline changes are parked)")
 
 	var sample int
 	verify := &cobra.Command{

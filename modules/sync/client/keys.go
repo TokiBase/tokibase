@@ -18,7 +18,20 @@ import (
 // refuses to sync a hub that has encrypted collections for it, instead of
 // storing ciphertext it can neither read nor validate.
 func (c *Client) importKeys(hs *proto.HandshakeResponse) error {
-	if c.o.App == nil || len(hs.Keys) == 0 {
+	if c.o.App == nil {
+		return nil
+	}
+	// collections whose keys the hub could not export: they are held back after a few
+	// handshakes (keymissing.go), the others sync as usual
+	db := c.o.App.NonconcurrentDB()
+	for _, ke := range hs.KeyErrors {
+		if c.o.Logger != nil {
+			c.o.Logger.Warn("sync: the hub could not export the encryption keys of a collection", "collection", ke.Collection, "code", ke.Code)
+		}
+		c.noteKeyMissing(db, ke.Collection)
+	}
+	defer c.resolveKeyMissing(hs)
+	if len(hs.Keys) == 0 {
 		return nil
 	}
 	cols := map[string]struct{}{}

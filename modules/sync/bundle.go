@@ -55,6 +55,9 @@ const cryptoFieldsCollection = "_crypto_fields"
 // cryptoStateStripped is the `state` of a `_crypto_fields` row on a node that does not receive the field.
 const cryptoStateStripped = "stripped"
 
+// cryptoStateDisabling is the `state` of a `_crypto_fields` row while `toki crypto disable` runs.
+const cryptoStateDisabling = "disabling"
+
 // KindSchemaDroppedField is the conflict kind of a field removed from a patch.
 const (
 	KindSchemaDroppedField = "schema_dropped_field"
@@ -195,17 +198,29 @@ func (m *Module) resolveColID(ref string) string {
 	return ref
 }
 
-// stripCollections returns the ids of the collections with an enabled policy that
-// says `crypto: strip`.
-func (m *Module) stripCollections() map[string]struct{} {
-	out := map[string]struct{}{}
+// stripSets returns, per collection id, the encrypted fields that an enabled
+// `crypto: strip` policy withholds (persisted strip_fields plus the registry).
+func (m *Module) stripSets() map[string]map[string]struct{} {
+	out := map[string]map[string]struct{}{}
 	recs, err := m.app.FindAllRecords(PoliciesCollection)
 	if err != nil {
 		return out
 	}
 	for _, r := range recs {
-		if r.GetBool("enabled") && r.GetString("crypto") == CryptoStrip {
-			out[m.resolveColID(r.GetString("collection"))] = struct{}{}
+		if !r.GetBool("enabled") || r.GetString("crypto") != CryptoStrip {
+			continue
+		}
+		id := m.resolveColID(r.GetString("collection"))
+		set := out[id]
+		if set == nil {
+			set = map[string]struct{}{}
+			out[id] = set
+		}
+		for _, f := range stripFieldsOfRow(r) {
+			set[f] = struct{}{}
+		}
+		for _, f := range kernel.SensitiveFieldsOf(id) {
+			set[f] = struct{}{}
 		}
 	}
 	return out
@@ -225,7 +240,7 @@ func (m *Module) buildBody() (*proto.BundleBody, error) {
 		}
 		body.Collections = append(body.Collections, ex)
 	}
-	stripIDs := m.stripCollections()
+	stripSets := m.stripSets()
 	for _, name := range configCollections {
 		if !m.app.HasTable(name) {
 			continue
@@ -257,10 +272,17 @@ func (m *Module) buildBody() (*proto.BundleBody, error) {
 			}
 			if name == cryptoFieldsCollection {
 				// the state of a row is a hub-local matter (an enable in progress must not run on a
-				// spoke); the bundle only says whether the node receives the field
+				// spoke); the bundle says whether the node receives the field, and that a disable is
+				// running: the node then stores the plaintext it is sent verbatim (an encrypting
+				// node would turn it into ciphertext that differs from the hub row)
 				row["state"] = ""
-				if _, ok := stripIDs[m.resolveColID(r.GetString("collection"))]; ok {
-					row["state"] = cryptoStateStripped
+				if set := stripSets[m.resolveColID(r.GetString("collection"))]; set != nil {
+					if _, ok := set[r.GetString("field")]; ok {
+						row["state"] = cryptoStateStripped
+					}
+				}
+				if row["state"] == "" && r.GetString("state") == cryptoStateDisabling {
+					row["state"] = cryptoStateDisabling
 				}
 			}
 			rows = append(rows, row)
@@ -789,6 +811,7 @@ func (m *Module) applyBundle(tx kernel.App, sb proto.SchemaBundle) ([][2]string,
 		}
 	}
 	var backfill [][2]string
+	newlyStripped := m.newlyStripped(tx, body.Config[cryptoFieldsCollection])
 	// the policies are always replaced (the hub is the authority); the other
 	// config collections only when this build has them
 	names := append([]string{}, configCollections...)
@@ -806,8 +829,99 @@ func (m *Module) applyBundle(tx kernel.App, sb proto.SchemaBundle) ([][2]string,
 		}
 		backfill = append(backfill, bf...)
 	}
+	if err := m.evictStripped(tx, newlyStripped); err != nil {
+		return nil, fmt.Errorf("sync: bundle %d: %w", sb.Version, err)
+	}
 	m.pol.invalidate()
 	return backfill, nil
+}
+
+// newlyStripped lists the (collection, field) pairs that the incoming
+// `_crypto_fields` rows mark `stripped` and the local rows do not yet.
+func (m *Module) newlyStripped(tx kernel.App, rows []map[string]any) [][2]string {
+	prev := map[[2]string]bool{}
+	if tx.HasTable(cryptoFieldsCollection) {
+		if recs, err := tx.FindAllRecords(cryptoFieldsCollection); err == nil {
+			for _, r := range recs {
+				if r.GetString("state") == cryptoStateStripped {
+					prev[[2]string{m.resolveColID(r.GetString("collection")), r.GetString("field")}] = true
+				}
+			}
+		}
+	}
+	var out [][2]string
+	for _, row := range rows {
+		if st, _ := row["state"].(string); st != cryptoStateStripped {
+			continue
+		}
+		coll, _ := row["collection"].(string)
+		field, _ := row["field"].(string)
+		k := [2]string{m.resolveColID(coll), field}
+		if coll != "" && field != "" && !prev[k] {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// evictStripped clears, on this node, the values of fields the hub has begun to
+// withhold (`crypto: strip`, policy flipped from ciphertext) and drops the data
+// keys of a collection that has no encrypted field left here. A field that is
+// not synced any more must not stay on a device that "must not see" it. The
+// hub cannot do it with change rows (a pull only carries the fields that are
+// synced NOW), so the node does it when it applies the bundle.
+func (m *Module) evictStripped(tx kernel.App, pairs [][2]string) error {
+	if len(pairs) == 0 {
+		return nil
+	}
+	db := tx.NonconcurrentDB()
+	cols := map[string]struct{}{}
+	for _, pr := range pairs {
+		col, err := tx.FindCollectionByNameOrId(pr[0])
+		if err != nil || col == nil {
+			continue
+		}
+		f := col.Fields.GetByName(pr[1])
+		if f == nil {
+			continue
+		}
+		q := "UPDATE {{" + col.Name + "}} SET [[" + pr[1] + "]]='' WHERE [[" + pr[1] + "]]!=''"
+		if f.Type() == kernel.FieldTypeJSON {
+			q = "UPDATE {{" + col.Name + "}} SET [[" + pr[1] + "]]=NULL WHERE [[" + pr[1] + "]] IS NOT NULL"
+		}
+		if _, err := db.NewQuery(q).Execute(); err != nil {
+			return fmt.Errorf("clearing %s.%s: %w", col.Name, pr[1], err)
+		}
+		if tx.HasTable("_crypto_index") {
+			if _, err := db.NewQuery("DELETE FROM {{_crypto_index}} WHERE collection={:c} AND field={:f}").
+				Bind(dbx.Params{"c": col.Id, "f": pr[1]}).Execute(); err != nil {
+				return err
+			}
+		}
+		cols[col.Id] = struct{}{}
+	}
+	if !tx.HasTable(cryptoFieldsCollection) || !tx.HasTable("_crypto_keys") {
+		return nil
+	}
+	recs, err := tx.FindAllRecords(cryptoFieldsCollection)
+	if err != nil {
+		return err
+	}
+	live := map[string]bool{}
+	for _, r := range recs {
+		if r.GetString("state") != cryptoStateStripped {
+			live[m.resolveColID(r.GetString("collection"))] = true
+		}
+	}
+	for id := range cols {
+		if live[id] {
+			continue
+		}
+		if _, err := db.NewQuery("DELETE FROM {{_crypto_keys}} WHERE collection={:c}").Bind(dbx.Params{"c": id}).Execute(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // dropMissingFields removes from the local collections the fields that the

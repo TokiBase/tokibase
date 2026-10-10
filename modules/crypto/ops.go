@@ -115,6 +115,7 @@ func (m *Module) sweep(col *core.Collection, fields []string, fn rowFn, ver int,
 		if len(ups) > 0 {
 			err := m.app.RunInTransaction(func(tx kernel.App) error {
 				db := tx.NonconcurrentDB()
+				swept := map[string][]string{}
 				for _, u := range ups {
 					if u.new != u.old {
 						res, err := db.NewQuery("UPDATE {{" + col.Name + "}} SET [[" + u.field + "]]={:n} WHERE [[id]]={:id} AND [[" + u.field + "]]={:o}").
@@ -126,6 +127,7 @@ func (m *Module) sweep(col *core.Collection, fields []string, fn rowFn, ver int,
 							continue // changed concurrently: the second pass picks it up
 						}
 						changedRows++
+						swept[u.id] = append(swept[u.id], u.field)
 					}
 					if u.idx != nil {
 						var err error
@@ -138,6 +140,10 @@ func (m *Module) sweep(col *core.Collection, fields []string, fn rowFn, ver int,
 							return err
 						}
 					}
+				}
+				// the change rows are written in the same transaction as the values
+				if sw := m.sweeperFor(col); sw != nil && len(swept) > 0 {
+					return sw.RecordSweep(tx, col.Id, swept)
 				}
 				return nil
 			})
@@ -262,6 +268,9 @@ func Enable(app core.App, collection, field, mode string, progress Progress) (in
 	if mode == "" {
 		mode = ModeRandom
 	}
+	if err := m.syncCheck(col, "enable"); err != nil {
+		return 0, err
+	}
 	rec, _ := m.configRecord(col.Id, field)
 	if rec == nil { // eligibility only gates new configurations (a running one may already be indexed)
 		if err := m.eligible(col, field, mode); err != nil {
@@ -352,6 +361,9 @@ func Disable(app core.App, collection, field string, progress Progress) (int, er
 	col, err := app.FindCollectionByNameOrId(collection)
 	if err != nil {
 		return 0, fmt.Errorf("collection %q not found", collection)
+	}
+	if err := m.syncCheck(col, "disable"); err != nil {
+		return 0, err
 	}
 	rec, _ := m.configRecord(col.Id, field)
 	if rec == nil {
@@ -444,6 +456,9 @@ func Rotate(app core.App, collection string, progress Progress) (newVersion, row
 	if err != nil {
 		return 0, 0, fmt.Errorf("collection %q not found", collection)
 	}
+	if err := m.syncCheck(col, "rotate"); err != nil {
+		return 0, 0, err
+	}
 	cfg, err := m.fieldsFor(col.Id)
 	if err != nil {
 		return 0, 0, err
@@ -472,6 +487,11 @@ func Rotate(app core.App, collection string, progress Progress) (newVersion, row
 type RetireResult struct {
 	Retired []int          `json:"retired"`
 	InUse   map[int]string `json:"in_use,omitempty"`
+	// Blocked lists the sync nodes that may still hold or write ciphertext of
+	// the versions that no hub row uses any more; nothing was retired then.
+	// `--force` retires anyway (an offline change under a retired version is
+	// then parked with the code crypto_version_retired).
+	Blocked []string `json:"blocked,omitempty"`
 }
 
 // RetireCooldown is how long after the last key was created Retire refuses to
@@ -488,6 +508,14 @@ var RetireCooldown = 2 * cacheTTL
 // and replicas. Only destroying the master key (or every copy of the old
 // wrapped key) makes the old ciphertext unrecoverable.
 func Retire(app core.App, collection string) (*RetireResult, error) {
+	return RetireForce(app, collection, false)
+}
+
+// RetireForce is Retire with the sync guard optionally overridden: on a hub,
+// versions are kept while an active node may still hold or write ciphertext of
+// them (it reports the versions of its unsent changes, and has to fetch the
+// newer key first). force skips that check.
+func RetireForce(app core.App, collection string, force bool) (*RetireResult, error) {
 	m := From(app)
 	if m == nil {
 		return nil, errors.New("crypto module is not registered")
@@ -495,6 +523,9 @@ func Retire(app core.App, collection string) (*RetireResult, error) {
 	col, err := app.FindCollectionByNameOrId(collection)
 	if err != nil {
 		return nil, fmt.Errorf("collection %q not found", collection)
+	}
+	if err := m.syncCheck(col, "retire"); err != nil {
+		return nil, err
 	}
 	unlock, err := m.acquireLock(col.Id, "retire", false)
 	if err != nil {
@@ -539,6 +570,16 @@ func Retire(app core.App, collection string) (*RetireResult, error) {
 			old = append(old, ki.Version)
 		}
 	}
+	if sw := m.sweeperFor(col); sw != nil && len(old) > 0 && !force {
+		blockers, err := sw.RetireBlockers(col.Id, old)
+		if err != nil {
+			return nil, err
+		}
+		if len(blockers) > 0 {
+			res.Blocked = blockers
+			return res, nil
+		}
+	}
 	if len(old) > 0 {
 		if err := m.retireKeys(col.Id, old); err != nil {
 			return nil, err
@@ -574,6 +615,9 @@ func Resume(app core.App, progress Progress) ([]string, error) {
 			return done, fmt.Errorf("config %s: collection %q not found", rec.Id, rec.GetString("collection"))
 		}
 		field := rec.GetString("field")
+		if err := m.syncCheck(col, "resume"); err != nil {
+			return done, err
+		}
 		unlock, err := m.acquireLock(col.Id, "resume", true)
 		if err != nil {
 			return done, err
@@ -605,6 +649,9 @@ func Resume(app core.App, progress Progress) ([]string, error) {
 			continue
 		}
 		if l.Op == "rotate" {
+			if err := m.syncCheck(col, "resume"); err != nil {
+				return done, err
+			}
 			cfg, err := m.fieldsFor(col.Id)
 			if err != nil {
 				return done, err

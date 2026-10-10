@@ -191,13 +191,16 @@ func RegisterRole(app core.App, role Role) *Module {
 		Id: hookId,
 		Func: func(e *core.TerminateEvent) error {
 			kernel.ReleaseSyncHooks(app)
+			kernel.SetSyncSweeper(app, nil)
 			m.persistFloorOnStop()
 			return e.Next()
 		},
 	})
+	kernel.SetSyncSweeper(app, m)
 	m.bindCapture()
 	m.pol.bind()
 	m.pol.bindPolicyModel()
+	m.bindStrip()
 	app.Store().Set(moduleStoreKey, m)
 	m.bindCompaction()
 	m.bindHealth()
@@ -302,6 +305,7 @@ func (m *Module) Init() error {
 	m.ready.Store(true)
 	m.pol.invalidate()
 	if m.role == RoleHub {
+		m.syncStripFields()
 		// bring the stored bundles in line with the current schema (an upgrade, or a
 		// change made while the hooks were not bound)
 		if _, err := m.refreshBundle(); err != nil {

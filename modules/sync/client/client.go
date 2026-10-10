@@ -386,12 +386,13 @@ func (c *Client) handshakeOnce(ctx context.Context) (*proto.HandshakeResponse, t
 	c.mu.Unlock()
 	req := proto.HandshakeRequest{
 		NodeID: c.nodeID, Cert: cert, Profile: c.o.Profile, AppVersion: c.o.AppVersion,
-		Caps: []string{"gzip"},
+		Caps: []string{"gzip", proto.CapStrip},
 	}
 	if c.o.App != nil {
 		if cur, _ := LoadCursor(c.o.App); cur != nil {
 			req.SchemaVersion, req.PullAfter, req.AckedOrigin, req.HubEpoch = cur.SchemaVersion, cur.PullAfter, cur.AckedOrigin, cur.HubEpoch
 		}
+		req.KeyPending = c.keyPending()
 		var next int64
 		if err := c.o.App.DB().NewQuery("SELECT COALESCE(MAX(origin_seq),0)+1 FROM _changes WHERE node={:n}").
 			Bind(dbx.Params{"n": c.nodeID}).Row(&next); err == nil {
@@ -441,6 +442,13 @@ func (c *Client) handshakeOnce(ctx context.Context) (*proto.HandshakeResponse, t
 	}
 	if out.HubID != c.wantHub || out.ServerTime != res.Header.Get(proto.HeaderServerTime) {
 		return nil, time.Time{}, errors.New("sync: the handshake answer does not match the enrolled hub")
+	}
+	// the data keys must come from the enrolled hub: an unsigned or forged key entry could
+	// make this node encrypt its writes under a key an attacker knows
+	if len(out.Keys) > 0 || len(out.KeyErrors) > 0 {
+		if !proto.VerifyKeys(c.hubPub, c.nodeID, out.HubID, ts, nonce, out.Keys, out.KeyErrors, out.KeysSig) {
+			return nil, time.Time{}, errors.New("sync: the encryption keys of the handshake answer are not signed by the enrolled hub: refused")
+		}
 	}
 	offset := hubTime.Sub(tSend.Add(tRecv.Sub(tSend) / 2))
 	if offset > MaxClockOffset || offset < -MaxClockOffset {

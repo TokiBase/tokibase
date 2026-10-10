@@ -125,6 +125,8 @@ type Status struct {
 	// the bounded cycle of the current background slot ran.
 	Conditions     Conditions
 	BackgroundDone bool
+	// KeyMissing lists the collection ids that are skipped because their data key never arrived.
+	KeyMissing []string
 }
 
 // EventEpoch is emitted when the hub epoch changed.

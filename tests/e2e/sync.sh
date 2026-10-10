@@ -545,4 +545,51 @@ SEC4="$(sec "$T2" "$URL_S2" "s2 after rotation" "s2-rotated-value")"
 wait_for "spoke write with the new key version on the hub" '[ "$(sget "$TH" "$URL_HUB" "$SEC4")" = "s2-rotated-value" ] && [ "$(sget "$T1" "$URL_S1" "$SEC4")" = "s2-rotated-value" ]'
 log "encrypted fields: ciphertext identical on hub and two spokes with three master keys, blind index works, rotation propagated"
 
+# retire: refused while a node may still hold the old version, allowed once every node fetched the new key
+wait_for "retire of the old key version" 'toki hub "$HUB" crypto retire e2esec >/dev/null 2>&1'
+SEC5="$(sec "$T1" "$URL_S1" "after retire" "after-retire-value")"
+wait_for "spoke write after the retire on the hub and the other spoke" '[ "$(sget "$TH" "$URL_HUB" "$SEC5")" = "after-retire-value" ] && [ "$(sget "$T2" "$URL_S2" "$SEC5")" = "after-retire-value" ]'
+log "retire: the old version was retired after the nodes had the new key, writes continue"
+
+# ---- 14b. QC: encrypt a field AFTER the data exists and the policy is live; the spokes must follow (P9-2) ----
+TH="$(token "$URL_HUB")"; T1="$(token "$URL_S1")"; T2="$(token "$URL_S2")"
+COLL6='{"id":"pbc_e2elate","name":"e2elate","type":"base","listRule":"","viewRule":"","createRule":"","updateRule":"","deleteRule":"","fields":[{"name":"title","type":"text"},{"name":"secret","type":"text"},{"name":"created","type":"autodate","onCreate":true},{"name":"updated","type":"autodate","onCreate":true,"onUpdate":true}]}'
+api "$TH" POST "$URL_HUB" /api/collections "$COLL6" >/dev/null
+api "$TH" POST "$URL_HUB" /api/collections/_sync_policies/records '{"collection":"e2elate","direction":"both","enabled":true}' >/dev/null || fail "policy e2elate"
+wait_for "e2elate on the spokes" '[ "$(http "$T1" GET "$URL_S1" /api/collections/e2elate)" = 200 ] && [ "$(http "$T2" GET "$URL_S2" /api/collections/e2elate)" = 200 ]'
+lcreate() { api "$1" POST "$2" /api/collections/e2elate/records "{\"title\":\"$3\",\"secret\":\"$4\"}" | jget 'd["id"]'; }
+lget() { api "$1" GET "$2" "/api/collections/e2elate/records/$3" 2>/dev/null | jget 'd["secret"]' 2>/dev/null; }
+ldigest() { toki "$1" "$2" sync verify --json 2>/dev/null | grep '^{' | tail -1 | jget '[c["digest"]+str(c["records"]) for c in d["collections"] if c["name"]=="e2elate"][0]' 2>/dev/null; }
+L1="$(lcreate "$TH" "$URL_HUB" one "late-one")"; L2="$(lcreate "$T1" "$URL_S1" two "late-two")"; L3="$(lcreate "$T2" "$URL_S2" three "late-three")"
+wait_for "plaintext rows on all nodes" '[ "$(lget "$T1" "$URL_S1" "$L3")" = late-three ] && [ "$(lget "$T2" "$URL_S2" "$L2")" = late-two ] && [ "$(lget "$TH" "$URL_HUB" "$L1")" = late-one ]'
+toki hub "$HUB" crypto enable e2elate secret --mode blind-index >/dev/null || fail "crypto enable on existing data"
+# the sweep wrote change rows: every spoke now holds the ciphertext the hub holds (equal digests), and still reads the plaintext
+wait_for "e2elate digests equal after the enable" 'D1="$(ldigest hub "$HUB")"; [ -n "$D1" ] && [ "$D1" = "$(ldigest spoke "$S1")" ] && [ "$D1" = "$(ldigest spoke "$S2")" ]'
+for who in "$T1|$URL_S1|$L1" "$T2|$URL_S2|$L2" "$TH|$URL_HUB|$L3"; do
+  IFS='|' read -r wt wu wid <<<"$who"
+  [ -n "$(lget "$wt" "$wu" "$wid")" ] || fail "record $wid unreadable on $wu after the enable"
+done
+log "enable on existing synced data: the spokes converged on the ciphertext (equal digests)"
+toki hub "$HUB" crypto disable e2elate secret --i-understand >/dev/null || fail "crypto disable"
+wait_for "e2elate digests equal after the disable" 'D1="$(ldigest hub "$HUB")"; [ -n "$D1" ] && [ "$D1" = "$(ldigest spoke "$S1")" ] && [ "$D1" = "$(ldigest spoke "$S2")" ]'
+[ "$(lget "$T2" "$URL_S2" "$L1")" = late-one ] || fail "plaintext lost after the disable"
+log "disable: the spokes converged on the plaintext"
+
+# ---- 14c. QC: crypto: strip is owned by the policy (P9-1): disabling the crypto field does not release it ----
+COLL7='{"id":"pbc_e2estrip","name":"e2estrip","type":"base","listRule":"","viewRule":"","createRule":"","updateRule":"","deleteRule":"","fields":[{"name":"title","type":"text"},{"name":"secret","type":"text"},{"name":"created","type":"autodate","onCreate":true},{"name":"updated","type":"autodate","onCreate":true,"onUpdate":true}]}'
+api "$TH" POST "$URL_HUB" /api/collections "$COLL7" >/dev/null
+toki hub "$HUB" crypto enable e2estrip secret >/dev/null || fail "crypto enable e2estrip"
+api "$TH" POST "$URL_HUB" /api/collections/_sync_policies/records '{"collection":"e2estrip","direction":"both","enabled":true,"crypto":"strip"}' >/dev/null || fail "policy e2estrip"
+wait_for "e2estrip on the spokes" '[ "$(http "$T1" GET "$URL_S1" /api/collections/e2estrip)" = 200 ] && [ "$(http "$T2" GET "$URL_S2" /api/collections/e2estrip)" = 200 ]'
+api "$TH" GET "$URL_HUB" "/api/collections/_sync_policies/records?filter=(collection%3D'e2estrip')" | jget '",".join(d["items"][0]["strip_fields"])' | grep -q secret || fail "strip_fields not persisted in the policy"
+ST1="$(api "$TH" POST "$URL_HUB" /api/collections/e2estrip/records '{"title":"visible","secret":"never-leaves-the-hub"}' | jget 'd["id"]')"
+wait_for "stripped record on the spokes" '[ "$(api "$T1" GET "$URL_S1" "/api/collections/e2estrip/records/$ST1" 2>/dev/null | jget "d[\"title\"]" 2>/dev/null)" = visible ]'
+toki hub "$HUB" crypto disable e2estrip secret --i-understand >/dev/null || fail "crypto disable e2estrip"
+api "$TH" PATCH "$URL_HUB" "/api/collections/e2estrip/records/$ST1" '{"secret":"plaintext-after-disable","title":"visible 2"}' >/dev/null
+wait_for "title update on the spokes" '[ "$(api "$T2" GET "$URL_S2" "/api/collections/e2estrip/records/$ST1" 2>/dev/null | jget "d[\"title\"]" 2>/dev/null)" = "visible 2" ]'
+for who in "$T1|$URL_S1" "$T2|$URL_S2"; do
+  [ -z "$(api "${who%%|*}" GET "${who##*|}" "/api/collections/e2estrip/records/$ST1" | jget 'd["secret"]')" ] || fail "a withheld field reached ${who##*|} after the crypto disable"
+done
+log "strip: the withheld field stayed on the hub after the crypto field was disabled"
+
 log "OK"
