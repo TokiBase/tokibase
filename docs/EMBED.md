@@ -32,7 +32,7 @@ inst.Export(ctx, file)                                      // backup zip
 | `AllowedOrigins`, `AllowedHosts` | See `Listen`. |
 | `LogLevel` | `debug`, `info` (default), `warn`, `error`; stored in the app log settings. |
 | `MaxBodyBytes` | Request body cap for TCP and `Call`, 413 above it. Default 4 MiB (`DefaultMaxBodyBytes`), negative = unlimited. Raise it if the app uploads larger files. |
-| `Sync` | `*SyncOptions{HubURL, Interval, NodeKey}`: makes the instance a sync spoke (profile `nano` or `edge` only, other profiles are refused). Defaults `TOKI_SYNC_ROLE=spoke`, `TOKI_SYNC_HUB_URL`, `TOKI_SYNC_INTERVAL` and `TOKI_SYNC_NODE_KEY`; entries in `Env` win. See [Sync from a Flutter app](#sync-from-a-flutter-app-nano-as-a-spoke). Ignored under the `no_sync` tag. |
+| `Sync` | `*SyncOptions{HubURL, Interval, NodeKey}`: makes the instance a sync spoke (profile `nano` or `edge` only, other profiles are refused). Defaults `TOKI_SYNC_ROLE=spoke`, `TOKI_SYNC_HUB_URL`, `TOKI_SYNC_INTERVAL` and `TOKI_SYNC_NODE_KEY`; precedence: the `Sync` fields win over `Env`, which wins over the profile defaults, which win over the process environment; an `Env` entry that contradicts a set `Sync` field makes `Start` fail. `NodeKey` is handed to the module through the process environment while the instance runs (visible to child processes of the host; an instance without `NodeKey` never inherits another instance's key). After `Stop`, `Sync().Status/SetConditions/OnEvent` refuse or do nothing and every `OnEvent` handler is cancelled. See [Sync from a Flutter app](#sync-from-a-flutter-app-nano-as-a-spoke). Ignored under the `no_sync` tag. |
 
 Notes:
 

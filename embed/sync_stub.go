@@ -39,3 +39,8 @@ func (s *Sync) Next(sequence string) (int64, error) { return 0, ErrSyncUnavailab
 
 // Rebootstrap returns ErrSyncUnavailable.
 func (s *Sync) Rebootstrap(ctx context.Context) error { return ErrSyncUnavailable }
+
+// trackEvent and cancelEvents have nothing to track without sync.
+func (i *Instance) trackEvent(func())                {}
+func (i *Instance) cancelEvents()                    {}
+func (i *Instance) stopSyncLoop(ctx context.Context) {}

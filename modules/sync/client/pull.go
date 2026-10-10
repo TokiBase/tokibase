@@ -65,8 +65,12 @@ func (c *Client) pullAll(ctx context.Context, res *Result) error {
 			half := max(c.pullLimit()/2, 1)
 			c.loop.mu.Lock()
 			c.loop.page = half
+			c.loop.goodPages = 0
 			c.loop.mu.Unlock()
 			continue
+		}
+		if err == nil {
+			c.pageGrowBack()
 		}
 		if err != nil {
 			if IsCode(err, proto.CodeRebootstrap) {
@@ -156,4 +160,29 @@ func (c *Client) markRebootstrap(lowWater int64) {
 		c.o.Logger.Warn("sync: the hub requires a re-bootstrap", "low_water", lowWater)
 	}
 	c.emit(Event{Type: EventRebootstrap})
+}
+
+// pageGoodToGrow is the number of pull pages that pass after a 413 before the
+// page size doubles again (up to the configured one).
+const pageGoodToGrow = 8
+
+// pageGrowBack undoes the page halving of a 413 step by step: a one-off oversized
+// response must not cap the page for the lifetime of the process.
+func (c *Client) pageGrowBack() {
+	c.loop.mu.Lock()
+	defer c.loop.mu.Unlock()
+	if c.loop.page == 0 {
+		return
+	}
+	if c.loop.goodPages++; c.loop.goodPages < pageGoodToGrow {
+		return
+	}
+	c.loop.goodPages = 0
+	n := c.o.Page
+	if n <= 0 {
+		n = DefaultPage
+	}
+	if c.loop.page *= 2; c.loop.page >= n {
+		c.loop.page = 0 // back at the configured size
+	}
 }

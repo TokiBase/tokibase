@@ -144,6 +144,8 @@ func applyEnv(set map[string]string) error {
 	for k := range set {
 		keys[k] = true
 	}
+	// the node key of an earlier instance must not leak into this one
+	keys["TOKI_SYNC_NODE_KEY"] = true
 	for k := range keys {
 		if _, seen := envOrig[k]; !seen {
 			if v, ok := os.LookupEnv(k); ok {
@@ -214,6 +216,10 @@ type Instance struct {
 
 	subsMu sync.Mutex
 	subs   map[string]subscriptions.Client
+
+	// evCancels are the Sync().OnEvent cancel functions, called by Stop.
+	evMu      sync.Mutex
+	evCancels []func()
 }
 
 // Start builds the app, bootstraps it, serves it in the background and
@@ -287,25 +293,38 @@ func Start(opts Options) (*Instance, error) {
 			set[k] = v
 		}
 	}
+	var syncSet map[string]string
 	if opts.Sync != nil {
 		if profile != "nano" && profile != "edge" {
 			release()
 			return nil, fmt.Errorf("embed: Options.Sync needs Profile nano or edge (got %q); a hub is run with the toki binary", profile)
 		}
 		if !stubbedEnv["TOKI_SYNC_ROLE"] {
-			set["TOKI_SYNC_ROLE"] = "spoke"
+			syncSet = map[string]string{"TOKI_SYNC_ROLE": "spoke"}
 			if opts.Sync.HubURL != "" {
-				set["TOKI_SYNC_HUB_URL"] = opts.Sync.HubURL
+				syncSet["TOKI_SYNC_HUB_URL"] = opts.Sync.HubURL
 			}
 			if opts.Sync.Interval != "" {
-				set["TOKI_SYNC_INTERVAL"] = opts.Sync.Interval
+				syncSet["TOKI_SYNC_INTERVAL"] = opts.Sync.Interval
 			}
 			if len(opts.Sync.NodeKey) > 0 {
-				set["TOKI_SYNC_NODE_KEY"] = strings.TrimSpace(string(opts.Sync.NodeKey))
+				syncSet["TOKI_SYNC_NODE_KEY"] = strings.TrimSpace(string(opts.Sync.NodeKey))
+			}
+			// precedence: Options.Sync > Options.Env > profile defaults > process env.
+			// An Env entry that contradicts Sync is a configuration error, not
+			// something to resolve silently in either direction.
+			for k, v := range syncSet {
+				if ev, ok := opts.Env[k]; ok && ev != v {
+					release()
+					return nil, fmt.Errorf("embed: Options.Env[%s] contradicts Options.Sync (remove one of them)", k)
+				}
 			}
 		}
 	}
 	for k, v := range opts.Env {
+		set[k] = v
+	}
+	for k, v := range syncSet {
 		set[k] = v
 	}
 	if err := applyEnv(set); err != nil {
@@ -718,6 +737,8 @@ func (i *Instance) Stop(ctx context.Context) error {
 	i.stopped.Store(true)
 	i.mu.Unlock()
 
+	i.stopSyncLoop(ctx)
+
 	done := make(chan struct{})
 	go func() { i.calls.Wait(); close(done) }()
 	select {
@@ -725,6 +746,8 @@ func (i *Instance) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return fmt.Errorf("embed: stop incomplete, in-flight calls still running (data dir stays locked): %w", ctx.Err())
 	}
+
+	i.cancelEvents()
 
 	i.subsMu.Lock()
 	for id := range i.subs {

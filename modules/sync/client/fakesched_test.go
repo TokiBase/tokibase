@@ -14,6 +14,8 @@ type fakeSched struct {
 	mu     sync.Mutex
 	now    time.Time
 	timers []*fakeTimer
+	// loopPasses (optional) lets Advance wait for the loop goroutine instead of sleeping.
+	loopPasses func() int64
 }
 
 type fakeTimer struct {
@@ -65,11 +67,20 @@ func (t *fakeTimer) Reset(d time.Duration) bool {
 	defer t.s.mu.Unlock()
 	was := t.active
 	t.active, t.when = true, t.s.now.Add(d)
+	if d <= 0 && t.fn == nil { // a real timer fires at once for d <= 0
+		select {
+		case t.ch <- t.s.now:
+		default:
+		}
+		t.active = false
+	}
 	return was
 }
 
-// Advance moves the clock by d, firing the timers that fall due in order. The
-// real sleeps give the loop goroutine time to re-arm its timer between steps.
+// Advance moves the clock by d, firing the timers that fall due in order. A
+// timer the loop waits on is followed by waiting until the loop finished the
+// wake-up (loopPasses), so that it has re-armed its timer before the next step;
+// AfterFunc callbacks run synchronously (they only kick the loop).
 func (s *fakeSched) Advance(d time.Duration) {
 	s.mu.Lock()
 	target := s.now.Add(d)
@@ -85,7 +96,6 @@ func (s *fakeSched) Advance(d time.Duration) {
 		if len(due) == 0 {
 			s.now = target
 			s.mu.Unlock()
-			time.Sleep(20 * time.Millisecond)
 			return
 		}
 		sort.Slice(due, func(i, j int) bool { return due[i].when.Before(due[j].when) })
@@ -95,15 +105,40 @@ func (s *fakeSched) Advance(d time.Duration) {
 		}
 		t.active = false
 		now := s.now
+		hook := s.loopPasses
 		s.mu.Unlock()
 		if t.fn != nil {
-			go t.fn()
-		} else {
-			select {
-			case t.ch <- now:
-			default:
+			t.fn()
+			continue
+		}
+		var before int64
+		if hook != nil {
+			before = hook()
+		}
+		select {
+		case t.ch <- now:
+		default:
+		}
+		if hook != nil {
+			for i := 0; hook() <= before && i < 5000; i++ {
+				time.Sleep(time.Millisecond)
 			}
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// pending reports a fired timer token the loop has not consumed yet, or a timer
+// that is due now.
+func (s *fakeSched) pending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, t := range s.timers {
+		if t.ch != nil && len(t.ch) > 0 {
+			return true
+		}
+		if t.active && !t.when.After(s.now) {
+			return true
+		}
+	}
+	return false
 }

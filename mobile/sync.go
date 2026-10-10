@@ -37,7 +37,11 @@ func (h *Handle) SyncLocalToken(aid string) (string, error) {
 }
 
 // SyncNow runs a sync cycle and waits for it (at most 60 s). Call it from a
-// WorkManager task, a foreground service or a BGAppRefreshTask.
+// WorkManager task, a foreground service or a BGAppRefreshTask. In a background
+// slot (background=true in SyncSetConditions) the cycle is cut after 20 s: the
+// error then says "the background slot ended before the cycle finished" when
+// something was synced, or is a deadline error when nothing was; nil always
+// means the cycle completed.
 func (h *Handle) SyncNow() error {
 	ctx, cancel := context.WithTimeout(context.Background(), syncTimeout)
 	defer cancel()

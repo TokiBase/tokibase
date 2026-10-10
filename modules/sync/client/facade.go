@@ -25,6 +25,8 @@ type StatusDoc struct {
 	PullAfter      int64    `json:"pull_after"`
 	AckedOrigin    int64    `json:"acked_origin"`
 	LastOK         string   `json:"last_ok,omitempty"`
+	LastPartial    string   `json:"last_partial,omitempty"`
+	PullDeferred   bool     `json:"pull_deferred"`
 	LastError      string   `json:"last_error,omitempty"`
 	OffsetMs       int64    `json:"offset_ms"`
 	Failures       int      `json:"failures"`
@@ -48,7 +50,7 @@ func (s Status) Doc(conflicts int64) StatusDoc {
 		State: s.State, Online: s.Online, Metered: s.Conditions.Metered, LowPower: s.Conditions.LowPower,
 		Background: s.Conditions.Background, BackgroundDone: s.BackgroundDone, Paused: s.Paused, Running: s.Running,
 		Pending: s.Pending, Conflicts: conflicts, PullAfter: s.PullAfter, AckedOrigin: s.AckedOrigin,
-		LastOK: rfc(s.LastOK), LastError: s.LastError, OffsetMs: s.OffsetMs, Failures: s.Failures,
+		LastOK: rfc(s.LastOK), LastPartial: rfc(s.LastPartial), PullDeferred: s.PullDeferred, LastError: s.LastError, OffsetMs: s.OffsetMs, Failures: s.Failures,
 		NextAttempt: rfc(s.NextAttempt), ApplyErrors: s.ApplyErrors, Heal: s.Heal, DigestMismatch: s.DigestMismatch,
 	}
 }

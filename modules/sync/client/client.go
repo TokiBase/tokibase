@@ -120,6 +120,8 @@ type Options struct {
 	// Retention is the age after which an unpushed local change is orphaned by a
 	// bootstrap (default TOKI_SYNC_RETENTION or 90 days).
 	Retention time.Duration
+	// BackgroundBudget overrides the 20 s of a background slot (tests).
+	BackgroundBudget time.Duration
 	// DigestInterval is the minimum time between two digest checks of the
 	// auto-heal (default TOKI_SYNC_DIGEST_INTERVAL or 10 minutes).
 	DigestInterval time.Duration

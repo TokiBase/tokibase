@@ -20,6 +20,7 @@ func TestLoopMeteredPushOnlyAndBackgroundSlot(t *testing.T) {
 		o.NoPoke, o.Interval = true, 30*time.Second
 		o.Rand = func() float64 { return 0.5 }
 	})
+	fs.loopPasses = cl.LoopPasses
 	local := a.create(t, map[string]any{"title": "from the phone"})
 	onHub := h.create(t, map[string]any{"title": "from the hub"})
 
@@ -64,12 +65,26 @@ func TestLoopMeteredPushOnlyAndBackgroundSlot(t *testing.T) {
 	waitFor("background slot cycle", func() bool { return haveLocal(third.Id) && cl.Status().BackgroundDone })
 	fourth := h.create(t, map[string]any{"title": "fourth hub record"})
 	fs.Advance(time.Hour)
+	p := cl.LoopPasses()
 	cl.Kick()
-	time.Sleep(100 * time.Millisecond)
+	waitLoopPass(t, cl, p+1) // the loop looked at the kick and did nothing
 	if haveLocal(fourth.Id) {
 		t.Fatal("a background slot runs one cycle only")
 	}
 	if r := <-cl.SyncNow(); r.Err != nil || !haveLocal(fourth.Id) {
 		t.Fatalf("SyncNow in a slot: %+v", r)
+	}
+}
+
+// waitLoopPass blocks until the loop finished `want` wake-ups (a condition wait:
+// a negative assertion made after it is not vacuous).
+func waitLoopPass(t *testing.T, cl *client.Client, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for cl.LoopPasses() < want {
+		if time.Now().After(deadline) {
+			t.Fatalf("the loop did not reach pass %d (at %d)", want, cl.LoopPasses())
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

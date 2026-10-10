@@ -100,9 +100,13 @@ func (s *Sync) Now(ctx context.Context) error {
 
 // Status returns the loop status as JSON: state, online, metered, low_power,
 // background, background_done, paused, running, pending, conflicts, pull_after,
-// acked_origin, last_ok, last_error, offset_ms, failures, next_attempt,
+// acked_origin, last_ok, last_partial, pull_deferred, last_error, offset_ms, failures, next_attempt,
 // apply_errors, heal, digest_mismatch.
 func (s *Sync) Status() ([]byte, error) {
+	if err := s.i.enter(); err != nil {
+		return nil, err
+	}
+	defer s.i.calls.Done()
 	m, err := s.mod()
 	if err != nil {
 		return nil, err
@@ -117,6 +121,10 @@ func (s *Sync) Status() ([]byte, error) {
 // an OS granted slot: one cycle of at most 20 s, then the loop stays quiet until
 // the conditions change or Now is called. It never blocks and never fails.
 func (s *Sync) SetConditions(online, metered, lowPower, background bool) {
+	if err := s.i.enter(); err != nil {
+		return // stopped: nothing to tell
+	}
+	defer s.i.calls.Done()
 	m, err := s.mod()
 	if err != nil {
 		return
@@ -126,11 +134,16 @@ func (s *Sync) SetConditions(online, metered, lowPower, background bool) {
 
 // OnEvent registers fn for the sync events as JSON ({"type":"applied|pushed|
 // rejected|superseded|parked|error|rebootstrap|revoked|digest_mismatch|synced|
-// epoch","time":...,"collection":...,"record":...,"code":...,"message":...}). fn
+// partial|epoch","time":...,"collection":...,"record":...,"code":...,"message":...}). fn
 // runs on its own goroutine, slow handlers lose events, a panic is recovered.
 // cancel is idempotent. Events of a loop that starts later (after Enroll) are
-// delivered too.
+// delivered too. Every handler is cancelled by Instance.Stop, and OnEvent on a
+// stopped instance registers nothing.
 func (s *Sync) OnEvent(fn func(ev []byte)) (cancel func()) {
+	if err := s.i.enter(); err != nil {
+		return func() {}
+	}
+	defer s.i.calls.Done()
 	m, err := s.mod()
 	if err != nil || fn == nil {
 		return func() {}
@@ -157,7 +170,9 @@ func (s *Sync) OnEvent(fn func(ev []byte)) (cancel func()) {
 		}
 	})
 	var once stdsync.Once
-	return func() { once.Do(func() { stop(); close(done) }) }
+	cancel = func() { once.Do(func() { stop(); close(done) }) }
+	s.i.trackEvent(cancel)
+	return cancel
 }
 
 // Next returns the next reserved value of a sequence (a ticket number, an
@@ -189,4 +204,32 @@ func (s *Sync) Rebootstrap(ctx context.Context) error {
 		return err
 	}
 	return m.Rebootstrap("rebootstrap requested by the app")
+}
+
+// trackEvent remembers an OnEvent cancel so that Stop can end the handler
+// goroutine of a host that never cancels.
+func (i *Instance) trackEvent(cancel func()) {
+	i.evMu.Lock()
+	i.evCancels = append(i.evCancels, cancel)
+	i.evMu.Unlock()
+}
+
+// cancelEvents cancels every OnEvent handler (Stop).
+func (i *Instance) cancelEvents() {
+	i.evMu.Lock()
+	cs := i.evCancels
+	i.evCancels = nil
+	i.evMu.Unlock()
+	for _, c := range cs {
+		c()
+	}
+}
+
+// stopSyncLoop stops the sync loop before Stop waits for in-flight calls: a
+// Sync().Now that waits for a cycle is answered with ErrStopped at once instead
+// of holding Stop for its own timeout.
+func (i *Instance) stopSyncLoop(ctx context.Context) {
+	if m := sync.FromApp(i.app); m != nil {
+		_ = m.StopLoop(ctx)
+	}
 }
