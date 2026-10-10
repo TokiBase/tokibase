@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/pocketbase/dbx"
-	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/modules/crypto"
 )
 

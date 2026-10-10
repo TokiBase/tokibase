@@ -5,7 +5,6 @@ package sync
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -21,7 +20,6 @@ import (
 	"github.com/tokibase/tokibase/core"
 	"github.com/tokibase/tokibase/kernel"
 	"github.com/tokibase/tokibase/modules/computed"
-	"github.com/tokibase/tokibase/modules/crypto"
 	"github.com/tokibase/tokibase/modules/sync/hlc"
 	"github.com/tokibase/tokibase/tests"
 	"github.com/tokibase/tokibase/tools/filesystem"
