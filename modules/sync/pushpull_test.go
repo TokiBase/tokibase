@@ -1202,7 +1202,7 @@ func TestPendingLocalFieldWithHigherHLCSurvivesPull(t *testing.T) {
 	if err := h.app.Save(hr); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(5 * time.Millisecond)
+	time.Sleep(60 * time.Millisecond) // well beyond the ms resolution of the HLC and the clock offset jitter
 	ar, _ := a.app.FindRecordById("items", r.Id)
 	ar.Set("title", "a edit")
 	if err := a.app.Save(ar); err != nil {

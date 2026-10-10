@@ -45,6 +45,16 @@ Each edge module PR recorded its measured cost here (linux/amd64, stripped, `mak
 | 8 | integration (no code in the binary; re-measured after sync PR1-PR8 and the other merges) | 28,487,840 B (PR 7) | 28,770,464 B (27.44 MiB) | +225,280 B from the other merged work; budget 30 MiB leaves 2.56 MiB |
 
 `go-qrcode` (raster QR fallback) is already linked into edge through `modules/totp`, so it adds nothing; a hand written encoder was not needed. `x/text/encoding/charmap` is not linked in edge, so the codepages are hand tables (about 2 KiB). The measured baseline at PR 1 was 26.34 MiB; the current number is in the table at the top.
+### Sync PR10 size log (nano and edge, linux/amd64, stripped, `make nano` / `make edge`)
+
+| What | Before (origin/main 5d04b774) | After | Delta | Budget |
+| --- | --- | --- | --- | --- |
+| nano `examples/base` | 23,330,976 B (22.25 MiB) | 23,363,744 B (22.28 MiB) | +32,768 B (32 KiB) | 24 MiB |
+| edge `examples/base` | 28,713,120 B (27.38 MiB) | 28,749,984 B (27.42 MiB) | +36,864 B (36 KiB) | 30 MiB |
+
+PR10 adds the `embed` sync facade, the client conditions and the `Scheduler` seam; no new dependency. The `mobile` AAR was not rebuilt on the VM (no Android SDK there, see [EMBED.md](EMBED.md#android-aar-on-linux)); the wrappers add only methods of `Handle` and import nothing new, so the Android `libgojni.so` grows by about the nano delta.
+
+`go-qrcode` (raster QR fallback) is already linked into edge through `modules/totp`, so it adds nothing; a hand written encoder was not needed. `x/text/encoding/charmap` is not linked in edge, so the codepages are hand tables (about 2 KiB). The 25.5 MiB in the table above predates later PRs; the measured baseline at PR 1 is 26.34 MiB.
 
 ## Modules per profile
 

@@ -157,6 +157,15 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod, cache: false }
       - run: tests/e2e/sync.sh
+  e2e-parking:
+    # phase 3 exit gate (docs/SYNC_DESIGN.md §9.1): hub + 2 edge gates + nano phone, 48 simulated hours offline
+    runs-on: [self-hosted, tokibuild]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod, cache: false }
+      - run: tests/e2e/parking.sh
   e2e-scanner:
     runs-on: ubuntu-latest
     steps:

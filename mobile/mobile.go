@@ -57,7 +57,7 @@ func Start(dataDir, listen, envJSON string) (*Handle, error) {
 		if err := json.Unmarshal([]byte(envJSON), &env); err != nil {
 			return nil, errors.New("mobile: envJSON must be a JSON object of strings: " + err.Error())
 		}
-		for _, k := range []string{"profile", "hooksDir", "logLevel"} {
+		for _, k := range []string{"profile", "hooksDir", "logLevel", "syncHub", "syncInterval", "syncNodeKey"} {
 			if v, ok := env[k]; ok {
 				switch k {
 				case "profile":
@@ -66,6 +66,18 @@ func Start(dataDir, listen, envJSON string) (*Handle, error) {
 					opts.HooksDir = v
 				case "logLevel":
 					opts.LogLevel = v
+				case "syncHub", "syncInterval", "syncNodeKey":
+					if opts.Sync == nil {
+						opts.Sync = &embed.SyncOptions{}
+					}
+					switch k {
+					case "syncHub":
+						opts.Sync.HubURL = v
+					case "syncInterval":
+						opts.Sync.Interval = v
+					default:
+						opts.Sync.NodeKey = []byte(v)
+					}
 				}
 				delete(env, k)
 			}

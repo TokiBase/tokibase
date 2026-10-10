@@ -71,6 +71,10 @@ type loopState struct {
 	pushFrom int64
 	needHS   bool
 	page     int
+	// pushOnly marks the cycle being started as push only (metered link, automatic
+	// cycle); bgDone is set once the bounded cycle of a background slot ran.
+	pushOnly bool
+	bgDone   bool
 }
 
 func (c *Client) initLoop() {
@@ -102,13 +106,7 @@ func (c *Client) rnd() float64 {
 	return rand.Float64()
 }
 
-func (c *Client) interval() time.Duration {
-	c.loop.mu.Lock()
-	cond := c.loop.cond
-	c.loop.mu.Unlock()
-	if cond.LowPower || cond.Metered {
-		return SlowInterval
-	}
+func (c *Client) baseInterval() time.Duration {
 	if c.o.Interval > 0 {
 		return c.o.Interval
 	}
@@ -116,6 +114,10 @@ func (c *Client) interval() time.Duration {
 		return d
 	}
 	return DefaultInterval
+}
+
+func (c *Client) interval() time.Duration {
+	return c.Conditions().Plan(c.baseInterval(), 0, false).Interval
 }
 
 func (c *Client) pageSize() int {
@@ -132,22 +134,16 @@ func (c *Client) pageSize() int {
 }
 
 func (c *Client) pullLimit() int {
-	c.loop.mu.Lock()
-	metered := c.loop.cond.Metered
-	c.loop.mu.Unlock()
-	n := c.pageSize()
-	if metered {
-		n = min(n, MeteredPage)
-	}
-	return n
+	return c.Conditions().Plan(0, c.pageSize(), true).PullLimit
 }
 
 func (c *Client) emit(ev Event) {
-	ev.Time = time.Now()
+	ev.Time = c.sched.Now()
 	select {
 	case c.loop.events <- ev:
 	default: // slow reader: drop
 	}
+	c.fanOut(ev)
 }
 
 // Events returns the event channel (buffered; events are dropped when full).
@@ -221,13 +217,17 @@ func (c *Client) Resume() {
 	c.Kick()
 }
 
-// SetConditions updates the device conditions. Going online triggers a cycle.
+// SetConditions updates the device conditions. Going online, or entering or
+// leaving a background slot, triggers a cycle.
 func (c *Client) SetConditions(cond Conditions) {
 	c.loop.mu.Lock()
-	was := c.loop.cond.Online
+	was := c.loop.cond
 	c.loop.cond = cond
+	if cond.Background != was.Background {
+		c.loop.bgDone = false // a new slot gets its one bounded cycle
+	}
 	c.loop.mu.Unlock()
-	if cond.Online && !was {
+	if cond.Online && (!was.Online || cond.Background != was.Background || (was.Metered && !cond.Metered)) {
 		c.Kick()
 	}
 }
@@ -255,7 +255,7 @@ func (c *Client) NotifyWrite() {
 	if d <= 0 {
 		d = DefaultDebounce
 	}
-	time.AfterFunc(d, func() {
+	c.sched.AfterFunc(d, func() {
 		c.loop.wmu.Lock()
 		c.loop.wTimer = false
 		c.loop.wmu.Unlock()
@@ -289,7 +289,7 @@ func (c *Client) Status() Status {
 	st := Status{
 		State: c.loop.state, Online: c.loop.cond.Online, Paused: c.loop.paused, Running: c.loop.running,
 		LastOK: c.loop.lastOK, LastError: c.loop.lastErr, Failures: c.loop.failures, NextAttempt: c.loop.next,
-		ApplyErrors: c.loop.applyErr, HashMismatches: c.loop.hashMis, HashStreak: c.loop.hashStreak, DigestMismatch: append([]string(nil), c.loop.mismatch...), Heal: c.loop.heal,
+		Conditions: c.loop.cond, BackgroundDone: c.loop.bgDone, ApplyErrors: c.loop.applyErr, HashMismatches: c.loop.hashMis, HashStreak: c.loop.hashStreak, DigestMismatch: append([]string(nil), c.loop.mismatch...), Heal: c.loop.heal,
 	}
 	c.loop.mu.Unlock()
 	st.OffsetMs = c.Offset().Milliseconds()
@@ -311,7 +311,7 @@ func (c *Client) setState(s string) {
 
 // run is the loop goroutine.
 func (c *Client) run(ctx context.Context) {
-	timer := time.NewTimer(0)
+	timer := c.sched.NewTimer(0)
 	defer timer.Stop()
 	for {
 		var reqs []syncReq
@@ -319,7 +319,7 @@ func (c *Client) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-timer.C:
+		case <-timer.C():
 		case <-c.loop.kick:
 		case r := <-c.loop.reqs:
 			reqs, explicit = append(reqs, r), true
@@ -335,9 +335,10 @@ func (c *Client) run(ctx context.Context) {
 		}
 
 		c.loop.mu.Lock()
-		paused, online := c.loop.paused, c.loop.cond.Online
+		paused, cond, bgDone := c.loop.paused, c.loop.cond, c.loop.bgDone
 		backoffUntil := c.loop.next
 		c.loop.mu.Unlock()
+		plan := cond.Plan(c.baseInterval(), c.pageSize(), explicit)
 		deliver := func(r Result) {
 			for _, q := range reqs {
 				q.res <- r
@@ -346,18 +347,42 @@ func (c *Client) run(ctx context.Context) {
 		switch {
 		case paused:
 			deliver(Result{Err: ErrPaused})
-			resetTimer(timer, c.interval())
+			resetTimer(timer, plan.Interval)
 			continue
-		case !online:
+		case !plan.Attempt:
 			deliver(Result{Err: ErrOffline})
-			resetTimer(timer, c.interval())
+			resetTimer(timer, plan.Interval)
 			continue
-		case !explicit && time.Now().Before(backoffUntil):
-			resetTimer(timer, time.Until(backoffUntil))
+		case plan.Budget > 0 && bgDone && !explicit:
+			// the bounded cycle of this background slot ran: wait for SyncNow or new conditions
+			continue
+		case !explicit && plan.Budget == 0 && c.sched.Now().Before(backoffUntil):
+			// (a background slot is a rare OS grant: it never waits for a backoff)
+			resetTimer(timer, backoffUntil.Sub(c.sched.Now()))
+			continue
+		case !plan.Pull && c.bootstrapPending():
+			// a snapshot is a big download: not on a metered link unless asked for
+			resetTimer(timer, plan.Interval)
 			continue
 		}
 
-		res := c.cycleBoot(ctx)
+		c.loop.mu.Lock()
+		c.loop.pushOnly = !plan.Pull
+		c.loop.mu.Unlock()
+		cctx, cancel := ctx, context.CancelFunc(func() {})
+		if plan.Budget > 0 {
+			cctx, cancel = context.WithTimeout(ctx, plan.Budget)
+		}
+		res := c.cycleBoot(cctx)
+		cancel()
+		c.loop.mu.Lock()
+		c.loop.pushOnly = false
+		c.loop.mu.Unlock()
+		if plan.Budget > 0 && ctx.Err() == nil && errors.Is(res.Err, context.DeadlineExceeded) {
+			// the slot ended in the middle of the cycle: every page committed so far
+			// stays, the next slot continues. Not a failure, no backoff.
+			res.Err, res.Partial = nil, true
+		}
 		deliver(res)
 		if ctx.Err() != nil {
 			return
@@ -375,13 +400,19 @@ func (c *Client) run(ctx context.Context) {
 				ra = he.RetryAfter
 			}
 			wait = Backoff(c.loop.failures, c.rnd(), ra)
-			c.loop.next = time.Now().Add(wait)
+			c.loop.next = c.sched.Now().Add(wait)
 			c.loop.lastErr = res.Err.Error()
 		} else {
 			c.loop.failures, c.loop.next, c.loop.lastErr = 0, time.Time{}, ""
-			c.loop.lastOK = time.Now()
+			c.loop.lastOK = c.sched.Now()
+		}
+		if plan.Budget > 0 {
+			c.loop.bgDone = true
 		}
 		c.loop.mu.Unlock()
+		if plan.Budget > 0 {
+			continue // one bounded cycle per background slot, no timer
+		}
 		if res.Err == nil {
 			wait = c.interval()
 		}
@@ -389,10 +420,10 @@ func (c *Client) run(ctx context.Context) {
 	}
 }
 
-func resetTimer(t *time.Timer, d time.Duration) {
+func resetTimer(t Timer, d time.Duration) {
 	if !t.Stop() {
 		select {
-		case <-t.C:
+		case <-t.C():
 		default:
 		}
 	}
@@ -430,11 +461,20 @@ func (c *Client) cycle(ctx context.Context) (res Result) {
 		res.Err = err
 		return
 	}
+	if c.pushOnlyNow() {
+		return // metered link: the pull waits for an unmetered moment or SyncNow
+	}
 	if err := c.pullAll(ctx, &res); err != nil {
 		res.Err = err
 		return
 	}
 	return
+}
+
+func (c *Client) pushOnlyNow() bool {
+	c.loop.mu.Lock()
+	defer c.loop.mu.Unlock()
+	return c.loop.pushOnly
 }
 
 // RunOnce runs one full cycle (session, push, pull, ack) in the caller's
@@ -527,13 +567,13 @@ func (c *Client) healDue(ctx context.Context) bool {
 		}
 	}
 	c.loop.mu.Lock()
-	due := time.Since(c.loop.digestAt) >= interval
+	due := c.sched.Now().Sub(c.loop.digestAt) >= interval
 	c.loop.mu.Unlock()
 	if !due || c.Status().Pending > 0 {
 		return false
 	}
 	c.loop.mu.Lock()
-	c.loop.digestAt = time.Now()
+	c.loop.digestAt = c.sched.Now()
 	c.loop.mu.Unlock()
 	digests, err := db.MetaDigests()
 	cur, _ := LoadCursor(c.o.App)

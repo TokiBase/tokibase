@@ -32,6 +32,7 @@ inst.Export(ctx, file)                                      // backup zip
 | `AllowedOrigins`, `AllowedHosts` | See `Listen`. |
 | `LogLevel` | `debug`, `info` (default), `warn`, `error`; stored in the app log settings. |
 | `MaxBodyBytes` | Request body cap for TCP and `Call`, 413 above it. Default 4 MiB (`DefaultMaxBodyBytes`), negative = unlimited. Raise it if the app uploads larger files. |
+| `Sync` | `*SyncOptions{HubURL, Interval, NodeKey}`: makes the instance a sync spoke (profile `nano` or `edge` only, other profiles are refused). Defaults `TOKI_SYNC_ROLE=spoke`, `TOKI_SYNC_HUB_URL`, `TOKI_SYNC_INTERVAL` and `TOKI_SYNC_NODE_KEY`; entries in `Env` win. See [Sync from a Flutter app](#sync-from-a-flutter-app-nano-as-a-spoke). Ignored under the `no_sync` tag. |
 
 Notes:
 
@@ -52,11 +53,14 @@ mobile.Start(dataDir, listen, envJSON) (*Handle, error)
 Handle.URL() / Call(method, path, headersJSON, body) (*Response, error)
 Handle.Superuser(email, password) / Stop()
 Handle.Subscribe(topic, EventCallback) (int, error) / SubscribeAs(token, topic, cb) / Unsubscribe(id)
+Handle.SyncEnroll(hubURL, code) error / SyncAddActor(hubToken) (aid string, err error) / SyncLocalToken(aid) (string, error)
+Handle.SyncNow() error / SyncStatus() (json string, err error) / SyncSetConditions(online, metered, lowPower, background bool)
+Handle.SyncSubscribe(EventCallback) (int, error) / SyncNext(seq string) (int64, error) / SyncRebootstrap() error
 type EventCallback interface{ OnEvent(data []byte) }
 Response{Status int; HeadersJSON string; Body []byte}
 ```
 
-`listen` empty or `-` = no TCP listener (opt in with e.g. `127.0.0.1:0`). `Subscribe` returns an error after `Stop` or with a nil callback. `envJSON` is a JSON object of strings. The keys `profile`, `hooksDir` and `logLevel` select those options instead of being exported. Callbacks arrive on a background thread: hop to the UI thread yourself.
+`listen` empty or `-` = no TCP listener (opt in with e.g. `127.0.0.1:0`). `Subscribe` returns an error after `Stop` or with a nil callback. `envJSON` is a JSON object of strings. The keys `profile`, `hooksDir`, `logLevel`, `syncHub`, `syncInterval` and `syncNodeKey` select those options instead of being exported (the `sync*` keys create `Options.Sync`). Callbacks arrive on a background thread: hop to the UI thread yourself.
 
 Build (needs gomobile, plus Android SDK/NDK or macOS with Xcode; not run in CI):
 
@@ -85,6 +89,64 @@ Simplest integration: start with `listen = "127.0.0.1:0"`, read `URL()` over the
 final url = await channel.invokeMethod<String>('start', {'dataDir': dir});
 final pb = PocketBase(url!);
 ```
+
+## Sync from a Flutter app (nano as a spoke)
+
+A nano app can work offline and replicate to a hub (`toki` solo/team/cluster with `TOKI_SYNC_ROLE=hub`, see [SYNC_DESIGN.md](SYNC_DESIGN.md) and [modules/sync.md](modules/sync.md)). Start the instance as a spoke, enroll once, and the loop in the process does the rest. Every write goes to the local SQLite first; the app never waits for the network.
+
+```go
+inst, _ := embed.Start(embed.Options{
+    DataDir: dir, Listen: "-", Profile: "nano",
+    Sync: &embed.SyncOptions{HubURL: "https://hub.example.com", Interval: "30s"},
+    // Env: {"TOKI_SYNC_INSECURE": "1"} only for an http hub on a private network
+})
+s := inst.Sync()
+s.SetConditions(true /*online*/, false /*metered*/, false /*lowPower*/, false /*background*/)
+cancel := s.OnEvent(func(ev []byte) { /* {"type":"applied|pushed|rejected|synced...","collection":...} */ })
+
+// first run: the hub operator ran `toki sync enroll --name phone --profile nano --actor devices/<id>`
+err := s.Enroll(ctx, "", code)                    // starts the loop
+aid, err := s.AddActor(ctx, hubAuthToken)         // the officer logged in to the HUB with the normal API
+token, err := s.LocalToken(aid)                   // local auth token: use it as Authorization in Call
+no, err := s.Next("tickets")                      // reserved number (or let a `reserve:tickets` field fill it)
+err = s.Now(ctx)                                  // sync now (WorkManager / BGAppRefreshTask)
+status, _ := s.Status()                           // JSON, see below
+```
+
+| Method (`Instance.Sync()`) | `mobile.Handle` | Meaning |
+| --- | --- | --- |
+| `Enroll(ctx, hubURL, code)` | `SyncEnroll` | One time: swaps the code for a device certificate and starts the loop. Empty `hubURL` = `Options.Sync.HubURL`. The node key lives in `<DataDir>/sync_node.key` (or `SyncOptions.NodeKey`: keep it in the platform keystore and pass it in). |
+| `AddActor(ctx, hubToken)` | `SyncAddActor` | Actor grant for the user behind a hub auth token (design §1.6); returns the grant id. Needs the auth collection of the user to be synced (a `pull` policy on it). |
+| `LocalToken(aid)` | `SyncLocalToken` | Local auth token of that user: local rules see the same `@request.auth.id` offline, and the hub replays the writes as that user. |
+| `Now(ctx)` | `SyncNow` | One cycle, waits for it, ignores a backoff. Also pulls on a metered link. |
+| `Status()` | `SyncStatus` | JSON: `state`, `online`, `metered`, `low_power`, `background`, `background_done`, `paused`, `running`, `pending` (unpushed changes), `conflicts` (open, mirrored), `pull_after`, `acked_origin`, `last_ok`, `last_error`, `offset_ms`, `failures`, `next_attempt`, `apply_errors`, `heal`, `digest_mismatch`. |
+| `SetConditions(online, metered, lowPower, background)` | `SyncSetConditions` | Device state, see the next table. Never blocks. |
+| `OnEvent(fn)` | `SyncSubscribe` | JSON events: `applied`, `pushed`, `rejected`, `superseded`, `parked`, `error`, `rebootstrap`, `revoked`, `digest_mismatch`, `synced`, `epoch`. `fn` must not block. |
+| `Next(sequence)` | `SyncNext` | Next reserved number; fails closed (`sync_reservation_exhausted`) when the local ranges are used up and the hub could not be reached. |
+| `Rebootstrap(ctx)` | `SyncRebootstrap` | Replace the synced data with a fresh snapshot (unpushed local changes are kept and replayed). |
+
+Under the `no_sync` tag the Go methods return `embed.ErrSyncUnavailable`; on an instance that is not a spoke they return `sync.ErrNotSpoke` / `sync.ErrNotEnrolled`.
+
+Conditions (design §6.2):
+
+| Condition | Effect |
+| --- | --- |
+| `online=false` | No attempts at all (no wasted radio). Going online starts a cycle at once. |
+| `metered` | Automatic cycles only push; a pull happens on `Now` (pages of at most 100 changes). Interval 5 minutes. |
+| `lowPower` | Interval 5 minutes. |
+| `background` | An OS granted slot: one cycle of at most 20 s (commits page by page, so a cut-off cycle loses nothing), then the loop stays quiet until the conditions change or `Now` is called. A new slot ignores a running backoff. |
+| (always) | Local writes trigger a cycle after a 2 s debounce, the hub `@sync` poke too; errors back off 1 s to 5 min with 20 % jitter, `Retry-After` is honored. |
+
+Flutter wiring (platform channel, see above):
+
+- `connectivity_plus` stream: `onConnectivityChanged` -> `SyncSetConditions(online: result != none, metered: result == mobile, lowPower: batterySaver, background: false)`.
+- Foreground: nothing else; the loop runs inside the process, the app listens to `SyncSubscribe` for a "synced" snackbar or a badge from `pending`.
+- Android: a `WorkManager` periodic task (15 min minimum) starts the foreground service that owns the instance, calls `SyncSetConditions(…, background=false)` and `SyncNow`, then lets the service end. The loop also runs while the foreground service is up.
+- iOS: a `BGAppRefreshTask` handler starts the instance (same data dir), calls `SyncSetConditions(online, metered, lowPower, background=true)` and `SyncNow()`, and calls `setTaskCompleted` when `SyncNow` returns (the bounded cycle ends within 20 s) or in the expiration handler (`Stop`, then nothing is lost: pages commit one by one).
+- Logging in: use the normal PocketBase client against the HUB for the login (needs the network once per grant lifetime, 30 days by default), pass the token to `SyncAddActor`, then use the LOCAL instance (`Call` or the loopback URL) with `SyncLocalToken(aid)` for everything.
+- Reserved numbers: give the collection a `reserve:<sequence>` field type in its sync policy and leave the field empty on create; the instance fills it from the local range in the same transaction.
+
+Run `go run ./examples/embed -sync-hub http://127.0.0.1:8090 -sync-insecure -sync-code CODE ./data` for a working demo (prints events and the status every 10 s). The AAR and XCFramework builds are covered by the sections below and are not rebuilt in CI; the sync wrappers are plain methods of `Handle` and add no new gomobile type.
 
 ## Platform lifecycle
 

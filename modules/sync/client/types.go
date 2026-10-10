@@ -23,11 +23,14 @@ var (
 type Conditions struct {
 	// Online false means no attempts at all (no wasted radio).
 	Online bool
-	// Metered limits the pull page to 100 and uses the long interval.
+	// Metered: automatic cycles only push (a SyncNow also pulls, pages of at most
+	// 100 changes) and the interval is the long one.
 	Metered bool
 	// LowPower uses the long interval (5 min).
 	LowPower bool
-	// Background marks an OS-granted background slot (bounded cycles are PR10).
+	// Background marks an OS-granted background slot: one bounded cycle of at most
+	// BackgroundBudget (20 s), then the loop stops until the conditions change or
+	// SyncNow is called.
 	Background bool
 }
 
@@ -91,7 +94,10 @@ type Result struct {
 	Parked     int
 	Pulled     int
 	Applied    int
-	Err        error
+	// Partial is true when the bounded cycle of a background slot ran out of time
+	// before it finished (what was done is committed).
+	Partial bool
+	Err     error
 }
 
 // Status is a snapshot of the loop.
@@ -115,6 +121,10 @@ type Status struct {
 	DigestMismatch []string
 	// Heal is "heal_exhausted" when the auto-heal stopped after too many heals.
 	Heal string
+	// Conditions are the device conditions in force; BackgroundDone is true once
+	// the bounded cycle of the current background slot ran.
+	Conditions     Conditions
+	BackgroundDone bool
 }
 
 // EventEpoch is emitted when the hub epoch changed.
