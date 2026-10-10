@@ -155,13 +155,15 @@ Ciphertext is what is stored, so `toki backup` archives, WAL replicas and Litest
 
 With `modules/sync` the **ciphertext replicates verbatim** between hub and spokes and every node keeps its own master key. The module implements `kernel.SyncKeyProvider`:
 
-- `ExportKeys` (hub): every DEK version of the given collections, unwrapped with the hub master key and sealed to the X25519 key of the node (`ephPub || nonce || AES-GCM(HKDF(X25519(eph, node)), dek)`, AAD = collection id + version). Retired versions are listed without key material.
+- `ExportKeys` (hub): every DEK version of the given collections, unwrapped with the hub master key and sealed to the X25519 key of the node (`ephPub || nonce || AES-GCM(HKDF(X25519(eph, node)), dek)`, AAD = collection id + version). Retired versions are listed without key material. A collection whose keys cannot be exported (a version that does not unwrap) is returned in the failure list and left out; the call only fails when nothing can be exported (no master key, unusable recipient key).
 - `ImportKeys` (spoke): unwrap with the node key, **re-wrap under the local master key** into `_crypto_keys`. Idempotent; a different DEK for an existing version is an error; with no master key it fails (`ErrNoMasterKey`) and sync refuses to run. A retired version is destroyed locally only when no local row still uses it.
 - `NeedsKeys`: the collection has non-stripped encrypted fields.
 - Write path under a `SyncOrigin`: `onValidate` runs for new records too, decrypts the incoming ciphertext and remembers it; `onWrite` stores it unchanged (so the record hash is the same on every node) and recomputes the blind-index row locally. A push whose ciphertext cannot be decrypted is refused; a pull of an unknown key version returns `kernel.ErrSyncKeyMissing` (the sync client fetches the key with a new handshake and retries).
 - `_crypto_fields.state = "stripped"` (set by a sync schema bundle for `crypto: strip`): the module ignores the field on that node; it needs no key and the column is plain.
 
-The wrap keys are derived per handshake with an ephemeral hub key; the device never learns the hub master key. Limits: `enable`, `disable` and `rotate` sweep rows without hooks, so they produce no change rows (see docs/modules/sync.md "Encrypted fields").
+The wrap keys are derived per handshake with an ephemeral hub key; the device never learns the hub master key. The hub signs the whole `keys` section of the handshake answer (see docs/modules/sync.md "Signed keys").
+
+**Sweeps and sync.** `enable`, `disable` and `rotate` still rewrite rows with direct SQL, but on a synced collection each batch also reports the changed records to the sync hub (`kernel.SyncSweeper.RecordSweep`, same transaction), which writes a `u` change per record, so spokes converge on the new ciphertext. They are **refused on a spoke** (`sync role spoke`) and in a process that has a sync policy for the collection but no sync module. `toki crypto retire` asks the hub for nodes that may still hold or write the version and lists them; `--force` retires anyway (an offline change under a retired version is then parked on the hub with the code `crypto_version_retired`). A `disabling` field is passed to the nodes as such, so they store the plaintext they are sent verbatim. See docs/modules/sync.md "Key sweeps".
 
 ## Limits
 

@@ -41,6 +41,8 @@ type Status struct {
 	// Snapshot is the bootstrap position ("<collection id>/<last record id>" or a
 	// phase) while a snapshot bootstrap is in progress.
 	Snapshot string `json:"snapshot,omitempty"`
+	// KeyMissing lists the collections (ids) a spoke skips because their data key never arrived.
+	KeyMissing []string `json:"key_missing,omitempty"`
 }
 
 // GetStatus reads the status from the database. role is the configured role
@@ -101,6 +103,9 @@ func GetStatus(app core.App, role Role) (*Status, error) {
 			}
 		}
 	}
+	if role == RoleSpoke {
+		s.KeyMissing = client.KeyMissingCollections(app)
+	}
 	return s, nil
 }
 
@@ -136,6 +141,9 @@ func NewCommand(app core.App) *cobra.Command {
 					dash(s.HubURL), dash(s.CertExpires), s.ClockOffsetMs, dash(s.LastHandshake), dash(s.LastError), dash(s.State))
 				if s.Snapshot != "" {
 					fmt.Fprintf(out, "snapshot: %s\n", s.Snapshot)
+				}
+				for _, id := range s.KeyMissing {
+					fmt.Fprintf(out, "key_missing: %s (skipped: its encryption key never arrived from the hub)\n", id)
 				}
 			}
 			return nil

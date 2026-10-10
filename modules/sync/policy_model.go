@@ -56,6 +56,10 @@ func policyFullFields() []core.Field {
 		&core.TextField{Name: "partition", Max: 200},
 		&core.JSONField{Name: "field_types", MaxSize: 16384},
 		&core.JSONField{Name: "exclude", MaxSize: 16384},
+		// strip_fields is maintained by the hub (stripFieldsFor): the encrypted fields
+		// that `crypto: strip` withholds, persisted so that the decision never depends
+		// on the live crypto registry. Sticky while the policy says strip.
+		&core.JSONField{Name: "strip_fields", MaxSize: 16384},
 		&core.TextField{Name: "hook", Max: 100},
 		// pull_view_rule defaults to true when the record is created through the
 		// API or the CLI (see bindDefaults); a bool field has no default of its own.
@@ -328,11 +332,13 @@ func (c *policyCache) bindPolicyModel() {
 	if c.m.role != RoleHub {
 		return
 	}
+	m := c.m
 	app.OnRecordValidate(PoliciesCollection).Bind(&hook.Handler[*core.RecordEvent]{
 		Id: hookId + "polval", Func: func(e *core.RecordEvent) error {
 			if err := policyValidationErrors(checkPolicy(e.App, e.Record)); err != nil {
 				return err
 			}
+			e.Record.Set("strip_fields", m.stripFieldsFor(e.App, e.Record))
 			return e.Next()
 		},
 	})

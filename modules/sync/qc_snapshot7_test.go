@@ -444,7 +444,7 @@ func TestRebaseKeepsTheOriginalHLCOfAnEditNewerThanTheHub(t *testing.T) {
 	if err := h.app.Save(hr); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(5 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 	ra, _ := a.app.FindRecordById("items", r.Id)
 	ra.Set("title", "offline edit")
 	if err := a.app.Save(ra); err != nil {

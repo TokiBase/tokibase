@@ -29,7 +29,7 @@ func TestSyncKeysWrapUnwrapRekeyUnderLocalMaster(t *testing.T) {
 	col := patients(t, hub)
 	node := x25519(t)
 
-	keys, err := kernel.SyncKeyProviderOf(hub.app).ExportKeys([]string{col.Id}, node.PublicKey().Bytes())
+	keys, _, err := kernel.SyncKeyProviderOf(hub.app).ExportKeys([]string{col.Id}, node.PublicKey().Bytes())
 	if err != nil || len(keys) != 1 || keys[0].Version != 1 || len(keys[0].Wrapped) < 60 {
 		t.Fatalf("export: %+v %v", keys, err)
 	}
@@ -91,7 +91,7 @@ func TestSyncKeysRetiredVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	node := x25519(t)
-	keys, err := kernel.SyncKeyProviderOf(hub.app).ExportKeys([]string{col.Id}, node.PublicKey().Bytes())
+	keys, _, err := kernel.SyncKeyProviderOf(hub.app).ExportKeys([]string{col.Id}, node.PublicKey().Bytes())
 	if err != nil || len(keys) != 2 || !keys[0].Retired || keys[0].Wrapped != nil || keys[1].Retired || keys[1].Version != 2 {
 		t.Fatalf("export after retire: %+v %v", keys, err)
 	}
@@ -121,7 +121,7 @@ func TestSyncOriginKeepsIncomingCiphertext(t *testing.T) {
 		t.Fatal("collection ids must be identical across nodes")
 	}
 	node := x25519(t)
-	keys, _ := kernel.SyncKeyProviderOf(hub.app).ExportKeys([]string{col.Id}, node.PublicKey().Bytes())
+	keys, _, _ := kernel.SyncKeyProviderOf(hub.app).ExportKeys([]string{col.Id}, node.PublicKey().Bytes())
 	if err := kernel.SyncKeyProviderOf(spoke.app).ImportKeys(keys, node.Bytes()); err != nil {
 		t.Fatal(err)
 	}

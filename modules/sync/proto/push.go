@@ -60,12 +60,14 @@ const (
 	CodePolicyDirection  = "policy_direction"
 	CodePolicyPartition  = "policy_partition"
 	CodePolicyCrypto     = "policy_crypto"
-	CodeFutureHLC        = "future_hlc"
-	CodeSuperseded       = "superseded"
-	CodeOrphaned         = "orphaned"
-	CodeHubWins          = "hub_wins"
-	CodeHookRejected     = "hook_rejected"
-	CodeHookFailed       = "hook_failed"
+	// CodeCryptoRetired: the ciphertext was made under a key version the hub retired.
+	CodeCryptoRetired = "crypto_version_retired"
+	CodeFutureHLC     = "future_hlc"
+	CodeSuperseded    = "superseded"
+	CodeOrphaned      = "orphaned"
+	CodeHubWins       = "hub_wins"
+	CodeHookRejected  = "hook_rejected"
+	CodeHookFailed    = "hook_failed"
 )
 
 // PushChange is one change of a push request.

@@ -75,6 +75,10 @@ type loopState struct {
 	// cycle); bgDone is set once the bounded cycle of a background slot ran.
 	pushOnly bool
 	bgDone   bool
+	// keyMiss counts the attempts per collection id that did not bring a missing data key (keymissing.go).
+	keyMiss map[string]int
+	// keyMax is the highest data key version per collection id the hub sent at the last handshake.
+	keyMax map[string]int
 }
 
 func (c *Client) initLoop() {
@@ -299,6 +303,7 @@ func (c *Client) Status() Status {
 		if cur, _ := LoadCursor(c.o.App); cur != nil {
 			st.PullAfter, st.AckedOrigin = cur.PullAfter, cur.AckedOrigin
 		}
+		st.KeyMissing = KeyMissingCollections(c.o.App)
 	}
 	return st
 }

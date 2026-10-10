@@ -196,7 +196,7 @@ func (m *Module) enrollHandler(e *core.RequestEvent) error {
 	}
 	edPub, ok1 := decodeKey(req.Ed25519Pub, ed25519.PublicKeySize)
 	kxPub, ok2 := decodeKey(req.X25519Pub, 32)
-	if !ok1 || !ok2 || req.Code == "" || len(req.Code) > 128 {
+	if !ok1 || !ok2 || req.Code == "" || len(req.Code) > 128 || !validX25519Pub(kxPub) {
 		return syncErr(e, http.StatusBadRequest, proto.CodeBadRequest, "invalid request body", nil)
 	}
 	invalid := func() error {
@@ -508,6 +508,13 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 		return unauth("replay_floor", nil)
 	}
 
+	// a node that cannot read `state: stripped` would treat a withheld field as
+	// encrypted (and write plaintext or refuse): it must upgrade first
+	if !hasCap(req.Caps, proto.CapStrip) && m.hasStripPolicy() {
+		return syncErr(e, http.StatusUpgradeRequired, proto.CodeClientUpgrade,
+			"This hub withholds encrypted fields (crypto: strip) and the node is too old to honour that; upgrade the node.", nil)
+	}
+
 	// compaction (§3.6): a stale node, or a cursor older than the oldest kept
 	// change, has to re-bootstrap
 	m.noteHead()
@@ -526,11 +533,17 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 	if err != nil {
 		return err
 	}
-	// PR9: the data keys of the encrypted collections, wrapped to the X25519 key of the node
-	keys, err := m.handshakeKeys(cur)
+	// PR9: the data keys of the encrypted collections, wrapped to the X25519 key of the node.
+	// An export problem costs only the affected collections (key_errors), never the handshake.
+	keys, keyErrs, have, err := m.handshakeKeys(cur)
 	if err != nil {
-		e.App.Logger().Error("sync: cannot export the encryption keys for a handshake", "node", nodeID, "error", err)
-		return syncErr(e, http.StatusServiceUnavailable, proto.CodeHubUnavailable, "the hub cannot provide the encryption keys (is its crypto master key set?)", nil)
+		e.App.Logger().Error("sync: cannot list the encryption keys for a handshake", "node", nodeID, "error", err)
+		return syncErr(e, http.StatusServiceUnavailable, proto.CodeHubUnavailable, "the hub cannot list the encryption keys of this node", nil)
+	}
+	m.noteKeyReport(nodeID, have, req.KeyPending)
+	keysSig := ""
+	if len(keys) > 0 || len(keyErrs) > 0 {
+		keysSig = proto.SignKeys(m.hub.priv, nodeID, m.hub.id, ts, nonce, keys, keyErrs)
 	}
 	serverTime := m.stampTime(e, nodeID, ts, nonce, now)
 	return e.JSON(http.StatusOK, proto.HandshakeResponse{
@@ -546,12 +559,14 @@ func (m *Module) handshakeHandler(e *core.RequestEvent) error {
 		Policies:     m.handshakePolicies(),
 		Params:       params,
 		Keys:         keys,
+		KeyErrors:    keyErrs,
+		KeysSig:      keysSig,
 		PushFrom:     int64(cur.GetFloat("pushed_origin_seq")) + 1,
 		LowWater:     low,
 		Rebootstrap:  rebootstrap,
 		Reservations: m.handshakeReservations(nodeID),
 		PollMs:       DefaultPollMs,
-		Caps:         []string{proto.CapFiller},
+		Caps:         []string{proto.CapFiller, proto.CapKeysSig, proto.CapStrip},
 	})
 }
 
@@ -651,4 +666,13 @@ func (m *Module) nodeAuth() *hook.Handler[*core.RequestEvent] {
 // pingHandler is GET /api/sync/ping (node-authenticated).
 func (m *Module) pingHandler(e *core.RequestEvent) error {
 	return e.JSON(http.StatusOK, proto.PingResponse{NodeID: NodeFrom(e), ServerTime: m.now().UTC().Format(proto.TimeLayout)})
+}
+
+func hasCap(caps []string, c string) bool {
+	for _, x := range caps {
+		if x == c {
+			return true
+		}
+	}
+	return false
 }

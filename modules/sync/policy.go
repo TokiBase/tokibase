@@ -26,6 +26,10 @@ type policy struct {
 	Direction string
 	Types     map[string]string
 	Exclude   map[string]struct{}
+	// StripFields is the persisted set of encrypted fields that `crypto: strip`
+	// withholds (see stripFieldsFor). It is part of the policy, so the decision
+	// does not depend on the live crypto registry.
+	StripFields map[string]struct{}
 
 	// ColID is the id of the collection ("" while the collection does not exist).
 	ColID string
@@ -130,7 +134,7 @@ func (c *policyCache) load() (map[string]*policy, error) {
 		if !r.GetBool("enabled") {
 			continue
 		}
-		p := &policy{Direction: r.GetString("direction"), Types: map[string]string{}, Exclude: map[string]struct{}{},
+		p := &policy{Direction: r.GetString("direction"), Types: map[string]string{}, Exclude: map[string]struct{}{}, StripFields: map[string]struct{}{},
 			Strategy: r.GetString("strategy"), Hook: r.GetString("hook"), Review: r.GetBool("review")}
 		if p.Direction == "" {
 			p.Direction = DirBoth
@@ -165,6 +169,15 @@ func (c *policyCache) load() (map[string]*policy, error) {
 			}
 			for _, f := range ex {
 				p.Exclude[f] = struct{}{}
+			}
+		}
+		if raw := rawJSON(r, "strip_fields"); raw != nil {
+			var sf []string
+			if err := json.Unmarshal(raw, &sf); err != nil {
+				bad = append(bad, "strip_fields: "+err.Error())
+			}
+			for _, f := range sf {
+				p.StripFields[f] = struct{}{}
 			}
 		}
 		if !slices.Contains(policyStrategies, p.Strategy) {

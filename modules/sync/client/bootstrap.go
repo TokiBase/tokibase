@@ -427,6 +427,19 @@ func (c *Client) runSnapshot(ctx context.Context, st *snapState) error {
 		if err != nil {
 			return err
 		}
+		if keyMissingMarked(c.o.App.NonconcurrentDB(), colID) {
+			// its data key never arrived: the collection is skipped (keymissing.go); it is
+			// fetched by a new bootstrap when a handshake brings the key
+			next, last := phaseAck, true
+			if idx+1 < len(st.Cols) {
+				next, last = st.Cols[idx+1].ID+"/", false
+			}
+			if err := c.advanceSnapshot(next, last, st.Start); err != nil {
+				return err
+			}
+			st.After = next
+			continue
+		}
 		page, err := c.snapshotPage(ctx, st.ID, colID, after)
 		if err != nil {
 			return err
@@ -441,6 +454,14 @@ func (c *Client) runSnapshot(ctx context.Context, st *snapState) error {
 			}
 		}
 		if err := c.applySnapshotPage(col, after, page, next, last, st.Start); err != nil {
+			if errors.Is(err, kernel.ErrSyncKeyMissing) {
+				// a key version the handshake did not bring: ask again, and after a few
+				// attempts skip this collection instead of failing the whole bootstrap
+				c.ForceHandshake()
+				if c.noteKeyMissing(c.o.App.NonconcurrentDB(), colID) {
+					continue
+				}
+			}
 			return err
 		}
 		st.After = next
@@ -477,6 +498,21 @@ func (c *Client) runSnapshot(ctx context.Context, st *snapState) error {
 			return fmt.Errorf("sync: unknown snapshot phase %q", st.After)
 		}
 	}
+}
+
+// advanceSnapshot moves the bootstrap position (and, after the last collection,
+// the pull cursor) without applying a page.
+func (c *Client) advanceSnapshot(next string, last bool, start int64) error {
+	return c.o.App.RunInTransaction(func(tx kernel.App) error {
+		db := tx.NonconcurrentDB()
+		if last {
+			if _, err := db.NewQuery("UPDATE _sync_cursors SET pull_after={:s}").Bind(dbx.Params{"s": start}).Execute(); err != nil {
+				return err
+			}
+		}
+		_, err := db.NewQuery("UPDATE _sync_cursors SET snapshot_after={:a}").Bind(dbx.Params{"a": next}).Execute()
+		return err
+	})
 }
 
 func (c *Client) snapshotPage(ctx context.Context, id, col, after string) (*proto.SnapshotPage, error) {

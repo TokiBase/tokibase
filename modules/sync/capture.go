@@ -471,6 +471,9 @@ type change struct {
 	// partOld / partNew: partition key before and after (hub, partitioned policies)
 	partOld string
 	partNew string
+	// ungrouped keeps the row out of the atomic group of its transaction (a key
+	// sweep writes hundreds of independent rows in one transaction).
+	ungrouped bool
 }
 
 // insertChange appends the row, assigns the atomic group id and persists the
@@ -489,6 +492,9 @@ func (m *Module) insertChange(tx kernel.App, c *change) error {
 	}
 
 	st := m.txStateOf(tx)
+	if c.ungrouped {
+		st = nil
+	}
 	txid := ""
 	if st != nil {
 		st.mu.Lock()
