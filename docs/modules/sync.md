@@ -302,7 +302,7 @@ Triggers: the handshake says `rebootstrap`, pull answers 410, `_sync_cursors.sta
 - `toki sync rebootstrap <node>` (hub): status `rebootstrap`; the next handshake answers `rebootstrap: true`. Audit `sync.node.rebootstrap`.
 - `TOKI_SYNC_AUTO_HEAL=1`: two hash mismatches in a row, or two digest checks in a row (at most every `TOKI_SYNC_DIGEST_INTERVAL`, default 10 min, only without pending changes and only when the node is at the hub head) that the hub reports as different, schedule a re-bootstrap. At most 2 heals per 24 h (`_sync_state.heal_log`); after that the loop stops healing, `Status().Heal` is `heal_exhausted`, `last_error` says so and one error is logged, until the cause is fixed or `toki sync rebootstrap` is run. A digest ignores rows without hub meta (`hlc 0`) on both sides and is not compared for subsets or fieldperm-reduced rows.
 - Compaction (hub) keeps every `_changes` row with `seq >= start_seq` of a snapshot in progress and does not mark that node `stale` while the pin lives (expiry: the snapshot id's 24 h).
-- New env: `TOKI_SYNC_SNAPSHOT_PAGE` (default 1000, halved after a too-large response), `TOKI_SYNC_AUTO_HEAL`, `TOKI_SYNC_DIGEST_INTERVAL`, `TOKI_SYNC_BOOTSTRAP_BLOCK_READS`, `TOKI_SYNC_TEST` + `TOKI_SYNC_TEST_CLOCK_OFFSET` (shifts the wall clock of the process, for tests).
+- New env: `TOKI_SYNC_SNAPSHOT_PAGE` (default 1000, halved after a too-large response), `TOKI_SYNC_AUTO_HEAL`, `TOKI_SYNC_DIGEST_INTERVAL`, `TOKI_SYNC_BOOTSTRAP_BLOCK_READS`, `TOKI_SYNC_TEST` + `TOKI_SYNC_TEST_CLOCK_OFFSET` (shifts the wall clock of the process, for tests; compiled only with `-tags synctest`).
 
 ### Hub epoch (design §3.9)
 
@@ -400,7 +400,7 @@ Limits of the encrypted fields:
 | `LowPower` | interval `max(TOKI_SYNC_INTERVAL, 5 min)` | unchanged |
 | `Background` | one cycle bounded to 20 s (`BackgroundBudget`) per slot, then no timer until the conditions change or `SyncNow`; ignores a backoff; a cut-off cycle is `Result.Partial` (not a failure, pages already committed stay) | runs one more bounded cycle |
 
-Going online, entering or leaving a background slot, and leaving `Metered` kick the loop. `Status` gained `Conditions` and `BackgroundDone`. The debounce after a local write is 2 s; backoff is 1 s doubling to 5 min with +-20% jitter and a `Retry-After` floor. The loop reads time through `Options.Sched` (`Scheduler`: `Now`, `NewTimer`, `AfterFunc`), so the tests drive it with a fake clock (`client/conditions_test.go`: `Plan` table, jitter bounds, backoff steps at 1 s / 2 s, offline = zero requests, background = one cycle, 5 writes = one kick after 2 s; `modules/sync/loop_conditions_test.go`: metered push-only and background slot against a real hub). Decision: a metered link does not pull in automatic cycles at all, `SyncNow` pulls (design says "push-only plus a pull page limit of 100"; both are kept).
+Going online, entering or leaving a background slot, and leaving `Metered` kick the loop. `Status` gained `Conditions` and `BackgroundDone`. The debounce after a local write is 2 s; backoff is 1 s doubling to 5 min with +-20% jitter and a `Retry-After` floor. The loop reads time through `Options.Sched` (`Scheduler`: `Now`, `NewTimer`, `AfterFunc`), so the tests drive it with a fake clock (`client/conditions_test.go`: `Plan` table, jitter bounds, backoff steps at 1 s / 2 s, offline = zero requests, background = one cycle, 5 writes = one kick after 2 s; `modules/sync/loop_conditions_test.go`: metered push-only and background slot against a real hub). QC follow-ups (post PR10): (1) a snapshot is never downloaded by an automatic cycle on a metered link, also when the handshake of that cycle is what learns that the hub wants one (epoch change, compacted log, push gap): the cursor state becomes `rebootstrap_required`, the loop emits an `rebootstrap` event with message "deferred ...", `Status.PullDeferred` / JSON `pull_deferred` is true and the bootstrap runs at the next unmetered cycle, on leaving `Metered`, or on `SyncNow`. (2) A background slot that runs out of its 20 s (`Options.BackgroundBudget` overrides it in tests) is no success: with progress (pushed, pulled or snapshot position moved) `SyncNow`/`Module.Now`/`mobile.SyncNow` return `client.ErrPartial`, `last_ok` does not move, `last_partial` is set, an `partial` event is emitted, no failure and no backoff; without progress it is a failure (`last_error`, `failures`, an `error` event, `context.DeadlineExceeded` in the error chain). The deadline itself is never stored as `last_error` and never emitted as an `error` event. `Status` is updated before `SyncNow` answers. (3) `SetConditions` and `StartLoop` serialize on one lock, so conditions set while the loop starts are applied; going online, leaving `Metered` or entering/leaving a background slot clears the backoff timer before the kick, so the kick is not swallowed. (4) When the loop stops, queued `SyncNow` callers get `ErrStopped` at once and `embed.Instance.Stop` stops the loop before it waits for in-flight calls. (5) A background slot is identified by a generation counter: a cycle that started in an older slot cannot mark the new one done. (6) The page size halved after a 413 doubles again after 8 good pull pages until the configured size. `LoopPasses()` counts finished wake-ups for tests and diagnostics. Decision: a metered link does not pull in automatic cycles at all, `SyncNow` pulls (design says "push-only plus a pull page limit of 100"; both are kept).
 
 ### Facade (`client/facade.go`, `facade.go`)
 
@@ -408,7 +408,7 @@ Going online, entering or leaving a background slot, and leaving `Metered` kick 
 
 ### Test clock file
 
-`TOKI_SYNC_TEST=1` plus `TOKI_SYNC_TEST_CLOCK_FILE=<path>` shifts the wall clock of the process by the duration in the file (`48h`, `1h30m`, `2d`), re-read every 50 ms. A driver that writes one file read by the hub and all spokes advances them in lockstep, which `TOKI_SYNC_TEST_CLOCK_OFFSET` (fixed at start) cannot do. Test use only.
+`TOKI_SYNC_TEST=1` plus `TOKI_SYNC_TEST_CLOCK_FILE=<path>` shifts the wall clock of the process by the duration in the file (`48h`, `1h30m`, `2d`), re-read every 50 ms. A driver that writes one file read by the hub and all spokes advances them in lockstep, which `TOKI_SYNC_TEST_CLOCK_OFFSET` (fixed at start) cannot do. Test use only: the test clock is compiled only into binaries built with `-tags synctest` (the e2e scripts do). A release binary has no clock override and refuses to start (panic at module registration) when any `TOKI_SYNC_TEST*` variable is set, so a host that can set its environment cannot shift HLC time.
 
 ### Parking exit gate (`tests/e2e/parking.sh`, CI job `e2e-parking`)
 
@@ -424,6 +424,7 @@ Hub = the `solo` binary (`TOKI_SYNC_ROLE=hub`, the PR5 `syncconflict` wasm guest
 | (f) | Purged ticket absent everywhere, gate-1's late edit rejected as `legal_tombstone` | PASS (1 rejected log row) |
 | (g) | The phone shows the new rates (car 5000 to 7000 at hour 24) | PASS |
 | (h) | No webhook duplicates: the hub sink counts exactly one `record.create` per ticket | PASS: 2049 deliveries for 2049 tickets (the purged one included) |
+| (i) | Partition and actor scope (added after QC): a hub ticket of branch B2 never reaches the B1 nodes (a B1 control ticket created after it is the positive signal), and the phone officer token can neither read nor change it | not part of the recorded 48 h run above; runs at the end of `tests/e2e/parking.sh` |
 
 Run on the `tokibuild` VM: 1 minute of real time for the 48 simulated hours plus the reconnect (convergence 26 s after the network came back). `HOURS=6 bash tests/e2e/parking.sh` is a quick try; `KEEP=1` keeps the work dir.
 
@@ -446,7 +447,7 @@ Deviations from the design text: gates and phone are all in branch `B1` (the sha
 | `TOKI_SYNC_INTERVAL` | spoke: idle sync interval (default `30s`) |
 | `TOKI_SYNC_PAGE` | spoke: changes per push/pull page (default `500`) |
 | `TOKI_SYNC_POKE` | spoke: `0` disables the realtime `@sync` subscription |
-| `TOKI_SYNC_TEST`, `TOKI_SYNC_TEST_CLOCK_OFFSET`, `TOKI_SYNC_TEST_CLOCK_FILE` | tests: shift the wall clock of the process (fixed offset, or a file that is re-read) |
+| `TOKI_SYNC_TEST`, `TOKI_SYNC_TEST_CLOCK_OFFSET`, `TOKI_SYNC_TEST_CLOCK_FILE` | tests, `-tags synctest` builds only: shift the wall clock of the process (fixed offset, or a file that is re-read) |
 
 The remaining `TOKI_SYNC_*` variables of the design arrive with the PRs that use them.
 

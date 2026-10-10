@@ -28,11 +28,12 @@ NANO_TAGS="$(tags nano)"
 
 cd "$ROOT"
 echo "[parking] building hub (solo), gate (edge), syncproxy, wasm guest, driver (nano)" >&2
-go build -o "$TMP/toki-hub" ./examples/base
-go build -tags "$EDGE_TAGS" -o "$TMP/toki-gate" ./examples/base
+# the simulated clock exists only in binaries built with -tags synctest
+go build -tags synctest -o "$TMP/toki-hub" ./examples/base
+go build -tags "$EDGE_TAGS synctest" -o "$TMP/toki-gate" ./examples/base
 go build -o "$TMP/syncproxy" ./tests/e2e/syncproxy
 GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 go build -o "$TMP/syncconflict.wasm" ./modules/wasm/testdata/syncconflict
-go build -tags "$NANO_TAGS" -o "$TMP/parking" ./tests/e2e/parking
+go build -tags "$NANO_TAGS synctest" -o "$TMP/parking" ./tests/e2e/parking
 
 mkdir -p "$TMP/work"
 set +e

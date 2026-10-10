@@ -65,14 +65,16 @@ func (m *Module) Enrolled() bool {
 // exists they are remembered and applied when it starts.
 func (m *Module) SetConditions(c client.Conditions) {
 	m.condMu.Lock()
+	defer m.condMu.Unlock()
 	m.cond, m.condSet = c, true
-	m.condMu.Unlock()
 	if cl := m.Client(); cl != nil {
 		cl.SetConditions(c)
 	}
 }
 
-// Now runs a sync cycle and waits for it.
+// Now runs a sync cycle and waits for it. In a background slot (Conditions.
+// Background) the cycle is cut after 20 s: it then returns client.ErrPartial when
+// it made progress and a deadline error when it did not, never nil.
 func (m *Module) Now(ctx context.Context) error {
 	if err := m.requireSpoke(); err != nil {
 		return err

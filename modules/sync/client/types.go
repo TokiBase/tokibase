@@ -17,6 +17,14 @@ var (
 	ErrStopped     = errors.New("sync: the loop is not running")
 	ErrRevoked     = errors.New("sync: this node was revoked")
 	ErrRebootstrap = errors.New("sync: the hub requires a re-bootstrap")
+	// ErrPartial is the result of a background slot that ran out of time after it
+	// made progress: what was done is committed, the next slot continues. It is not
+	// a failure (no backoff) and not a success (last_ok does not move).
+	ErrPartial = errors.New("sync: the background slot ended before the cycle finished")
+
+	// errRebootstrapDeferred ends an automatic cycle on a metered link that learned
+	// the hub wants a snapshot: the download waits (internal to the loop).
+	errRebootstrapDeferred = errors.New("sync: re-bootstrap deferred until the link is unmetered")
 )
 
 // Conditions describe the device (docs/SYNC_DESIGN.md §6.2).
@@ -73,6 +81,8 @@ const (
 	EventRevoked        = "revoked"
 	EventDigestMismatch = "digest_mismatch"
 	EventSynced         = "synced"
+	// EventPartial ends a background slot whose budget ran out in the middle of a cycle.
+	EventPartial = "partial"
 )
 
 // Event is emitted by the loop (non-blocking: slow readers lose events).
@@ -97,7 +107,9 @@ type Result struct {
 	// Partial is true when the bounded cycle of a background slot ran out of time
 	// before it finished (what was done is committed).
 	Partial bool
-	Err     error
+	// Bootstrapped is true when a snapshot bootstrap moved forward in this cycle.
+	Bootstrapped bool
+	Err          error
 }
 
 // Status is a snapshot of the loop.
@@ -110,11 +122,17 @@ type Status struct {
 	PullAfter   int64
 	AckedOrigin int64
 	LastOK      time.Time
-	LastError   string
-	OffsetMs    int64
-	Failures    int
-	NextAttempt time.Time
-	ApplyErrors int64
+	// LastPartial is the end of the last background slot that ran out of time after
+	// making progress (LastOK does not move for it).
+	LastPartial time.Time
+	// PullDeferred is true while a metered link holds back the pull (or a snapshot
+	// bootstrap) that an unmetered moment or SyncNow will do.
+	PullDeferred bool
+	LastError    string
+	OffsetMs     int64
+	Failures     int
+	NextAttempt  time.Time
+	ApplyErrors  int64
 	// HashMismatches counts hash_mismatch checks (§4.7); HashStreak is the current run of them.
 	HashMismatches int64
 	HashStreak     int

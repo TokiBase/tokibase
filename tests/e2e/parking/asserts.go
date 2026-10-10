@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -305,6 +306,7 @@ func (s *scenario) assertAll() {
 	}
 
 	s.assertWebhook(len(s.led.t))
+	s.assertPartition()
 }
 
 func orElse(a, b string) string {
@@ -439,4 +441,60 @@ func (s *scenario) assertWebhook(created int) {
 	}
 	ok := len(s.sinkIDs) == created && s.sinkN == created && dups == 0
 	s.record("h", "no webhook duplicates", ok, "hub webhook sink got %d record.create deliveries for %d distinct tickets (expected exactly %d), %d duplicated", s.sinkN, len(s.sinkIDs), created, dups)
+}
+
+// assertPartition (i): the nodes pull only their partition (branch B1) and the
+// officer's actor token sees only what the node holds. A ticket of branch B2 is
+// created on the hub, followed by a control ticket of B1. The control is the
+// positive signal: once it reached every node, the B2 ticket (older in the hub
+// log) would have arrived as well if the partition leaked. The phone's officer
+// token must neither read nor change it.
+func (s *scenario) assertPartition() {
+	body := func(no, plate, branch string) map[string]any {
+		return map[string]any{"no": no, "plate": plate, "entry_at": s.clock.date(), "status": "open", "branch": branch, "fee": 0}
+	}
+	other, err := s.hubAPI("POST", "/api/collections/tickets/records", body("OTHER-B2-001", "B2 0001 XX", "B2"))
+	if err != nil {
+		s.record("i", "partition: other branch stays on the hub", false, "create B2 ticket: %v", err)
+		return
+	}
+	control, err := s.hubAPI("POST", "/api/collections/tickets/records", body("CTRL-B1-001", "B1 0001 XX", "B1"))
+	if err != nil {
+		s.record("i", "partition: other branch stays on the hub", false, "create B1 control: %v", err)
+		return
+	}
+	oid, cid := other["id"].(string), control["id"].(string)
+	fs := s.fetchers()
+	spokes := []string{"gate-1", "gate-2", "phone"}
+	err = waitFor(cfg.settle, "control ticket on every node", func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+		_ = s.phone.Sync().Now(ctx)
+		cancel()
+		for _, n := range spokes {
+			if _, err := fs[n]("/api/collections/tickets/records/" + cid); err != nil {
+				return false
+			}
+		}
+		return true
+	})
+	if err != nil {
+		s.record("i", "partition: other branch stays on the hub", false, "%v", err)
+		return
+	}
+	var leaks []string
+	for _, n := range spokes {
+		if _, err := fs[n]("/api/collections/tickets/records/" + oid); err == nil {
+			leaks = append(leaks, n)
+		}
+	}
+	// the officer (actor) token of the phone: no read, no write of the foreign record
+	if _, err := s.pcall(s.phoneTok, "GET", "/api/collections/tickets/records/"+oid, nil); err == nil {
+		leaks = append(leaks, "phone officer read")
+	}
+	if _, err := s.pcall(s.phoneTok, "PATCH", "/api/collections/tickets/records/"+oid, map[string]any{"note": "from the phone"}); err == nil {
+		leaks = append(leaks, "phone officer write")
+	}
+	hubRec, herr := s.hubAPI("GET", "/api/collections/tickets/records/"+oid, nil)
+	ok := len(leaks) == 0 && herr == nil && hubRec["branch"] == "B2" && hubRec["note"] != "from the phone"
+	s.record("i", "partition: other branch stays on the hub", ok, "B2 ticket %s leaked to %v; hub copy untouched: %v", oid, leaks, herr == nil)
 }

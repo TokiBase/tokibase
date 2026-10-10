@@ -6,11 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"strconv"
 	"strings"
 	stdsync "sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pocketbase/dbx"
@@ -75,6 +77,21 @@ type loopState struct {
 	// cycle); bgDone is set once the bounded cycle of a background slot ran.
 	pushOnly bool
 	bgDone   bool
+	// slot counts the background slots: SetConditions bumps it when Background
+	// changes, so a cycle that started in an older slot cannot mark the new one done.
+	slot uint64
+	// budgeted is set while the cycle runs under a background budget.
+	budgeted bool
+	// lastPartial is the time of the last background slot that ended in the middle
+	// of a cycle (it is not a success: LastOK does not move).
+	lastPartial time.Time
+	// pullDeferred is true while a metered link holds back a pull or a snapshot
+	// bootstrap that an unmetered moment or SyncNow will do.
+	pullDeferred bool
+	// goodPages counts the pull pages since the page size was halved after a 413.
+	goodPages int
+	// passes counts the wake-ups the loop has finished (tests and diagnostics).
+	passes atomic.Int64
 }
 
 func (c *Client) initLoop() {
@@ -165,6 +182,16 @@ func (c *Client) Start(ctx context.Context) {
 			c.loop.mu.Lock()
 			c.loop.running = false
 			c.loop.mu.Unlock()
+			// SyncNow callers still queued must not wait for their own timeout
+			for {
+				select {
+				case r := <-c.loop.reqs:
+					r.res <- Result{Err: ErrStopped}
+					continue
+				default:
+				}
+				break
+			}
 			close(done)
 		}()
 		c.run(lctx)
@@ -225,9 +252,16 @@ func (c *Client) SetConditions(cond Conditions) {
 	c.loop.cond = cond
 	if cond.Background != was.Background {
 		c.loop.bgDone = false // a new slot gets its one bounded cycle
+		c.loop.slot++
+	}
+	wake := cond.Online && (!was.Online || cond.Background != was.Background || (was.Metered && !cond.Metered))
+	if wake {
+		// the host says the situation changed (back online, unmetered, a new slot):
+		// the backoff earned under the old conditions must not swallow the kick
+		c.loop.next = time.Time{}
 	}
 	c.loop.mu.Unlock()
-	if cond.Online && (!was.Online || cond.Background != was.Background || (was.Metered && !cond.Metered)) {
+	if wake {
 		c.Kick()
 	}
 }
@@ -268,10 +302,11 @@ func (c *Client) NotifyWrite() {
 // or ErrPaused. When the loop is not running the channel gets ErrStopped.
 func (c *Client) SyncNow() <-chan Result {
 	out := make(chan Result, 1)
+	// the enqueue happens under the lock that also clears `running`: after the
+	// loop stopped nothing is added, so the final drain answers every request
 	c.loop.mu.Lock()
-	running := c.loop.running
-	c.loop.mu.Unlock()
-	if !running {
+	defer c.loop.mu.Unlock()
+	if !c.loop.running {
 		out <- Result{Err: ErrStopped}
 		return out
 	}
@@ -288,7 +323,7 @@ func (c *Client) Status() Status {
 	c.loop.mu.Lock()
 	st := Status{
 		State: c.loop.state, Online: c.loop.cond.Online, Paused: c.loop.paused, Running: c.loop.running,
-		LastOK: c.loop.lastOK, LastError: c.loop.lastErr, Failures: c.loop.failures, NextAttempt: c.loop.next,
+		LastOK: c.loop.lastOK, LastPartial: c.loop.lastPartial, PullDeferred: c.loop.pullDeferred, LastError: c.loop.lastErr, Failures: c.loop.failures, NextAttempt: c.loop.next,
 		Conditions: c.loop.cond, BackgroundDone: c.loop.bgDone, ApplyErrors: c.loop.applyErr, HashMismatches: c.loop.hashMis, HashStreak: c.loop.hashStreak, DigestMismatch: append([]string(nil), c.loop.mismatch...), Heal: c.loop.heal,
 	}
 	c.loop.mu.Unlock()
@@ -314,6 +349,7 @@ func (c *Client) run(ctx context.Context) {
 	timer := c.sched.NewTimer(0)
 	defer timer.Stop()
 	for {
+		c.loop.passes.Add(1)
 		var reqs []syncReq
 		explicit := false
 		select {
@@ -335,10 +371,13 @@ func (c *Client) run(ctx context.Context) {
 		}
 
 		c.loop.mu.Lock()
-		paused, cond, bgDone := c.loop.paused, c.loop.cond, c.loop.bgDone
+		paused, cond, bgDone, slot := c.loop.paused, c.loop.cond, c.loop.bgDone, c.loop.slot
 		backoffUntil := c.loop.next
 		c.loop.mu.Unlock()
 		plan := cond.Plan(c.baseInterval(), c.pageSize(), explicit)
+		if plan.Budget > 0 && c.o.BackgroundBudget > 0 {
+			plan.Budget = c.o.BackgroundBudget
+		}
 		deliver := func(r Result) {
 			for _, q := range reqs {
 				q.res <- r
@@ -362,12 +401,14 @@ func (c *Client) run(ctx context.Context) {
 			continue
 		case !plan.Pull && c.bootstrapPending():
 			// a snapshot is a big download: not on a metered link unless asked for
+			c.setPullDeferred(true)
 			resetTimer(timer, plan.Interval)
 			continue
 		}
 
 		c.loop.mu.Lock()
 		c.loop.pushOnly = !plan.Pull
+		c.loop.budgeted = plan.Budget > 0
 		c.loop.mu.Unlock()
 		cctx, cancel := ctx, context.CancelFunc(func() {})
 		if plan.Budget > 0 {
@@ -377,22 +418,43 @@ func (c *Client) run(ctx context.Context) {
 		cancel()
 		c.loop.mu.Lock()
 		c.loop.pushOnly = false
+		c.loop.budgeted = false
 		c.loop.mu.Unlock()
-		if plan.Budget > 0 && ctx.Err() == nil && errors.Is(res.Err, context.DeadlineExceeded) {
-			// the slot ended in the middle of the cycle: every page committed so far
-			// stays, the next slot continues. Not a failure, no backoff.
-			res.Err, res.Partial = nil, true
+		if errors.Is(res.Err, errRebootstrapDeferred) {
+			// metered link, the hub wants a snapshot: not a failure, not a success. The
+			// next unmetered cycle or SyncNow bootstraps (the status says pull_deferred).
+			c.setPullDeferred(true)
+			deliver(Result{Err: ErrRebootstrap})
+			resetTimer(timer, plan.Interval)
+			continue
 		}
-		deliver(res)
 		if ctx.Err() != nil {
+			deliver(res)
 			return
 		}
 		if errors.Is(res.Err, ErrRevoked) || errors.Is(res.Err, ErrRebootstrap) {
+			deliver(res)
 			return // nothing a retry can fix: the status says why (revoked / rebootstrap_required)
+		}
+		out := res
+		if res.Partial {
+			// the slot ended in the middle of the cycle. With progress (something was
+			// pushed, pulled or downloaded) the next slot continues, no failure and no
+			// backoff, but it is not a success either: LastOK stays. Without progress it
+			// is a failure like any other (a hub that hangs looks dead, not healthy).
+			if res.progress() {
+				out.Err = ErrPartial
+			} else {
+				res.Err = fmt.Errorf("sync: the background slot ended without progress: %w", context.DeadlineExceeded)
+				out.Err = res.Err
+				c.recordError(res.Err)
+				c.emit(Event{Type: EventError, Message: res.Err.Error()})
+			}
 		}
 		var wait time.Duration
 		c.loop.mu.Lock()
-		if res.Err != nil {
+		switch {
+		case res.Err != nil:
 			c.loop.failures++
 			var ra time.Duration
 			var he *Error
@@ -402,14 +464,25 @@ func (c *Client) run(ctx context.Context) {
 			wait = Backoff(c.loop.failures, c.rnd(), ra)
 			c.loop.next = c.sched.Now().Add(wait)
 			c.loop.lastErr = res.Err.Error()
-		} else {
+		case res.Partial:
+			c.loop.failures, c.loop.next = 0, time.Time{}
+			c.loop.lastPartial = c.sched.Now()
+		default:
 			c.loop.failures, c.loop.next, c.loop.lastErr = 0, time.Time{}, ""
 			c.loop.lastOK = c.sched.Now()
+			if plan.Pull {
+				c.loop.pullDeferred = false
+			} else {
+				c.loop.pullDeferred = true // a push-only cycle: remote changes wait
+			}
 		}
-		if plan.Budget > 0 {
-			c.loop.bgDone = true
+		if plan.Budget > 0 && c.loop.slot == slot {
+			c.loop.bgDone = true // (not when a new slot started while this cycle ran)
 		}
 		c.loop.mu.Unlock()
+		// the requests are answered after the bookkeeping: a caller that reads Status
+		// right after SyncNow returns sees this cycle
+		deliver(out)
 		if plan.Budget > 0 {
 			continue // one bounded cycle per background slot, no timer
 		}
@@ -418,6 +491,22 @@ func (c *Client) run(ctx context.Context) {
 		}
 		resetTimer(timer, wait)
 	}
+}
+
+func (c *Client) setPullDeferred(v bool) {
+	c.loop.mu.Lock()
+	c.loop.pullDeferred = v
+	c.loop.mu.Unlock()
+}
+
+// LoopPasses is the number of wake-ups the loop has finished. A host or test that
+// wants to know "the loop looked at my change" samples it, acts, and waits for a
+// higher value; it is a counter, not a clock.
+func (c *Client) LoopPasses() int64 { return c.loop.passes.Load() }
+
+// progress reports whether the cycle did any work.
+func (r Result) progress() bool {
+	return r.Pushed+r.Rejected+r.Superseded+r.Parked+r.Pulled+r.Applied > 0 || r.Bootstrapped
 }
 
 func resetTimer(t Timer, d time.Duration) {
@@ -433,6 +522,14 @@ func resetTimer(t Timer, d time.Duration) {
 // cycle is one full sync: session -> push -> pull -> ack.
 func (c *Client) cycle(ctx context.Context) (res Result) {
 	defer func() {
+		if c.slotCut(ctx, res.Err) {
+			// the background budget ran out: not an error event, nothing recorded as
+			// last_error; run() decides whether it counts as progress or as a failure
+			res.Err, res.Partial = nil, true
+			c.emit(Event{Type: EventPartial})
+			c.setState("idle")
+			return
+		}
 		if res.Err != nil {
 			c.emit(Event{Type: EventError, Message: res.Err.Error()})
 			c.recordError(res.Err)
@@ -477,6 +574,18 @@ func (c *Client) pushOnlyNow() bool {
 	return c.loop.pushOnly
 }
 
+// slotCut reports whether err is the end of the background budget (and not a
+// stop of the loop or a failure of the hub).
+func (c *Client) slotCut(ctx context.Context, err error) bool {
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	c.loop.mu.Lock()
+	b := c.loop.budgeted
+	c.loop.mu.Unlock()
+	return b && ctx.Err() != nil
+}
+
 // RunOnce runs one full cycle (session, push, pull, ack) in the caller's
 // goroutine, without the loop. It must not run concurrently with a started
 // loop.
@@ -517,17 +626,23 @@ func (c *Client) cycleBoot(ctx context.Context) Result {
 		return c.cycle(ctx)
 	}
 	if cur, _ := LoadCursor(c.o.App); cur != nil && (cur.State == StateBootstrapping || cur.State == StateRebootstrapRequired) {
-		if err := c.Bootstrap(ctx); err != nil {
-			c.recordError(err)
-			return Result{Err: err}
+		if res, ok := c.bootstrapStep(ctx); !ok {
+			return res
 		}
 	}
 	res := c.cycle(ctx)
 	for i := 0; i < 2 && errors.Is(res.Err, ErrRebootstrap) && ctx.Err() == nil; i++ {
-		if err := c.Bootstrap(ctx); err != nil {
-			c.recordError(err)
-			res.Err = err
-			return res
+		if c.pushOnlyNow() {
+			// an automatic cycle on a metered link learned during the handshake that the
+			// hub wants a snapshot (epoch change after a restore, log compacted, push
+			// gap): the state is rebootstrap_required, the download waits for an
+			// unmetered moment or SyncNow
+			c.emit(Event{Type: EventRebootstrap, Message: "deferred: metered link, the snapshot waits for an unmetered moment or SyncNow"})
+			return Result{Err: errRebootstrapDeferred}
+		}
+		if r, ok := c.bootstrapStep(ctx); !ok {
+			r.Pushed, r.Pulled = res.Pushed, res.Pulled
+			return r
 		}
 		res = c.cycle(ctx)
 	}
@@ -538,6 +653,30 @@ func (c *Client) cycleBoot(ctx context.Context) Result {
 		c.Kick() // the next cycle starts with the bootstrap
 	}
 	return res
+}
+
+// bootstrapStep runs the snapshot bootstrap. ok is false when the cycle must end
+// with the returned result: a failure, or the end of a background slot (Partial,
+// with progress when the snapshot position moved).
+func (c *Client) bootstrapStep(ctx context.Context) (res Result, ok bool) {
+	var before string
+	if cur, _ := LoadCursor(c.o.App); cur != nil {
+		before = cur.SnapshotID + "|" + cur.SnapshotAfter
+	}
+	err := c.Bootstrap(ctx)
+	if err == nil {
+		return Result{}, true
+	}
+	if c.slotCut(ctx, err) {
+		res.Partial = true
+		if cur, _ := LoadCursor(c.o.App); cur != nil {
+			res.Bootstrapped = cur.SnapshotID+"|"+cur.SnapshotAfter != before
+		}
+		c.emit(Event{Type: EventPartial})
+		return res, false
+	}
+	c.recordError(err)
+	return Result{Err: err}, false
 }
 
 // healDue implements TOKI_SYNC_AUTO_HEAL: two hash mismatches in a row, or two

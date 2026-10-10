@@ -19,6 +19,14 @@ type SyncOptions struct {
 	Interval string
 	// NodeKey is the encoded node identity (TOKI_SYNC_NODE_KEY). Leave it empty
 	// to let the instance create and keep its own key file in the data dir. Set
-	// it when the host keeps the key in the platform keystore.
+	// it when the host keeps the key in the platform keystore. The sync module reads
+	// the key from the process environment (TOKI_SYNC_NODE_KEY), so while the
+	// instance runs it is visible to child processes of the host; an instance
+	// without NodeKey never inherits the key of another one.
+	//
+	// Precedence: the fields of SyncOptions win over Options.Env, which wins over
+	// the profile defaults, which win over the process environment. An Env entry for
+	// TOKI_SYNC_ROLE, _HUB_URL, _INTERVAL or _NODE_KEY that contradicts a set
+	// SyncOptions field makes Start fail.
 	NodeKey []byte
 }

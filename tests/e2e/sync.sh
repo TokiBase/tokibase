@@ -35,7 +35,7 @@ fail() {
 
 cd "$ROOT"
 log "building"
-go build -o "$TOKI" ./examples/base
+go build -tags synctest -o "$TOKI" ./examples/base
 
 PORT_HUB=$((20000 + RANDOM % 10000))
 PORT_S1=$((PORT_HUB + 1000))

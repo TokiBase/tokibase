@@ -75,13 +75,15 @@ func (m *Module) StartLoop(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	c.Subscribe(m.dispatchEvent)
+	// the conditions are applied and the client published under one lock: a
+	// SetConditions that lands in between either is read here or forwards to c
 	m.condMu.Lock()
 	if m.condSet {
 		c.SetConditions(m.cond)
 	}
-	m.condMu.Unlock()
-	c.Subscribe(m.dispatchEvent)
 	m.loop.Store(c)
+	m.condMu.Unlock()
 	c.Start(ctx)
 	return nil
 }
